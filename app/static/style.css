@@ -231,8 +231,6 @@ label small { font-weight: 400; color: var(--muted); }
   box-shadow: var(--shadow-lg);
 }
 .login-panel h1 { margin: 8px 0 12px; font-size: clamp(31px, 5vw, 42px); line-height: 1.18; }
-.login-kicker { color: var(--brand); font-size: 12.5px; font-weight: 750; }
-.login-desc { margin-bottom: 24px; }
 .quick-login-section {
   display: grid;
   gap: 16px;
@@ -251,9 +249,6 @@ label small { font-weight: 400; color: var(--muted); }
   font-weight: 750;
 }
 .quick-main-btn { width: 100%; min-height: 48px; }
-.quick-login-help { color: var(--muted); font-size: 12.5px; }
-.login-foot { grid-column: 1 / 4; align-self: center; text-align: center; color: var(--muted); font-size: 12px; }
-
 /* Shell */
 .app-shell { min-height: 100vh; overflow-x: clip; }
 .sidebar {
@@ -399,8 +394,6 @@ label small { font-weight: 400; color: var(--muted); }
   overflow-wrap: anywhere;
 }
 .profit-kpi strong { font-size: clamp(34px, 4vw, 50px); }
-.kpi-card small { color: var(--muted); font-size: 11.5px; }
-.profit-kpi small { color: #a8d8cd; }
 .order-kpi strong { color: var(--brand); }
 .next-action {
   display: grid;
@@ -811,7 +804,6 @@ label small { font-weight: 400; color: var(--muted); }
 .order-row .issue { color: var(--warning); }
 .load-more { display: flex; align-items: center; justify-content: center; flex-wrap: wrap; gap: 12px; padding: 16px 0; }
 .adjustment { margin-top: 18px; }
-.adjustment > p { margin: 4px 0 15px; color: var(--muted); }
 .adjustment-form { display: grid; grid-template-columns: 1.2fr .8fr 1fr auto; gap: 10px; align-items: end; }
 .adjustment-history { margin-top: 16px; color: var(--muted); font-size: 12px; }
 
@@ -819,13 +811,11 @@ label small { font-weight: 400; color: var(--muted); }
 .assistant-panel { max-width: 900px; padding: 25px; border: 1px solid var(--line); border-radius: var(--radius-lg); background: var(--surface); box-shadow: var(--shadow-sm); }
 .assistant-intro { display: flex; gap: 14px; align-items: center; }
 .assistant-mark { width: 44px; height: 44px; display: grid; place-items: center; border-radius: 13px; background: var(--brand-soft); color: var(--brand-dark); font-size: 13px; font-weight: 850; }
-.assistant-intro p { color: var(--muted); }
 .suggestions { display: flex; gap: 8px; flex-wrap: wrap; margin: 22px 0 16px; }
 .suggestions button { min-height: 36px; padding: 7px 12px; border: 1px solid var(--line); border-radius: 999px; background: var(--surface-2); color: var(--ink-2); font-size: 12px; }
 .suggestions button:hover { border-color: var(--brand-line); background: var(--brand-soft); }
 .ask-scope { max-width: 460px; margin-bottom: 13px; }
 .ask-footer { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-top: 12px; }
-.ask-footer span { color: var(--muted); font-size: 11.5px; }
 .answer { margin-top: 20px; }
 .answer-box { padding: 17px 18px; border: 1px solid var(--line); border-radius: var(--radius-md); background: var(--surface-subtle); white-space: pre-wrap; overflow-wrap: anywhere; }
 .answer-meta, .alias-list { margin-top: 9px; color: var(--muted); font-size: 11.5px; overflow-wrap: anywhere; }
@@ -1204,7 +1194,6 @@ body.ui-v2 .nav-dot { background: #71858c; }
 body.ui-v2 .nav a.active .nav-dot { background: #e8c36b; box-shadow: 0 0 0 4px rgb(232 195 107 / .13); }
 body.ui-v2 .nav-kbd { border-color: #36505b; background: #1b323d; color: #9db0b5; }
 body.ui-v2 .sidebar-bottom { border-top-color: #2b414c; }
-body.ui-v2 .sidebar-kbd-hint { border-color: #36505b; color: #8fa2a9; }
 body.ui-v2 .user-profile-badge { border-color: #2b414c; background: #1a2d38; }
 body.ui-v2 .user-avatar { background: #e8c36b; color: #12212b; }
 body.ui-v2 .user-info-text strong { color: #f4fbfb; }
@@ -1480,16 +1469,6 @@ kbd {
   background: var(--brand-soft);
   color: var(--brand-dark);
 }
-.sidebar-kbd-hint {
-  margin-bottom: 10px;
-  padding: 7px 10px;
-  border: 1px dashed var(--line-strong);
-  border-radius: var(--radius-sm);
-  color: var(--muted);
-  font-size: 11.5px;
-  text-align: center;
-}
-
 .cmd-trigger-btn {
   display: inline-flex;
   align-items: center;
@@ -2150,11 +2129,6 @@ kbd {
   background: var(--brand-soft);
   color: var(--brand-dark);
 }
-.cmd-item small {
-  display: inline;
-  margin-left: 8px;
-  color: var(--muted);
-}
 .cmd-footer {
   display: flex;
   gap: 16px;
@@ -2272,7 +2246,7 @@ body.ui-v2 .nav-icon { width: 15px; height: 15px; }
 body.ui-v2 .nav-kbd { display: none; }
 body.ui-v2 .nav-count-badge { padding: 1px 5px; font-size: 10px; }
 body.ui-v2 .sidebar-bottom { flex: 0 0 auto; display: flex; align-items: center; gap: 9px; margin: 0; padding: 0; border-top: 0; }
-body.ui-v2 .sidebar-kbd-hint, body.ui-v2 .local-mode-note { display: none; }
+body.ui-v2 .local-mode-note { display: none; }
 body.ui-v2 .user-profile-badge { padding: 0; border: 0; background: transparent; }
 body.ui-v2 .user-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--surface-2); color: var(--ink); font-size: 11px; }
 body.ui-v2 .user-info-text { display: none; }
@@ -2553,8 +2527,6 @@ body.ui-v2 .kpi-card:last-child { border-right: 0; }
 body.ui-v2 .kpi-card.profit-kpi { background: var(--brand-dark); }
 body.ui-v2 .kpi-card.profit-kpi:hover { background: var(--brand-dark); }
 body.ui-v2 .kpi-card strong { margin: 14px 0 8px; font-size: clamp(28px, 3.6vw, 44px); }
-body.ui-v2 .kpi-card small { color: var(--muted); }
-body.ui-v2 .kpi-card.profit-kpi small { color: rgb(239 250 246 / .72); }
 
 body.ui-v2 .next-action {
   display: flex;
@@ -2611,7 +2583,6 @@ body.ui-v2 .category-overview-card .panel-title { margin-bottom: 18px; }
 body.ui-v2 .category-overview-card h3,
 body.ui-v2 .overview-focus-card h3 { margin: 0; font-size: 18px; letter-spacing: -.035em; }
 body.ui-v2 .overview-focus-card { display: flex; flex-direction: column; align-items: flex-start; justify-content: center; }
-body.ui-v2 .overview-focus-card .muted { max-width: 260px; margin: 8px 0 22px; }
 
 body.ui-v2 .overview-category-mix {
   display: grid;
@@ -2841,6 +2812,15 @@ body.ui-v2 .table-link:hover {
   border-color: var(--brand);
   background: var(--brand);
   color: #fff;
+}
+
+/* finesse · product refinement · remove explanatory microcopy from task surfaces */
+body.ui-v2 .cmd-item small {
+  display: none;
+}
+
+body.ui-v2 .cmd-item > div {
+  min-width: 0;
 }
 
 @media (max-width: 760px) {

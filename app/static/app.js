@@ -475,7 +475,6 @@ $("#store-select").addEventListener("change", () => {
   setText("settled-count", "0");
   for (const id of ["orders-list", "batch-list", "sku-list", "cost-list"])
     setText(id, "正在读取当前店铺…");
-  setText("profit-sub", "正在读取当前店铺…");
   setText("scope-note", "");
   setText("gross-basis-result", "");
   setText("as-of", "正在读取当前店铺…");
@@ -614,7 +613,6 @@ async function loadReport() {
       setText("settled-count", "0");
       setText("orders-list", "服务版本尚未更新，请重启服务后查看。");
       setText("as-of", "服务版本尚未更新");
-      setText("profit-sub", "请重启本地服务后再刷新");
       setText("scope-note", "");
       return false;
     }
@@ -628,9 +626,6 @@ async function loadReport() {
     setText("sales-value", c.paid_items > 0 ? money(r.source_snapshot.payment_fen) : "—");
     setText("cost-value", c.settled > 0 ? money(k.cost_fen) : "—");
     setText("settled-count", String(c.settled));
-    setText("profit-sub", c.settled > 0
-      ? `来自 ${c.settled} 笔信息完整的有效订单`
-      : `还有 ${c.needs_review} 笔订单待补齐信息`);
     setText("scope-note",
       `统计按订单付款日期归属；退款回冲原订单。${c.missing_paid_time_all_dates ? `另有 ${c.missing_paid_time_all_dates} 条记录缺少付款时间，未纳入统计。` : ""}`);
     const reasonCounts = {};
@@ -2484,10 +2479,8 @@ function renderChatsOverview(ov) {
   updateGuidedWorkflow();
   const c = ov.counts || {};
   setText("chat-total-sessions", String(c.total_sessions ?? 0));
-  setText("chat-total-messages-sub", `累计 ${c.total_messages ?? 0} 条对话消息`);
   setText("chat-linked-orders", String(c.linked_order_sessions ?? 0));
   setText("chat-unresolved-count", String(c.unresolved_sessions ?? 0));
-  setText("chat-urgent-sub", `紧急投诉 ${c.urgent_sessions ?? 0} 段`);
   setText("chat-knowledge-count", String(c.knowledge_count ?? 0));
   setText("chat-sessions-badge", `筛选出 ${c.filtered_sessions ?? 0} / 共 ${c.total_sessions ?? 0} 段会话`);
 

@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark" id="color-scheme-meta">
   <title>店铺账本 · MultiStore AI Ops</title>
-  <link rel="stylesheet" href="/static/style.css?v=workbench-v7">
-  <script src="/static/app.js?v=workbench-v7" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v=workbench-v8">
+  <script src="/static/app.js?v=workbench-v8" defer></script>
 </head>
 <body class="ui-v2">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -18,16 +18,13 @@
 <section class="login-screen" id="login-screen" hidden>
   <div class="login-mark"><span class="brand-icon">账</span><span>店铺账本</span></div>
   <div class="login-panel">
-    <p class="login-kicker">导入订单，核对成本，直接看结果</p>
     <h1>今天的账，<br>一眼看清。</h1>
-    <p class="muted login-desc">纯利润、营业额、成本和有效订单集中在一页。</p>
     <div class="quick-login-section">
       <div class="quick-login-headline">
         <span class="quick-badge">本机模式</span>
         <strong>免账号密码进入</strong>
       </div>
       <button id="quick-login-btn" class="button primary quick-main-btn" type="button">进入店铺账本</button>
-      <p class="quick-login-help">之后只需要三步：导入千牛订单、核对缺少的成本、查看四个结果。</p>
     </div>
     <form id="login-form" class="form-stack" hidden>
       <label>账号<input id="username" autocomplete="username"></label>
@@ -36,7 +33,6 @@
       <p id="login-error" class="error" role="alert"></p>
     </form>
   </div>
-  <div class="login-foot">MultiStore AI Ops · 数据保存在你的店铺环境</div>
 </section>
 
 <div class="app-shell" id="app-shell" hidden>
@@ -84,12 +80,11 @@
       </a>
     </nav>
     <div class="sidebar-bottom">
-      <div class="sidebar-kbd-hint">按 <kbd>Ctrl K</kbd> 搜功能 · <kbd>?</kbd> 看快捷键</div>
       <div class="user-profile-badge">
         <span class="user-avatar">店</span>
         <div class="user-info-text"><strong id="user-display-name">本机店主</strong><span class="user-mode-label"><span class="status-dot active"></span>本机安全模式</span></div>
       </div>
-      <div class="sidebar-actions-row"><span class="local-mode-note">数据只在本机账本</span><button id="logout" class="link-button" type="button">退出</button></div>
+      <div class="sidebar-actions-row"><button id="logout" class="link-button" type="button">退出</button></div>
     </div>
   </aside>
 
@@ -118,7 +113,6 @@
       <section class="workbench-heading" aria-labelledby="overview-hero-title">
         <div>
           <h2 id="overview-hero-title">工作台</h2>
-          <p class="muted">订单、成本和退款结果。</p>
         </div>
         <form id="period-form" class="date-range workbench-date-range">
           <label>开始日期<input id="start-date" type="date" required></label>
@@ -130,7 +124,6 @@
       <section class="overview-hero overview-hero-v3" aria-label="经营工作区入口">
         <div class="overview-hero-copy">
           <h3>店铺账本</h3>
-          <p class="muted">导入订单，核对成本，查看结果。</p>
           <div class="hero-actions">
             <button type="button" class="button primary" data-goto="import">导入千牛订单</button>
             <button type="button" class="button outline" data-goto="costs">处理待核对</button>
@@ -145,22 +138,18 @@
         <article class="kpi-card profit-kpi">
           <span class="kpi-label">纯利润</span>
           <strong id="profit-value">—</strong>
-          <small id="profit-sub">正在核算有效订单</small>
         </article>
         <article class="kpi-card">
           <span class="kpi-label">营业额</span>
           <strong id="sales-value">—</strong>
-          <small>退款前实付金额</small>
         </article>
         <article class="kpi-card">
           <span class="kpi-label">成本</span>
           <strong id="cost-value">—</strong>
-          <small>已确认的实际采购成本</small>
         </article>
         <article class="kpi-card order-kpi">
           <span class="kpi-label">有效订单</span>
           <strong id="settled-count">0</strong>
-          <small>可进入纯利润核算</small>
         </article>
       </section>
       <section class="next-action" aria-live="polite">
@@ -175,7 +164,6 @@
         </article>
         <article class="surface overview-focus-card">
           <h3>待核对</h3>
-          <p class="muted">处理缺少采购成本的订单。</p>
           <button type="button" class="button secondary" data-goto="costs">去处理</button>
         </article>
       </section>
@@ -190,13 +178,13 @@
 
     <div class="view" data-panel="import" hidden>
       <div class="page-heading">
-        <div><h2>导入千牛订单</h2><p class="muted">从千牛“已卖出宝贝”导出页导入订单，系统自动识别字段、去重并显示结果。</p></div>
+        <div><h2>导入千牛订单</h2></div>
         <span class="privacy-label">订单 · 结果</span>
       </div>
       <div class="two-column import-layout">
         <section class="surface import-order-card">
           <div class="panel-title">
-            <div><span class="section-kicker">订单导入</span><h3 id="import-order-heading">添加千牛订单</h3><p class="muted">支持 CSV / XLSX，也可以直接读取最近下载。</p></div>
+            <div><span class="section-kicker">订单导入</span><h3 id="import-order-heading">添加千牛订单</h3></div>
             <span id="file-count" class="badge">等待文件</span>
           </div>
           <div class="button-row compact import-source-actions">
@@ -207,13 +195,12 @@
             <input id="import-kind" type="hidden" value="orders">
             <input id="payment-basis" type="hidden" value="gross">
             <label for="import-file">选择订单文件</label>
-            <input id="import-file" type="file" accept=".csv,.xlsx" aria-describedby="import-file-help" required>
-            <small id="import-file-help">最大 8 MB。长订单号请用文本格式保存。</small>
+            <input id="import-file" type="file" accept=".csv,.xlsx" required>
             <button type="submit" class="button primary">检查并导入</button>
           </form>
         </section>
         <section class="surface result-panel">
-          <div class="panel-title"><div><span class="section-kicker">结果</span><h3>导入结果</h3><p class="muted">显示日期、行数、重复和冲突。</p></div></div>
+          <div class="panel-title"><div><span class="section-kicker">结果</span><h3>导入结果</h3></div></div>
           <div id="import-result" aria-live="polite"><div class="empty">还没有选择文件。</div></div>
           <div class="button-row"><button id="preview-import" class="button secondary" hidden>重新检查</button><button id="commit-import" class="button primary" hidden>确认导入</button></div>
         </section>
@@ -393,7 +380,7 @@
                   </tr>
                 </thead>
                 <tbody id="ledger-purchases-body">
-                  <tr><td colspan="7" class="table-empty">正在读取采购单…</td></tr>
+                  <tr><td colspan="9" class="table-empty">正在读取采购单…</td></tr>
                 </tbody>
               </table>
             </div>
@@ -423,7 +410,7 @@
         </div>
       </section>
       <section class="surface manual-cost">
-        <div class="panel-title"><div><h3>手工补一个规格</h3><p class="muted">自动匹配不到时使用。保存后相关订单会自动重算。</p></div><span id="sku-count" class="badge">0 个规格</span></div>
+        <div class="panel-title"><div><h3>手工补一个规格</h3></div><span id="sku-count" class="badge">0 个规格</span></div>
         <form id="cost-form" class="cost-form">
           <label>商品规格<input id="cost-sku" list="sku-options" required autocomplete="off"><datalist id="sku-options"></datalist></label>
           <label>实际采购单价（元）<input id="unit-cost" inputmode="decimal" placeholder="例如 8.50" required></label>
@@ -436,9 +423,9 @@
     </div>
 
     <div class="view" data-panel="orders" hidden>
-      <div class="page-heading"><div><h2>已入库订单</h2><p class="muted">按类目或关键词查找订单。</p></div><button class="button outline" data-goto="overview">日期范围</button></div>
+      <div class="page-heading"><div><h2>已入库订单</h2></div><button class="button outline" data-goto="overview">日期范围</button></div>
       <div class="table-toolbar orders-command-bar">
-        <div class="orders-toolbar-copy"><strong id="order-total">0 笔付款订单</strong><span id="order-scope" class="muted">按类目、日期和关键词定位</span></div>
+        <div class="orders-toolbar-copy"><strong id="order-total">0 笔付款订单</strong></div>
         <div class="orders-toolbar-actions">
           <label class="check-label"><input type="checkbox" id="review-only">只看待处理</label>
           <label class="order-filter"><span class="sr-only">订单类目</span><select id="order-category-filter" aria-label="订单类目"><option value="all">全部类目</option><option value="finished">成品号</option><option value="activation">激活</option><option value="family">家庭组</option><option value="other">其他</option></select></label>
@@ -452,18 +439,16 @@
       </div>
       <div id="orders-list" class="orders-list"><div class="empty">这个时间段还没有已付款订单。</div></div>
       <div id="orders-load-more" class="load-more" hidden><button type="button" class="button secondary">继续显示</button></div>
-      <section class="surface adjustment"><h3>核对这笔订单的成本</h3><p class="muted">填写实际采购总成本和依据。系统会保留修改记录。</p><form id="adjustment-form" class="adjustment-form"><label>子订单编号<input id="adjust-item" required></label><input id="adjust-kind" type="hidden" value="cost_set"><label>实际采购总成本（元）<input id="adjust-amount" inputmode="decimal" required></label><label>核对依据<input id="adjust-note" maxlength="200" required placeholder="例如：卡网采购单 FF..."></label><button class="button primary" type="submit">保存这笔成本</button></form><div id="adjustment-history" class="adjustment-history" aria-live="polite"></div></section>
+      <section class="surface adjustment"><h3>核对这笔订单的成本</h3><form id="adjustment-form" class="adjustment-form"><label>子订单编号<input id="adjust-item" required></label><input id="adjust-kind" type="hidden" value="cost_set"><label>实际采购总成本（元）<input id="adjust-amount" inputmode="decimal" required></label><label>核对依据<input id="adjust-note" maxlength="200" required placeholder="例如：卡网采购单 FF..."></label><button class="button primary" type="submit">保存这笔成本</button></form><div id="adjustment-history" class="adjustment-history" aria-live="polite"></div></section>
       <section id="basis-review-panel" class="surface adjustment" hidden><h3 id="basis-review-heading">核对单笔金额口径</h3><p id="basis-review-help" class="muted">来源变化后须重新核对。</p><div id="basis-review-source" aria-live="polite"></div><form id="basis-review-form" class="adjustment-form" aria-labelledby="basis-review-heading" method="post"><label>子订单编号<input id="basis-review-item" name="item_id" readonly required></label><label>金额口径<select id="basis-review-choice" name="basis" required aria-describedby="basis-review-help"><option value="">请选择</option><option value="gross">退款前买家实付金额</option><option value="net">已扣退款的净额</option></select></label><label>核对依据<input id="basis-review-note" name="note" maxlength="200" required></label><button class="button primary" type="submit">保存口径核对</button></form><div id="basis-review-history" class="adjustment-history" aria-live="polite"></div></section>
-      <section id="refund-review-panel" class="surface adjustment" hidden><h3>核对历史退款</h3><p class="muted">填写该子订单累计成功退款金额；确认没有成功退款才填 0。</p><div id="refund-review-source" aria-live="polite"></div><form id="refund-review-form" class="adjustment-form"><label>子订单编号<input id="refund-review-item" readonly required></label><label>累计成功退款（元）<input id="refund-review-amount" inputmode="decimal" required></label><label>核对依据<input id="refund-review-note" maxlength="200" required></label><button class="button primary" type="submit">保存核对</button></form><div id="refund-review-history" class="adjustment-history" aria-live="polite"></div></section>
+      <section id="refund-review-panel" class="surface adjustment" hidden><h3>核对历史退款</h3><div id="refund-review-source" aria-live="polite"></div><form id="refund-review-form" class="adjustment-form"><label>子订单编号<input id="refund-review-item" readonly required></label><label>累计成功退款（元）<input id="refund-review-amount" inputmode="decimal" required></label><label>核对依据<input id="refund-review-note" maxlength="200" required></label><button class="button primary" type="submit">保存核对</button></form><div id="refund-review-history" class="adjustment-history" aria-live="polite"></div></section>
     </div>
 
     <div class="view" data-panel="chats" hidden>
       <div class="page-heading">
         <div>
           <h2>千牛聊天整理与客户洞察</h2>
-          <p class="muted">直接粘贴千牛接待对话或导入质检台表格，自动按买家拆分去重、关联千牛订单、脱敏账号密码与 2FA 密钥，并沉淀标准客服话术与选品需求。</p>
         </div>
-        <span class="privacy-label">密码 / 2FA / 卡密自动脱敏入库</span>
       </div>
 
       <section class="surface chat-import-surface">
@@ -471,7 +456,6 @@
           <div>
             <span class="section-kicker">傻瓜式采集</span>
             <h3 id="chat-import-heading">粘贴千牛聊天记录 或 导入质检明细</h3>
-            <p>在千牛接待窗口按 <kbd>Ctrl+A</kbd>、<kbd>Ctrl+C</kbd> 复制对话后点「一键读取剪贴板」，支持多买家混合粘贴、Markdown / CSV / XLSX 质检导出表。</p>
           </div>
           <div class="button-row compact">
             <button id="read-chat-clipboard" class="button secondary" type="button">一键读取剪贴板</button>
@@ -500,22 +484,18 @@
         <article class="kpi-card">
           <span class="kpi-label">已整理会话</span>
           <strong id="chat-total-sessions">0</strong>
-          <small id="chat-total-messages-sub">累计 0 条对话消息</small>
         </article>
         <article class="kpi-card">
           <span class="kpi-label">已关联本店订单</span>
           <strong id="chat-linked-orders">0</strong>
-          <small>自动匹配千牛订单号与实付</small>
         </article>
         <article class="kpi-card">
           <span class="kpi-label">待跟进 / 求助</span>
           <strong id="chat-unresolved-count">0</strong>
-          <small id="chat-urgent-sub">紧急投诉 0 段</small>
         </article>
         <article class="kpi-card">
           <span class="kpi-label">沉淀标准话术</span>
           <strong id="chat-knowledge-count">0</strong>
-          <small>支持一键复制直接回复买家</small>
         </article>
       </section>
 
@@ -524,7 +504,6 @@
           <div class="panel-title">
             <div>
               <h3>高频咨询与售后痛点排行</h3>
-              <p class="muted">点击任意话题条可直接在下方筛选对应买家对话。</p>
             </div>
             <button id="clear-chat-topic-btn" class="button outline mini" type="button" hidden>清除话题筛选</button>
           </div>
@@ -534,7 +513,6 @@
           <div class="panel-title">
             <div>
               <h3>买家需求信号与选品洞察</h3>
-              <p class="muted">自动提炼续费、团购、质保周期、新品（如 Claude/Plus）等潜在需求。</p>
             </div>
           </div>
           <div id="chat-demand-list" class="demand-list"><div class="empty">导入聊天记录后自动提炼需求信号。</div></div>
@@ -545,7 +523,6 @@
         <div class="panel-title">
           <div>
             <h3>AI 客服复盘与需求问答</h3>
-            <p class="muted">基于已脱敏的真实会话统计回答，严禁编造数字，并自动附带推荐回复话术。</p>
           </div>
           <label class="check-label compact-check">
             <input type="checkbox" id="chat-query-use-ai" checked>调用本地模型深度归纳
@@ -570,7 +547,6 @@
           <div>
             <span class="section-kicker">SOP 知识沉淀</span>
             <h3>标准客服话术卡片库</h3>
-            <p>导入优质接待记录会自动沉淀话术，也可以手工新增或置顶常用回复，点一下即可复制到千牛发送。</p>
           </div>
           <button id="open-new-knowledge" class="button secondary" type="button">+ 新增标准话术</button>
         </div>
@@ -582,7 +558,6 @@
           <div>
             <span class="section-kicker">会话归档与订单联动</span>
             <h3 id="chat-sessions-heading">千牛会话明细列表</h3>
-            <p>支持按商品分类、售前/售后阶段、跟进状态、订单号或关键词检索，展开即可核对脱敏后的完整对话。</p>
           </div>
           <span id="chat-sessions-badge" class="badge">0 段会话</span>
         </div>
@@ -629,8 +604,8 @@
     </div>
 
     <div class="view" data-panel="assistant" hidden>
-      <div class="page-heading"><div><h2>问账</h2><p class="muted">答案只引用当前店铺账本里的核算结果，并附查询范围。</p></div><span class="privacy-label">完整字段保存在本机</span></div>
-      <section class="assistant-panel"><div class="assistant-intro"><span class="assistant-mark" aria-hidden="true">AI</span><div><h3>想了解什么？</h3><p>可以问利润、退款、成本和订单。</p></div></div><div class="suggestions"><button type="button" data-question="上周纯利润是多少？">上周纯利润</button><button type="button" data-question="哪些订单还缺成本？">缺少成本的订单</button><button type="button" data-question="最近的退款情况怎样？">退款情况</button></div><form id="ask-form"><label class="ask-scope">商品范围<select id="ask-sku"><option value="">全部商品</option></select></label><label class="sr-only" for="question">经营问题</label><textarea id="question" rows="3" maxlength="500" placeholder="例如：这周的纯利润是多少？" required></textarea><div class="ask-footer"><span>查询日期沿用概览范围</span><button class="button primary" type="submit">查询账本</button></div></form><div id="answer" class="answer" aria-live="polite" aria-busy="false"></div></section>
+      <div class="page-heading"><div><h2>问账</h2></div></div>
+      <section class="assistant-panel"><div class="assistant-intro"><span class="assistant-mark" aria-hidden="true">AI</span><div><h3>想了解什么？</h3></div></div><div class="suggestions"><button type="button" data-question="上周纯利润是多少？">上周纯利润</button><button type="button" data-question="哪些订单还缺成本？">缺少成本的订单</button><button type="button" data-question="最近的退款情况怎样？">退款情况</button></div><form id="ask-form"><label class="ask-scope">商品范围<select id="ask-sku"><option value="">全部商品</option></select></label><label class="sr-only" for="question">经营问题</label><textarea id="question" rows="3" maxlength="500" placeholder="例如：这周的纯利润是多少？" required></textarea><div class="ask-footer"><button class="button primary" type="submit">查询账本</button></div></form><div id="answer" class="answer" aria-live="polite" aria-busy="false"></div></section>
     </div>
   </main>
 </div>
