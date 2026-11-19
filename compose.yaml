@@ -1,0 +1,43 @@
+services:
+  app:
+    build: .
+    restart: unless-stopped
+    environment:
+      MULTISTORE_MODEL_URL: ${MULTISTORE_MODEL_URL:-}
+      MULTISTORE_MODEL_API_KEY: ${MULTISTORE_MODEL_API_KEY:-}
+      MULTISTORE_MODEL_NAME: ${MULTISTORE_MODEL_NAME:-}
+      MULTISTORE_SECURE_COOKIE: "1"
+      MULTISTORE_PUBLIC_MODE: ${MULTISTORE_PUBLIC_MODE:-0}
+      MULTISTORE_QIANNIU_URL: ${MULTISTORE_QIANNIU_URL:-https://myseller.taobao.com/home.htm/SellManage/orders}
+      MULTISTORE_CARD_SITE_URL: ${MULTISTORE_CARD_SITE_URL:-https://www.16688.com.cn/}
+    volumes:
+      - merchant_data:/var/lib/multistore
+    expose:
+      - "8000"
+    read_only: true
+    tmpfs:
+      - /tmp:size=64m,mode=1777
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health',timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    depends_on:
+      app:
+        condition: service_healthy
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      CADDY_SITE: ${CADDY_SITE:-localhost}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+volumes:
+  merchant_data:
+  caddy_data:
+  caddy_config:
