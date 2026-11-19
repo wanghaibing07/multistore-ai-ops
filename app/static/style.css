@@ -3142,3 +3142,326 @@ body.ui-v2 .orders-reconcile-zone .ledger-filters {
     align-items: flex-start;
   }
 }
+
+/* finesse · component: button · register=product
+ * states: default · hover · focus-visible · active · disabled · loading · error · success
+ * tokens: inherited (body.ui-v2) */
+
+body.ui-v2 {
+  --control-radius: 10px;
+  --control-focus: var(--brand);
+  --brand-contrast: #f4fbfb;
+  --brand-contrast-hover: #f4fbfb;
+  --button-primary-hover: var(--brand-dark);
+  --button-secondary-text: var(--brand-dark);
+}
+
+:root[data-theme="dark"] body.ui-v2 {
+  --brand-contrast: #102620;
+  --brand-contrast-hover: #edf5f1;
+  --button-primary-hover: #2e7465;
+  --button-secondary-text: #a9e5d4;
+}
+
+body.ui-v2 :where(
+  .button,
+  .link-button,
+  .cat-pill,
+  .chat-cat-pill,
+  .match-tier-pill,
+  .suggestions button,
+  .topic-bar-btn,
+  .table-link,
+  .cmd-trigger-btn,
+  .icon-btn,
+  .order-more summary
+) {
+  outline: 2px solid transparent;
+  outline-offset: 3px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body.ui-v2 :where(
+  .button,
+  .link-button,
+  .cat-pill,
+  .chat-cat-pill,
+  .match-tier-pill,
+  .suggestions button,
+  .topic-bar-btn,
+  .table-link,
+  .cmd-trigger-btn,
+  .icon-btn,
+  .order-more summary
+):is(:focus-visible, .is-focus) {
+  outline-color: var(--control-focus);
+}
+
+body.ui-v2 :where(.button, .link-button, .cat-pill, .chat-cat-pill, .match-tier-pill, .suggestions button, .topic-bar-btn, .table-link, .cmd-trigger-btn, .icon-btn, .order-more summary):is(.is-active, :active) {
+  transform: translateY(1px);
+}
+
+body.ui-v2 :where(.button, .link-button, .cat-pill, .chat-cat-pill, .match-tier-pill, .suggestions button, .topic-bar-btn, .table-link, .cmd-trigger-btn, .icon-btn, .order-more summary):is(:disabled, [aria-disabled="true"]) {
+  opacity: .5;
+  cursor: not-allowed;
+  box-shadow: none;
+  transform: none;
+}
+
+body.ui-v2 .button {
+  min-block-size: 42px;
+  min-inline-size: 44px;
+  border: 1px solid transparent;
+  border-radius: var(--control-radius);
+  font-weight: 720;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, transform 100ms ease;
+}
+
+body.ui-v2 .button.primary {
+  color: var(--brand-contrast);
+  background: var(--brand);
+  border-color: var(--brand);
+}
+
+body.ui-v2 .button.primary:hover,
+body.ui-v2 .button.primary.is-hover {
+  color: var(--brand-contrast-hover);
+  background: var(--button-primary-hover);
+  border-color: var(--button-primary-hover);
+}
+
+body.ui-v2 .button.secondary {
+  color: var(--button-secondary-text);
+  background: var(--brand-soft);
+  border-color: var(--brand-line);
+}
+
+body.ui-v2 .button.outline {
+  color: var(--ink-2);
+  background: var(--surface);
+  border-color: var(--line-strong);
+}
+
+body.ui-v2 .button.danger {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--line));
+}
+
+body.ui-v2 .button:is(.is-error, [data-state="error"], [aria-invalid="true"]) {
+  color: var(--danger);
+  background: var(--danger-soft);
+  border-color: var(--danger);
+}
+
+body.ui-v2 .button:is(.is-success, [data-state="success"]) {
+  color: var(--success);
+  background: var(--success-soft);
+  border-color: var(--success);
+}
+
+body.ui-v2 .button.secondary:hover,
+body.ui-v2 .button.secondary.is-hover {
+  color: var(--button-secondary-text);
+}
+
+body.ui-v2 .button:is(.is-busy, [data-state="loading"]) {
+  min-inline-size: var(--busy-width, 8.5rem);
+  opacity: 1;
+  cursor: wait;
+  pointer-events: none;
+}
+
+body.ui-v2 .orders-selection-bar .button,
+body.ui-v2 .ledger-selection-bar .button,
+body.ui-v2 .orders-reconcile-zone .ledger-selection-bar .button {
+  min-block-size: 42px;
+  padding-block: 8px;
+}
+
+body.ui-v2 .button:is(.is-busy, [data-state="loading"])::before {
+  content: "";
+  inline-size: 15px;
+  block-size: 15px;
+  flex: 0 0 15px;
+  border: 2px solid currentColor;
+  border-inline-end-color: transparent;
+  border-radius: 50%;
+  animation: button-spin 800ms linear infinite;
+}
+
+body.ui-v2 .link-button,
+body.ui-v2 .table-link {
+  min-block-size: 36px;
+  min-inline-size: 44px;
+  padding: 6px 9px;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  white-space: nowrap;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, transform 100ms ease;
+}
+
+body.ui-v2 .table-link-danger,
+body.ui-v2 .link-button.is-error,
+body.ui-v2 .link-button[data-state="error"] {
+  color: var(--danger);
+}
+
+body.ui-v2 :where(.cat-pill, .chat-cat-pill, .match-tier-pill, .suggestions button, .topic-bar-btn) {
+  min-block-size: 36px;
+  min-inline-size: 44px;
+  border-radius: 9px;
+  white-space: nowrap;
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, transform 100ms ease;
+}
+
+body.ui-v2 .cmd-trigger-btn,
+body.ui-v2 .icon-btn {
+  min-block-size: 40px;
+  min-inline-size: 40px;
+  border-radius: var(--control-radius);
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, transform 100ms ease;
+}
+
+body.ui-v2 .icon-btn {
+  position: relative;
+}
+
+body.ui-v2 .icon-btn::after {
+  content: "";
+  position: absolute;
+  inset: -2px;
+}
+
+body.ui-v2 :where(.overview-category-item, .topic-bar-btn, .suggestions button) {
+  outline: 2px solid transparent;
+  outline-offset: 3px;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body.ui-v2 :where(.overview-category-item, .topic-bar-btn, .suggestions button):focus-visible {
+  outline-color: var(--control-focus);
+}
+
+body.ui-v2 :where(.overview-category-item, .topic-bar-btn, .suggestions button):active,
+body.ui-v2 :where(.overview-category-item, .topic-bar-btn, .suggestions button).is-active {
+  transform: translateY(1px);
+}
+
+body.ui-v2 .overview-category-item,
+body.ui-v2 .topic-bar-btn,
+body.ui-v2 .suggestions button {
+  transition: background-color 150ms ease, border-color 150ms ease, color 150ms ease, box-shadow 150ms ease, transform 100ms ease;
+}
+
+body.ui-v2 .order-more[open] > summary {
+  background: var(--brand-soft);
+  color: var(--button-secondary-text);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  body.ui-v2 .button:hover,
+  body.ui-v2 .button.is-hover {
+    box-shadow: 0 4px 12px rgb(18 33 43 / .09);
+  }
+
+  body.ui-v2 .button.primary:hover,
+  body.ui-v2 .button.primary.is-hover {
+    color: var(--brand-contrast-hover);
+    background: var(--button-primary-hover);
+    border-color: var(--button-primary-hover);
+  }
+
+  body.ui-v2 .button.secondary:hover,
+  body.ui-v2 .button.secondary.is-hover {
+    background: color-mix(in srgb, var(--brand-soft) 78%, var(--brand-line));
+    border-color: var(--brand);
+    color: var(--button-secondary-text);
+  }
+
+  body.ui-v2 .button.outline:hover,
+  body.ui-v2 .button.outline.is-hover {
+    background: var(--surface-2);
+    border-color: var(--line-strong);
+  }
+
+  body.ui-v2 .button.danger:hover,
+  body.ui-v2 .button.danger.is-hover {
+    background: color-mix(in srgb, var(--danger-soft) 80%, var(--danger));
+    border-color: var(--danger);
+  }
+
+  body.ui-v2 .link-button:hover,
+  body.ui-v2 .link-button.is-hover,
+  body.ui-v2 .table-link:hover,
+  body.ui-v2 .table-link.is-hover {
+    background: var(--brand-soft);
+    border-color: var(--brand-line);
+    color: var(--button-secondary-text);
+    text-decoration: none;
+  }
+
+  body.ui-v2 .table-link-danger:hover,
+  body.ui-v2 .table-link-danger.is-hover {
+    background: var(--danger-soft);
+    border-color: var(--danger);
+    color: var(--danger);
+  }
+
+  body.ui-v2 :where(.cat-pill, .chat-cat-pill, .match-tier-pill, .suggestions button, .topic-bar-btn):hover,
+  body.ui-v2 :where(.cat-pill, .chat-cat-pill, .match-tier-pill, .suggestions button, .topic-bar-btn).is-hover {
+    border-color: var(--brand-line);
+    background: var(--brand-soft);
+    color: var(--button-secondary-text);
+  }
+
+  body.ui-v2 .cmd-trigger-btn:hover,
+  body.ui-v2 .cmd-trigger-btn.is-hover,
+  body.ui-v2 .icon-btn:hover,
+  body.ui-v2 .icon-btn.is-hover {
+    border-color: var(--brand-line);
+    background: var(--surface-2);
+    color: var(--ink);
+    box-shadow: 0 4px 12px rgb(18 33 43 / .08);
+  }
+
+  body.ui-v2 .order-more summary:hover,
+  body.ui-v2 .order-more summary.is-hover {
+    background: var(--brand-soft);
+    color: var(--button-secondary-text);
+  }
+}
+
+@media (hover: none), (pointer: coarse) {
+  body.ui-v2 :where(.button, .link-button, .cat-pill, .chat-cat-pill, .match-tier-pill, .suggestions button, .topic-bar-btn, .table-link, .cmd-trigger-btn, .icon-btn, .order-more summary):hover:not(.is-hover) {
+    box-shadow: none;
+    transform: none;
+  }
+}
+
+@media (pointer: coarse) {
+  body.ui-v2 :where(.button, .link-button, .cat-pill, .chat-cat-pill, .match-tier-pill, .suggestions button, .topic-bar-btn, .table-link, .cmd-trigger-btn, .icon-btn, .order-more summary) {
+    min-block-size: 44px;
+  }
+
+  body.ui-v2 .orders-selection-bar .button,
+  body.ui-v2 .ledger-selection-bar .button,
+  body.ui-v2 .orders-reconcile-zone .ledger-selection-bar .button {
+    min-block-size: 44px;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body.ui-v2 :where(.button, .link-button, .cat-pill, .chat-cat-pill, .match-tier-pill, .suggestions button, .topic-bar-btn, .table-link, .cmd-trigger-btn, .icon-btn, .order-more summary) {
+    transition: none;
+  }
+
+  body.ui-v2 :where(.overview-category-item, .topic-bar-btn, .suggestions button) {
+    transition: none;
+  }
+
+  body.ui-v2 .button:is(.is-busy, [data-state="loading"])::before {
+    animation: none;
+    opacity: .7;
+  }
+}

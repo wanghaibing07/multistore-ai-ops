@@ -313,10 +313,14 @@ function setBusy(button, on, label) {
     if (!busyButtons.has(button)) {
       busyButtons.add(button);
       busyCount++;
+      button.dataset.originalDisabled = button.disabled ? "true" : "false";
+      button.dataset.originalAriaDisabled = button.getAttribute("aria-disabled") || "";
+      button.style.setProperty("--busy-width", `${Math.ceil(button.getBoundingClientRect().width)}px`);
       button.dataset.originalHtml = button.innerHTML;
     }
     button.innerHTML = `<span>${esc(label || "处理中…")}</span>`;
     button.classList.add("is-busy");
+    button.dataset.state = "loading";
     button.setAttribute("aria-busy", "true");
     button.setAttribute("aria-disabled", "true");
     button.disabled = true;
@@ -327,9 +331,17 @@ function setBusy(button, on, label) {
     }
     button.innerHTML = button.dataset.originalHtml || button.textContent;
     button.classList.remove("is-busy");
+    delete button.dataset.state;
     button.removeAttribute("aria-busy");
-    button.removeAttribute("aria-disabled");
-    button.disabled = false;
+    if (button.dataset.originalAriaDisabled) {
+      button.setAttribute("aria-disabled", button.dataset.originalAriaDisabled);
+    } else {
+      button.removeAttribute("aria-disabled");
+    }
+    button.disabled = button.dataset.originalDisabled === "true";
+    button.style.removeProperty("--busy-width");
+    delete button.dataset.originalDisabled;
+    delete button.dataset.originalAriaDisabled;
   }
   const storeSelect = $("#store-select");
   if (storeSelect) storeSelect.disabled = busyCount > 0;
