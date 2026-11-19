@@ -4,9 +4,35 @@ from collections import defaultdict
 from datetime import date
 from sqlalchemy import select, func
 from sqlalchemy.orm import Session
-from .models import Adjustment, CardMatch, Cashflow, CostVersion, ImportBatch, OrderItem, Refund, RefundReview, PaymentBasisReview
+from .models import Adjustment, CardMatch, Cashflow, CostVersion, ImportBatch, ImportRow, OrderItem, Refund, RefundReview, PaymentBasisReview
 from .refund_review import fingerprint, eligible as review_eligible
 from .payment_basis_review import fingerprint as basis_fingerprint
+
+def effective_fulfillment_status(order: OrderItem, source_row: dict | None = None) -> str:
+    value = getattr(order, "fulfillment_status", "unknown") or "unknown"
+    if value in ("shipped", "unshipped"):
+        return value
+    source_row = source_row or {}
+    shipped_at = next((source_row.get(key) for key in ("发货时间", "发货日期", "shipping_time", "shipped_at") if source_row.get(key)), "")
+    if str(shipped_at).strip() not in ("", "-", "--", "无", "None"):
+        return "shipped"
+    source_status = str(next((source_row.get(key) for key in ("订单状态", "交易状态", "履约/售后状态", "status") if source_row.get(key)), "")).strip()
+    if any(token in source_status for token in ("卖家已发货", "已发货", "交易成功", "交易完成", "已完成", "等待买家确认", "资金保护中")):
+        return "shipped"
+    if any(token in source_status for token in ("等待卖家发货", "待发货", "买家已付款", "待付款", "等待买家付款")):
+        return "unshipped"
+    if order.status == "completed":
+        return "shipped"
+    if order.status in ("pending", "unpaid"):
+        return "unshipped"
+    if (
+        order.status == "closed"
+        and order.refund_status == "success"
+        and order.payment_fen is not None
+        and (order.refund_snapshot_fen or 0) >= order.payment_fen
+    ):
+        return "unshipped"
+    return "unknown"
 
 
 def calculate(db: Session, store_id: int, start: str, end: str, sku: str | None = None, item_id: str | None = None, order_id: str | None = None) -> dict:
@@ -28,6 +54,9 @@ def calculate(db: Session, store_id: int, start: str, end: str, sku: str | None 
     card_matches=list(db.scalars(select(CardMatch).where(CardMatch.store_id==store_id,CardMatch.status=="confirmed")))
     reviews=list(db.scalars(select(RefundReview).where(RefundReview.store_id==store_id).order_by(RefundReview.id)))
     cost_ids={o.cost_version_id for o in orders if o.cost_version_id is not None}
+    import_batch_ids={o.batch_id for o in orders}
+    import_rows=list(db.scalars(select(ImportRow).where(ImportRow.batch_id.in_(import_batch_ids)))) if import_batch_ids else []
+    source_rows_by_item={row.data.get("item_external_id"): (row.raw_data or {}) for row in import_rows if row.data.get("item_external_id")}
     cost_batches={c.id:c.batch_id for c in db.scalars(select(CostVersion).where(CostVersion.store_id==store_id,CostVersion.id.in_(cost_ids)))} if cost_ids else {}
     by_ref=defaultdict(list);by_cashflow=defaultdict(list);by_all_cashflow=defaultdict(list);by_adj=defaultdict(list);by_card_match=defaultdict(list);latest_review={};latest_basis={}
     for r in refunds: by_ref[r.item_external_id].append(r)
@@ -43,6 +72,7 @@ def calculate(db: Session, store_id: int, start: str, end: str, sku: str | None 
     source_refund_missing=sum(o.refund_snapshot_fen is None for o in orders if o.refund_status=="success")
     for o in orders:
         reasons=[];ref_rows=by_ref[o.item_external_id]; cashflow_rows=by_cashflow[(o.order_external_id,o.item_external_id)]; adj=by_adj[o.item_external_id]
+        fulfillment=effective_fulfillment_status(o, source_rows_by_item.get(o.item_external_id))
         last_invalid=max((a for a in adj if a.kind=="cost_invalidate"),key=lambda a:a.id,default=None)
         cost_override=max((a for a in adj if a.kind=="cost_set" and (not last_invalid or a.id>last_invalid.id)),key=lambda a:a.id,default=None)
         cost_needs_review=bool(last_invalid and not cost_override)
@@ -65,10 +95,10 @@ def calculate(db: Session, store_id: int, start: str, end: str, sku: str | None 
         if o.payment_fen is None: reasons.append("缺少实付金额")
         if effective_basis=="unknown": reasons.append("未确认金额是否已扣退款")
         if o.status=="unknown": reasons.append("订单状态未识别")
+        if o.status in ("completed", "closed") and fulfillment=="unknown": reasons.append("未确认是否已发货")
         if cost_needs_review: reasons.append("订单信息已变化，请核对原成本和调整后重新设置逐单成本")
-        elif base_cost is None: reasons.append("缺少商品成本")
         snapshot=o.refund_snapshot_fen
-        if o.refund_status=="success" and not active_review and (snapshot is None or snapshot==0): reasons.append("缺少已成功退款金额")
+        if o.refund_status=="success" and (snapshot is None or snapshot==0): reasons.append("缺少已成功退款金额")
         if not active_review:
             if o.refund_status=="none" and snapshot not in (None,0): reasons.append("退款状态与金额不一致")
             if successful and (snapshot is None or snapshot!=event_sum): reasons.append("退款流水与订单快照不一致")
@@ -80,10 +110,31 @@ def calculate(db: Session, store_id: int, start: str, end: str, sku: str | None 
         cost_adjust=sum(a.amount_fen for a in adj if a.kind=="cost_delta")
         supplier_refund=sum(a.amount_fen for a in adj if a.kind=="supplier_refund")
         fee=sum(a.amount_fen for a in adj if a.kind=="expense")
-        total_cost=None if base_cost is None else base_cost+cost_adjust-supplier_refund
+        auto_zero_cost=(
+            fulfillment=="unshipped"
+            and o.refund_status=="success"
+            and cost_override is None
+            and not cost_needs_review
+        )
+        if cost_needs_review:
+            total_cost=None
+        elif auto_zero_cost:
+            total_cost=0
+        else:
+            total_cost=None if base_cost is None else base_cost+cost_adjust-supplier_refund
+        if total_cost is None and not cost_needs_review and not auto_zero_cost: reasons.append("缺少商品成本")
         if total_cost is not None and total_cost<0: reasons.append("供应商返款超过成本")
         net_sales=None if o.payment_fen is None or effective_basis=="unknown" else o.payment_fen-(refund_value if effective_basis=="gross" else 0)
         estimate=None if net_sales is None or total_cost is None else net_sales-total_cost-fee
+        soft_review_reasons={
+            "退款历史是否完整尚未核对",
+            "退款申请已关闭，需核对历史退款",
+        }
+        estimated_profit = (
+            estimate
+            if estimate is not None and reasons and set(reasons).issubset(soft_review_reasons)
+            else None
+        )
         is_pending=o.status in ("pending","unpaid")
         if is_pending: pending_count+=1
         if reasons: unknown_count+=1
@@ -95,10 +146,12 @@ def calculate(db: Session, store_id: int, start: str, end: str, sku: str | None 
         for r in ref_rows: batch_ids.add(r.batch_id)
         for flow in cashflow_rows: batch_ids.add(flow.batch_id)
         items.append({"item_id":o.item_external_id,"order_id":o.order_external_id,"sku":o.sku,"title":o.product_title,
-            "paid_at":o.paid_at,"status":o.status,"quantity":o.quantity,"payment_fen":o.payment_fen,"basis":effective_basis,
+            "paid_at":o.paid_at,"status":o.status,"fulfillment_status":fulfillment,"quantity":o.quantity,"payment_fen":o.payment_fen,"basis":effective_basis,
             "basis_source_fingerprint":basis_hash,"basis_review_id":active_basis.id if active_basis else None,"basis_review_stale":bool(basis_review and not active_basis),
             "refund_status":o.refund_status,"refund_fen":snapshot,"cost_fen":total_cost,"fee_fen":fee,"net_sales_fen":net_sales,
-            "profit_fen":estimate if eligible else None,"estimated_profit_fen":estimate if is_pending and not reasons else None,
+            "profit_fen":estimate if eligible else None,"estimated_profit_fen":(
+                estimate if is_pending and not reasons else estimated_profit
+            ),
             "reasons":reasons,"batch_id":o.batch_id,"cost_version_id":None if cost_override else o.cost_version_id,
             "cost_batch_id":None if cost_override else cost_batches.get(o.cost_version_id),"cost_override_id":cost_override.id if cost_override else None,"cost_needs_review":cost_needs_review,
             "refund_review_fingerprint":source_hash,"refund_review_id":active_review.id if active_review else None,

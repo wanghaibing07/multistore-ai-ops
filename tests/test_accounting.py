@@ -47,14 +47,37 @@ def test_refund_cost_and_adjustment_are_calculated_once(db):
     report=calculate(db,1,'2026-10-01','2026-10-31')
     assert report['counts']['paid_orders']==2
     assert report['counts']['settled']==2
-    assert report['known']['profit_fen']==-550
+    assert report['known']['profit_fen']==-50
     import_file(db,'refunds','refund_id,item_id,order_id,refund_status,refund_amount,completed_at\nr1,i1,o1,success,10.00,2026-11-02\n')
     stale=calculate(db,1,'2026-10-01','2026-10-31')
     assert next(x for x in stale['items'] if x['item_id']=='i1')['refund_review_stale']
     verify_synthetic_refund(db,'i1',1000)
     again=calculate(db,1,'2026-10-01','2026-10-31')
-    assert again['known']['profit_fen']==-550
+    assert again['known']['profit_fen']==-50
     assert again['known']['refund_fen']==1300
+
+def test_refund_cost_follows_fulfillment_state(db):
+    db.add(CostVersion(store_id=1,sku='A',valid_from='2026-01-01 00:00:00',unit_cost_fen=700));db.commit()
+    header='item_id,order_id,sku,quantity,paid_at,status,shipped_at,payment,refund_status,refund_amount\n'
+    data=(header+
+          'unshipped,ou,A,1,2026-10-01,closed,,10,success,10\n'+
+          'shipped,os,A,1,2026-10-02,closed,2026-10-02 10:00:00,10,success,10\n'+
+          'partial,op,A,1,2026-10-03,completed,2026-10-03 10:00:00,10,success,3\n')
+    import_file(db,'orders',data)
+    pending_review=calculate(db,1,'2026-10-01','2026-10-31')
+    pending_items={item['item_id']:item for item in pending_review['items']}
+    assert pending_items['unshipped']['profit_fen'] is None and pending_items['unshipped']['estimated_profit_fen']==0
+    assert pending_items['shipped']['profit_fen'] is None and pending_items['shipped']['estimated_profit_fen']==-700
+    verify_synthetic_refund(db,'unshipped',1000)
+    verify_synthetic_refund(db,'shipped',1000)
+    verify_synthetic_refund(db,'partial',300)
+    report=calculate(db,1,'2026-10-01','2026-10-31')
+    items={item['item_id']:item for item in report['items']}
+    assert items['unshipped']['fulfillment_status']=='unshipped'
+    assert items['unshipped']['cost_fen']==0 and items['unshipped']['profit_fen']==0
+    assert items['shipped']['fulfillment_status']=='shipped'
+    assert items['shipped']['cost_fen']==700 and items['shipped']['profit_fen']==-700
+    assert items['partial']['cost_fen']==700 and items['partial']['profit_fen']==0
 
 def test_net_basis_is_not_refunded_twice_and_unknown_is_not_profit(db):
     db.add(CostVersion(store_id=1,sku='A',valid_from='2026-01-01 00:00:00',unit_cost_fen=100));db.commit()
@@ -143,6 +166,8 @@ def test_qianniu_sold_order_export_maps_native_headers(db):
     assert preview['preview'][0]['sku']=='颜色分类:6个月'
     assert preview['preview'][1]['refund_status']=='success'
     assert preview['preview'][1]['payment_fen']==2990
+    assert preview['preview'][0]['fulfillment_status']=='shipped'
+    assert preview['preview'][1]['fulfillment_status']=='unshipped'
     result=importer.commit(db,1,preview['batch_id'])
     assert result['inserted']==2
 

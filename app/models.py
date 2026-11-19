@@ -77,6 +77,7 @@ class OrderItem(Base):
     quantity: Mapped[int] = mapped_column(Integer)
     paid_at: Mapped[str | None] = mapped_column(String(19), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(30))
+    fulfillment_status: Mapped[str] = mapped_column(String(20), default="unknown")
     payment_fen: Mapped[int | None] = mapped_column(Integer, nullable=True)
     payment_basis: Mapped[str] = mapped_column(String(10))
     refund_status: Mapped[str] = mapped_column(String(20))

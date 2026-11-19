@@ -63,6 +63,7 @@ const labels = {
   quantity: "购买数量",
   paid_at: "付款时间",
   status: "订单状态",
+  shipped_at: "发货时间",
   payment: "实付金额",
   refund_status: "退款状态",
   refund_amount: "退款金额",
@@ -93,6 +94,43 @@ function orderCategory(item) {
   if (/(家庭组|拼车|邀请资格|family)/i.test(text)) return "family";
   if (/(成品号|成品|现号|独享)/i.test(text)) return "finished";
   return "other";
+}
+function fulfillmentLabel(status) {
+  return { shipped: "已发货", unshipped: "未发货", unknown: "发货状态待确认" }[status] || "发货状态待确认";
+}
+function refundLabel(status) {
+  return { none: "无退款", success: "已退款", pending: "退款处理中", closed: "退款申请已关闭", unknown: "退款状态待确认" }[status] || "退款状态待确认";
+}
+function orderIssueLabel(reasons, estimatedProfit) {
+  const labels = (reasons || []).map((reason) => ({
+    "退款历史是否完整尚未核对": "待核对退款",
+    "退款申请已关闭，需核对历史退款": "待核对退款",
+    "缺少商品成本": "待补成本",
+    "订单信息已变化，请核对原成本和调整后重新设置逐单成本": "成本已变化",
+  }[reason] || reason));
+  if (!labels.length && estimatedProfit !== null && estimatedProfit !== undefined) {
+    return `待处理，暂估 ${money(estimatedProfit)}`;
+  }
+  return labels.join("、") || "已核算";
+}
+function orderActionMarkup(item) {
+  const reasons = item.reasons || [];
+  const actions = [];
+  const needsCost = item.cost_needs_review || reasons.some((reason) => reason.includes("商品成本") || reason.includes("成本"));
+  const needsBasis = item.basis === "unknown" || item.basis_review_stale || reasons.some((reason) => reason.includes("金额口径"));
+  const needsRefund = Boolean(item.refund_review_fingerprint) && reasons.some((reason) => /退款|账单/.test(reason));
+  if (needsCost) {
+    actions.push(`<button type="button" class="link-button action-primary" data-fix="${esc(item.item_id)}">${item.cost_needs_review ? "重新设置成本" : "补成本"}</button>`);
+  }
+  if (needsBasis) {
+    actions.push(`<button type="button" class="link-button" data-basis-review="${esc(item.item_id)}">${item.basis_review_stale ? "更新金额口径" : "确认金额口径"}</button>`);
+  }
+  if (needsRefund) {
+    actions.push(`<button type="button" class="link-button" data-refund-review="${esc(item.item_id)}">核对退款</button>`);
+  }
+  if (!actions.length) return "";
+  if (actions.length === 1) return actions[0];
+  return `<details class="order-more"><summary aria-label="更多处理动作">更多</summary><div class="order-more-menu">${actions.join("")}</div></details>`;
 }
 const esc = (v) =>
   String(v ?? "").replace(
@@ -695,7 +733,8 @@ function renderOrders() {
           (x) =>
             (() => {
               const category = orderCategory(x);
-              return `<div class="order-row ${state.selectedOrderIds.has(x.item_id) ? "is-selected" : ""}" data-order-row="${esc(x.item_id)}"><div class="order-main"><label class="order-select"><input type="checkbox" data-order-select="${esc(x.item_id)}" aria-label="选择订单 ${esc(x.order_id || x.item_id)}" ${state.selectedOrderIds.has(x.item_id) ? "checked" : ""}></label><div><div class="order-title-line"><strong>${esc(x.title || x.sku)}</strong><span class="order-category-chip order-category-${category}">${ORDER_CATEGORY_LABELS[category]}</span></div><span>${esc(x.sku)}</span><span>主订单 ${esc(x.order_id)} · 子订单 ${esc(x.item_id)} · ${esc(x.paid_at || "")}</span><span>订单批次 ${esc(x.batch_id)}${x.cost_override_id ? " · 逐单成本记录 " + esc(x.cost_override_id) : ""}${x.cost_version_id ? " · 成本版本 " + esc(x.cost_version_id) : ""}${x.cost_batch_id ? "（成本批次 " + esc(x.cost_batch_id) + "）" : ""}${x.refund_batch_ids.length ? " · 退款批次 " + esc(x.refund_batch_ids.join("、")) : ""}${x.adjustment_ids.length ? " · 调整记录 " + esc(x.adjustment_ids.join("、")) : ""}${x.refund_review_id ? " · 退款核对 " + esc(x.refund_review_id) : ""}${x.refund_review_stale ? " · 退款核对已失效" : ""}</span></div></div><div><span>实付 / 退款快照</span><span class="amount">${money(x.payment_fen)} / ${money(x.refund_fen)}</span>${x.refund_review_id ? `<span>已核对退款 ${money(x.reviewed_refund_fen)}</span>` : x.refund_review_stale ? "<span>退款核对已失效</span>" : ""}</div><div><span>贡献利润</span><span class="amount">${money(x.profit_fen)}</span><span class="issue">${esc(x.reasons.join("、") || (x.estimated_profit_fen !== null ? "未完成，暂估 " + money(x.estimated_profit_fen) : "已核算"))}</span></div><div class="order-actions"><button type="button" class="link-button" data-fix="${esc(x.item_id)}">开始核对</button>${x.refund_review_fingerprint ? `<button type="button" class="link-button" data-refund-review="${esc(x.item_id)}">核对退款历史</button>` : ""}</div></div>`;
+              const profitValue = x.profit_fen !== null && x.profit_fen !== undefined ? x.profit_fen : x.estimated_profit_fen;
+              return `<div class="order-row ${state.selectedOrderIds.has(x.item_id) ? "is-selected" : ""}" data-order-row="${esc(x.item_id)}"><div class="order-main"><label class="order-select"><input type="checkbox" data-order-select="${esc(x.item_id)}" aria-label="选择订单 ${esc(x.order_id || x.item_id)}" ${state.selectedOrderIds.has(x.item_id) ? "checked" : ""}></label><div><div class="order-title-line"><strong>${esc(x.title || x.sku)}</strong><span class="order-category-chip order-category-${category}">${ORDER_CATEGORY_LABELS[category]}</span></div><span>${esc(x.sku)}</span><span>主订单 ${esc(x.order_id)} · 子订单 ${esc(x.item_id)} · ${esc(x.paid_at || "")}</span></div></div><div><span>退款后实收</span><span class="amount">${money(x.net_sales_fen)}</span><span>${fulfillmentLabel(x.fulfillment_status)} · ${refundLabel(x.refund_status)} · 成本 ${money(x.cost_fen)}</span></div><div><span>利润</span><span class="amount">${money(profitValue)}</span><span class="issue">${esc(orderIssueLabel(x.reasons, x.estimated_profit_fen))}</span></div><div class="order-actions">${orderActionMarkup(x)}</div></div>`;
             })(),
         )
         .join("")
@@ -704,25 +743,6 @@ function renderOrders() {
   if (more) more.hidden = visible.length >= items.length;
   syncOrderSelectionUI();
 }
-const renderOrdersWithoutBasis = renderOrders;
-renderOrders = function () {
-  renderOrdersWithoutBasis();
-  for (const item of state.report?.items || []) {
-    if (!item.basis_source_fingerprint) continue;
-    const target = [...document.querySelectorAll("[data-fix]")].find(
-      (button) => button.dataset.fix === item.item_id,
-    );
-    if (!target) continue;
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "link-button";
-    button.dataset.basisReview = item.item_id;
-    button.textContent = item.basis_review_stale
-      ? "重新核对金额口径"
-      : "核对金额口径";
-    target.after(button);
-  }
-};
 $("#review-only").addEventListener("change", () => {
   state.orderLimit = 50;
   renderOrders();

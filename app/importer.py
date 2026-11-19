@@ -29,8 +29,9 @@ ALIASES = {
     "title": ["商品标题", "宝贝标题", "title"],
     "quantity": ["购买数量", "数量", "宝贝总数量", "商品数量", "quantity"],
     "paid_at": ["订单付款时间", "付款时间", "paid_at"],
-    "status": ["订单状态", "交易状态", "status"],
-    "payment": ["买家应付货款", "买家实付金额", "买家实际支付金额", "实付金额", "总金额", "payment"],
+    "status": ["订单状态", "交易状态", "履约/售后状态", "status"],
+    "shipped_at": ["发货时间", "发货日期", "shipping_time", "shipped_at"],
+    "payment": ["买家实付金额", "买家实际支付金额", "实付金额", "买家应付货款", "总金额", "payment"],
     "refund_status": ["退款状态", "售后状态", "退款/售后状态", "订单关闭原因", "refund_status"],
     "refund_amount": ["退款金额", "退款总额", "退给买家金额", "refund_amount"],
     "refund_id": ["退款编号", "售后编号", "退款单号", "refund_id"],
@@ -136,7 +137,7 @@ def read_table(name: str, data: bytes) -> tuple[list[str], list[dict[str, Any]]]
 
 def map_headers(headers: list[str], kind: str, supplied: dict[str, str] | None = None) -> dict[str, str]:
     if kind not in REQUIRED: raise ImportProblem("导入类型无效")
-    allowed = {"orders": {"item_id","order_id","sku","product_id","property","title","quantity","paid_at","status","payment","refund_status","refund_amount"},
+    allowed = {"orders": {"item_id","order_id","sku","product_id","property","title","quantity","paid_at","status","shipped_at","payment","refund_status","refund_amount"},
                "refunds": {"refund_id","item_id","order_id","refund_status","refund_amount","completed_at"},
                "costs": {"sku","valid_from","unit_cost","supplier"},
                "cashflows": {"bill_type","business_flow","order_id","item_id","refund_id","settled_at","bill_income","bill_refund"}}[kind]
@@ -179,6 +180,20 @@ def order_state(value: Any) -> str:
         return "closed"
     return "unknown"
 
+def fulfillment_state(value: Any, shipped_at: Any, refund_state_value: str) -> str:
+    if str(shipped_at or "").strip() not in ("", "-", "--", "无", "None"):
+        return "shipped"
+    text = str(value or "").strip()
+    if any(token in text for token in ("卖家已发货", "已发货", "交易成功", "交易完成", "已完成", "等待买家确认", "资金保护中")):
+        return "shipped"
+    if any(token in text for token in ("等待卖家发货", "待发货", "买家已付款", "待付款", "等待买家付款")):
+        return "unshipped"
+    if text in ("交易关闭", "已关闭", "closed") and refund_state_value == "success":
+        return "unshipped"
+    if text in ("unpaid",):
+        return "unshipped"
+    return "unknown"
+
 def refund_state(value: Any) -> str:
     text = str(value or "").strip()
     lookup = {"没有申请退款":"none", "无退款":"none", "无退款申请":"none", "订单未关闭":"none", "退款关闭":"closed", "none":"none", "退款成功":"success", "成功":"success", "退款":"success", "success":"success", "退款中":"pending", "待处理":"pending", "退款待处理":"pending", "pending":"pending", "退款关闭/撤销":"closed", "closed":"closed"}
@@ -207,11 +222,17 @@ def clean_row(raw: dict, m: dict, kind: str) -> dict:
         state = refund_state(get(raw,m,"refund_status"))
         if state == "none" and amount is None: amount = 0
         payment = money(get(raw,m,"payment"), optional=True)
+        if state == "success" and payment == 0:
+            gross_header = next((header for header in ("买家应付货款", "总金额") if header in raw), "")
+            if gross_header:
+                payment = money(raw.get(gross_header), optional=True)
         if paid and payment is None: raise ImportProblem("已付款订单缺少实付金额")
         item_id = identifier(get(raw,m,"item_id"), "子订单号", optional=True) or order_id
         return {"item_external_id":item_id, "order_external_id":order_id,
                 "sku":sku, "product_title":title[:300], "quantity":qty, "paid_at":paid,
-                "status":order_state(get(raw,m,"status")), "payment_fen":payment, "refund_status":state, "refund_snapshot_fen":amount}
+                "status":order_state(get(raw,m,"status")),
+                "fulfillment_status":fulfillment_state(get(raw,m,"status"), get(raw,m,"shipped_at"), state),
+                "payment_fen":payment, "refund_status":state, "refund_snapshot_fen":amount}
     if kind == "refunds":
         return {"external_id":identifier(get(raw,m,"refund_id"),"退款编号"),
                 "item_external_id":identifier(get(raw,m,"item_id"),"子订单号",optional=True),

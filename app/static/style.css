@@ -1299,6 +1299,13 @@ body.ui-v2 .order-row strong { font-size: 13.5px; color: var(--ink); }
 body.ui-v2 .order-row .amount { font-size: 15px; }
 body.ui-v2 .order-actions { display: flex; flex-direction: column; align-items: stretch; gap: 2px; }
 body.ui-v2 .link-button { border-radius: 7px; }
+body.ui-v2 .order-actions .action-primary { color: var(--brand-dark); font-weight: 750; }
+body.ui-v2 .order-more { position: relative; }
+body.ui-v2 .order-more summary { list-style: none; cursor: pointer; padding: 6px 9px; border-radius: 7px; color: var(--ink-2); font-size: 12px; text-align: center; }
+body.ui-v2 .order-more summary::-webkit-details-marker { display: none; }
+body.ui-v2 .order-more summary:hover { background: var(--brand-soft); color: var(--brand-dark); }
+body.ui-v2 .order-more-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 4; display: grid; min-width: 132px; padding: 4px; border: 1px solid var(--line-strong); border-radius: 9px; background: var(--surface); box-shadow: var(--shadow-lg); }
+body.ui-v2 .order-more-menu .link-button { text-align: left; white-space: nowrap; }
 body.ui-v2 .adjustment { border-top: 3px solid #e8c36b; }
 
 body.ui-v2 #toast { right: 28px; bottom: 28px; border-radius: 10px; }
