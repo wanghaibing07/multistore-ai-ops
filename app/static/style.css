@@ -2740,3 +2740,105 @@ body.ui-v2 :where(button, a, input, select, textarea):focus-visible {
 
 :root[data-theme="dark"] body.ui-v2 .order-row:hover,
 :root[data-theme="dark"] body.ui-v2 .order-row.is-selected { background: #20372f; }
+
+/* Compact product pass. Keep the controls and status feedback, remove repeated framing copy. */
+body.ui-v2 .page-heading {
+  align-items: center;
+  margin-bottom: 16px;
+}
+
+body.ui-v2 .page-heading h2 {
+  font-size: clamp(30px, 3.8vw, 44px);
+}
+
+body.ui-v2 .page-heading > div > .muted,
+body.ui-v2 .page-heading .privacy-label,
+body.ui-v2 .surface > .card-import-head > div > .section-kicker,
+body.ui-v2 .surface > .card-import-head > div > p,
+body.ui-v2 .view[data-panel="costs"] .card-import-head > div > p,
+body.ui-v2 .view[data-panel="costs"] .site-url-list,
+body.ui-v2 .view[data-panel="costs"] .format-tags,
+body.ui-v2 .view[data-panel="costs"] .kb-review-bar {
+  display: none;
+}
+
+body.ui-v2 .view[data-panel="costs"] > .surface {
+  margin-top: 12px;
+  padding: 20px;
+  border-radius: 18px;
+  box-shadow: 0 7px 24px rgb(0 0 0 / .045);
+}
+
+body.ui-v2 .view[data-panel="costs"] .card-import-head {
+  align-items: center;
+  gap: 12px;
+}
+
+body.ui-v2 .view[data-panel="costs"] .card-import-head h3 {
+  margin: 0;
+  font-size: 18px;
+  letter-spacing: -.035em;
+}
+
+body.ui-v2 .view[data-panel="costs"] .card-settings-form {
+  margin-top: 14px;
+}
+
+body.ui-v2 .view[data-panel="costs"] .acquire-grid {
+  gap: 12px;
+  margin-top: 12px;
+}
+
+body.ui-v2 .view[data-panel="costs"] .acquire-box {
+  gap: 10px;
+  padding: 14px;
+}
+
+body.ui-v2 .view[data-panel="costs"] .acquire-box > .helper-text {
+  display: none;
+}
+
+body.ui-v2 .view[data-panel="costs"] .match-panel .match-toolbar-controls {
+  gap: 8px;
+}
+
+body.ui-v2 .view[data-panel="costs"] .manual-cost,
+body.ui-v2 .view[data-panel="costs"] .history {
+  padding: 16px 20px;
+}
+
+body.ui-v2 .view[data-panel="costs"] .manual-cost .panel-title {
+  margin-bottom: 12px;
+}
+
+body.ui-v2 .view[data-panel="costs"] .history h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+body.ui-v2 .table-link {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 3px 9px;
+  border: 1px solid var(--brand-line);
+  border-radius: 8px;
+  background: var(--brand-soft);
+  color: var(--brand-dark);
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+body.ui-v2 .table-link:hover {
+  border-color: var(--brand);
+  background: var(--brand);
+  color: #fff;
+}
+
+@media (max-width: 760px) {
+  body.ui-v2 .view[data-panel="costs"] > .surface { padding: 16px; }
+  body.ui-v2 .view[data-panel="costs"] .card-import-head { align-items: stretch; }
+  body.ui-v2 .view[data-panel="costs"] .card-site-links { width: 100%; }
+  body.ui-v2 .view[data-panel="costs"] .card-site-links .button { flex: 1; }
+}

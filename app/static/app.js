@@ -348,7 +348,7 @@ function route() {
   let title = {
     overview: "工作台",
     import: "导入数据",
-    costs: "AI 补齐采购成本",
+    costs: "成本核对",
     orders: "已入库订单",
     chats: "千牛聊天分析",
     assistant: "经营问答",
@@ -1499,7 +1499,7 @@ function renderMatchResults(r) {
   }
   if (!r.suggestions.length) {
     $("#match-results").innerHTML =
-      `<div class="empty"><p>已经找到 ${r.purchase_count} 张采购单，当前没有待核对的缺成本订单。</p><button class="button secondary" type="button" data-goto="orders">查看订单明细</button></div>`;
+      '<div class="empty"><p>当前没有可直接匹配的千牛订单。</p><button class="button secondary" type="button" data-goto="orders">查看订单明细</button></div>';
     return;
   }
   const list = filteredSuggestions(r);
@@ -1636,6 +1636,13 @@ $("#match-use-ai")?.addEventListener("change", () => runCostMatches($("#run-cost
 
 $("#run-cost-matches").addEventListener("click", (e) => runCostMatches(e.currentTarget));
 document.addEventListener("click", (e) => {
+  const focusMatch = e.target.closest("[data-focus-card-match]");
+  if (focusMatch) {
+    const panel = $(".match-panel");
+    panel?.scrollIntoView({ behavior: "smooth", block: "start" });
+    runCostMatches($("#run-cost-matches"), { silent: true });
+    return;
+  }
   const button = e.target.closest("[data-show-more-matches]");
   if (!button || !state.cardMatches) return;
   state.cardMatchLimit = Math.min(
@@ -1844,7 +1851,9 @@ function renderCardLedger(data) {
               : "1 件";
             const matchedHtml = p.matched_order_ids?.length
               ? `<div><strong>${esc(p.matched_at || "已记录")}</strong></div><div class="mono-id">${p.matched_order_ids.map((id) => esc(id)).join("<br>")}</div>`
-              : `<span class="muted">${p.reconcile_status === "excluded" ? "已退款或关闭" : "待与千牛订单核对"}</span>`;
+              : p.reconcile_status === "excluded"
+                ? `<span class="muted">已退款或关闭</span>`
+                : `<button type="button" class="table-link" data-focus-card-match="${esc(p.id)}">去核对</button>`;
             return `<tr>
               <th scope="row"><div class="mono-id">${esc(p.purchase_external_id)}</div><small title="${esc(p.source || "")}">${esc(shortCardSource(p.source || ""))}${p.seller ? " · " + esc(p.seller) : ""}</small></th>
               <td class="cell-title"><div>${esc(p.product_title || "—")}</div><span class="cat-tag">${esc(p.category_group_label || p.category_label || "其他")}</span></td>
@@ -2856,13 +2865,13 @@ function buildPaletteCommands() {
   return [
     { label: "前往：工作台", sub: "查看纯利润、营业额与待处理订单", kbd: "Alt+1", run: () => goto("overview") },
     { label: "前往：导入千牛订单", sub: "导入 CSV/XLSX 或读取最近下载", kbd: "Alt+2", run: () => goto("import") },
-    { label: "前往：AI 补齐采购成本", sub: "卡网查询粘贴、智能比例看板与批量核对", kbd: "Alt+3", run: () => goto("costs") },
+    { label: "前往：成本核对", sub: "导入卡网订单并匹配千牛订单", kbd: "Alt+3", run: () => goto("costs") },
     { label: "前往：已入库订单", sub: "按类目搜索订单并核对成本", kbd: "Alt+4", run: () => goto("orders") },
     { label: "前往：千牛聊天分析", sub: "对话脱敏归档、高频痛点与标准话术库", kbd: "Alt+5", run: () => goto("chats") },
     { label: "前往：问账", sub: "按时间范围提问利润与退款数据", kbd: "Alt+6", run: () => goto("assistant") },
     {
       label: "动作：一键确认全部高匹配成本",
-      sub: "在 AI 补成本页批量确认高置信度建议",
+      sub: "批量确认高置信度成本匹配",
       kbd: "批量入账",
       run: async () => {
         goto("costs");
