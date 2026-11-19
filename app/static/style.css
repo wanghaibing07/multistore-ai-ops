@@ -749,12 +749,13 @@ label small { font-weight: 400; color: var(--muted); }
     border-bottom: 1px solid var(--line);
   }
   .ledger-table-purchases {
-    --label-2: "商品名称 / 分类";
-    --label-3: "数量 / 单价";
-    --label-4: "实付 / 状态";
-    --label-5: "下单时间";
-    --label-6: "核对状态";
-    --label-7: "核对时间与对应订单号";
+    --label-3: "商品名称 / 分类";
+    --label-4: "数量 / 单价";
+    --label-5: "实付 / 状态";
+    --label-6: "下单时间";
+    --label-7: "核对状态";
+    --label-8: "核对时间与对应订单号";
+    --label-9: "操作";
   }
   .ledger-table-orders {
     --label-2: "商品与规格 / 分类";
@@ -763,12 +764,18 @@ label small { font-weight: 400; color: var(--muted); }
     --label-5: "核对状态";
     --label-6: "核对时间与对应采购单号";
   }
-  .ledger-table td:nth-child(2)::before { content: var(--label-2) ": "; font-weight: 700; color: var(--muted); }
-  .ledger-table td:nth-child(3)::before { content: var(--label-3) ": "; font-weight: 700; color: var(--muted); }
-  .ledger-table td:nth-child(4)::before { content: var(--label-4) ": "; font-weight: 700; color: var(--muted); }
-  .ledger-table td:nth-child(5)::before { content: var(--label-5) ": "; font-weight: 700; color: var(--muted); }
-  .ledger-table td:nth-child(6)::before { content: var(--label-6) ": "; font-weight: 700; color: var(--muted); }
-  .ledger-table td:nth-child(7)::before { content: var(--label-7) ": "; font-weight: 700; color: var(--muted); }
+  .ledger-table-purchases td:nth-child(3)::before { content: var(--label-3) ": "; font-weight: 700; color: var(--muted); }
+  .ledger-table-purchases td:nth-child(4)::before { content: var(--label-4) ": "; font-weight: 700; color: var(--muted); }
+  .ledger-table-purchases td:nth-child(5)::before { content: var(--label-5) ": "; font-weight: 700; color: var(--muted); }
+  .ledger-table-purchases td:nth-child(6)::before { content: var(--label-6) ": "; font-weight: 700; color: var(--muted); }
+  .ledger-table-purchases td:nth-child(7)::before { content: var(--label-7) ": "; font-weight: 700; color: var(--muted); }
+  .ledger-table-purchases td:nth-child(8)::before { content: var(--label-8) ": "; font-weight: 700; color: var(--muted); }
+  .ledger-table-purchases td:nth-child(9)::before { content: var(--label-9) ": "; font-weight: 700; color: var(--muted); }
+  .ledger-table-orders td:nth-child(2)::before { content: var(--label-2) ": "; font-weight: 700; color: var(--muted); }
+  .ledger-table-orders td:nth-child(3)::before { content: var(--label-3) ": "; font-weight: 700; color: var(--muted); }
+  .ledger-table-orders td:nth-child(4)::before { content: var(--label-4) ": "; font-weight: 700; color: var(--muted); }
+  .ledger-table-orders td:nth-child(5)::before { content: var(--label-5) ": "; font-weight: 700; color: var(--muted); }
+  .ledger-table-orders td:nth-child(6)::before { content: var(--label-6) ": "; font-weight: 700; color: var(--muted); }
 }
 .cost-form { display: grid; grid-template-columns: 1.2fr .8fr 1.2fr auto; gap: 12px; align-items: end; margin-top: 16px; }
 .cost-form .advanced-fields { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -2841,4 +2848,60 @@ body.ui-v2 .table-link:hover {
   body.ui-v2 .view[data-panel="costs"] .card-import-head { align-items: stretch; }
   body.ui-v2 .view[data-panel="costs"] .card-site-links { width: 100%; }
   body.ui-v2 .view[data-panel="costs"] .card-site-links .button { flex: 1; }
+}
+
+/* finesse · product refinement · one compact selection rail for destructive ledger actions */
+body.ui-v2 .view[data-panel="costs"] .ledger-selection-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 42px;
+  margin-top: 12px;
+  padding: 0 2px;
+}
+
+body.ui-v2 .view[data-panel="costs"] .ledger-selection-bar .button {
+  min-height: 32px;
+  margin-left: auto;
+  padding: 5px 11px;
+  font-size: 12px;
+}
+
+body.ui-v2 .view[data-panel="costs"] .selection-cell {
+  width: 42px;
+  padding-inline: 12px 2px;
+  text-align: center;
+}
+
+body.ui-v2 .view[data-panel="costs"] .selection-cell input {
+  width: 16px;
+  min-height: 16px;
+  margin: 0;
+  accent-color: var(--brand);
+}
+
+body.ui-v2 .view[data-panel="costs"] .table-link-danger {
+  border-color: transparent;
+  background: transparent;
+  color: var(--danger);
+}
+
+body.ui-v2 .view[data-panel="costs"] .table-link-danger:hover {
+  border-color: var(--danger);
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+
+body.ui-v2 .view[data-panel="costs"] .ledger-table-purchases {
+  min-width: 1010px;
+}
+
+@media (max-width: 760px) {
+  body.ui-v2 .view[data-panel="costs"] .ledger-selection-bar {
+    flex-wrap: wrap;
+  }
+
+  body.ui-v2 .view[data-panel="costs"] .ledger-selection-bar .button {
+    margin-left: 0;
+  }
 }

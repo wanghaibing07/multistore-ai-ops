@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark" id="color-scheme-meta">
   <title>店铺账本 · MultiStore AI Ops</title>
-  <link rel="stylesheet" href="/static/style.css?v=workbench-v6">
-  <script src="/static/app.js?v=workbench-v6" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v=workbench-v7">
+  <script src="/static/app.js?v=workbench-v7" defer></script>
 </head>
 <body class="ui-v2">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -331,6 +331,11 @@
           <button type="button" class="cat-pill" data-ledger-cat="activation" aria-label="代充、激活、开通，归类为激活" aria-pressed="false">激活 <span class="cat-count" data-cat-count="activation">0</span></button>
           <button type="button" class="cat-pill" data-ledger-cat="family" aria-pressed="false">家庭组 <span class="cat-count" data-cat-count="family">0</span></button>
         </div>
+        <div class="ledger-selection-bar" aria-live="polite">
+          <label class="check-label"><input type="checkbox" id="card-purchase-select-all">全选当前筛选</label>
+          <span id="selected-card-purchase-count" class="muted">已选 0 笔</span>
+          <button id="delete-selected-card-purchases" class="button danger" type="button" disabled>删除选中</button>
+        </div>
         <search>
           <form id="ledger-filter-form" class="ledger-filters" aria-labelledby="card-ledger-heading">
             <div class="form-field">
@@ -376,6 +381,7 @@
                 <caption id="ledger-purchases-caption" class="sr-only">已导入卡网采购单核对台账</caption>
                 <thead>
                   <tr>
+                    <th scope="col" class="selection-cell"><span class="sr-only">选择</span></th>
                     <th scope="col">采购单号 / 来源</th>
                     <th scope="col">商品名称 / 分类</th>
                     <th scope="col">数量 / 单价</th>
@@ -383,6 +389,7 @@
                     <th scope="col">下单时间</th>
                     <th scope="col">核对状态</th>
                     <th scope="col">核对时间与对应订单号</th>
+                    <th scope="col">操作</th>
                   </tr>
                 </thead>
                 <tbody id="ledger-purchases-body">

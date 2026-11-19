@@ -6,7 +6,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session,sessionmaker
 from app.db import Base,get_db,make_engine
 from app.auth import passwords
-from app.models import Adjustment, Cashflow, ImportBatch, Membership, Store, User, OrderItem, AgentRun
+from app.models import Adjustment, CardMatch, CardPurchase, Cashflow, ImportBatch, Membership, Store, User, OrderItem, AgentRun
 from app.main import app
 from app import agent
 
@@ -84,6 +84,32 @@ def test_delete_selected_orders_removes_order_scoped_records(client):
         assert db.scalar(select(Adjustment).where(Adjustment.item_external_id=='delete-1')) is None
         assert db.scalar(select(Cashflow).where(Cashflow.item_external_id=='delete-1')) is None
     forbidden=c.request('DELETE','/api/stores/2/orders',headers=headers,json={'item_ids':['delete-2']})
+    assert forbidden.status_code==403
+
+def test_delete_selected_card_purchases_removes_matches_and_is_tenant_scoped(client):
+    c,factory=client;headers=auth(c)
+    with factory() as db:
+        batch=ImportBatch(store_id=1,kind='card_purchases',file_hash='card-delete-test',status='committed',row_count=2,committed_at='2026-11-19T10:00:00+00:00')
+        db.add(batch);db.flush()
+        db.add_all([
+            CardPurchase(store_id=1,purchase_external_id='FF-DELETE-1',product_title='删除测试采购单',quantity=1,amount_fen=500,refund_fen=0,paid_at='2026-11-19 10:00:00',status='已付款',source='16688',raw_data={},batch_id=batch.id),
+            CardPurchase(store_id=1,purchase_external_id='FF-KEEP-1',product_title='保留测试采购单',quantity=1,amount_fen=600,refund_fen=0,paid_at='2026-11-19 11:00:00',status='已付款',source='16688',raw_data={},batch_id=batch.id),
+        ])
+        db.flush()
+        db.add(CardMatch(store_id=1,item_external_id='item-delete',purchase_id=db.scalar(select(CardPurchase.id).where(CardPurchase.purchase_external_id=='FF-DELETE-1')),score=92,allocated_quantity=1,status='confirmed',evidence={},metadata_json={},request_key='delete-card-match'))
+        db.commit()
+        deleted_id=db.scalar(select(CardPurchase.id).where(CardPurchase.purchase_external_id=='FF-DELETE-1'))
+        kept_id=db.scalar(select(CardPurchase.id).where(CardPurchase.purchase_external_id=='FF-KEEP-1'))
+    deleted=c.request('DELETE','/api/stores/1/card-purchases',headers=headers,json={'purchase_ids':[deleted_id,999999]})
+    assert deleted.status_code==200,deleted.text
+    assert deleted.json()['deleted']==1
+    assert deleted.json()['missing']==1
+    assert deleted.json()['matched_deleted']==1
+    with factory() as db:
+        assert db.get(CardPurchase,deleted_id) is None
+        assert db.get(CardPurchase,kept_id) is not None
+        assert db.scalar(select(CardMatch).where(CardMatch.purchase_id==deleted_id)) is None
+    forbidden=c.request('DELETE','/api/stores/2/card-purchases',headers=headers,json={'purchase_ids':[kept_id]})
     assert forbidden.status_code==403
 
 def test_agent_tools_are_scoped_and_original_question_never_sent(client,monkeypatch):

@@ -26,6 +26,7 @@ const state = {
   loadedSettingsStore: null,
   captchaSession: null,
   ledgerTab: "purchases",
+  selectedCardPurchaseIds: new Set(),
   ledgerCategory: "all",
   ledgerData: null,
   matchTierFilter: "all",
@@ -1835,6 +1836,19 @@ function updateLedgerCountsUI() {
   );
 }
 
+function syncCardPurchaseSelectionUI(rows = state.ledgerData?.purchases || []) {
+  const visibleIds = rows.map((row) => String(row.id));
+  const selectedVisible = visibleIds.filter((id) => state.selectedCardPurchaseIds.has(id)).length;
+  const selectAll = $("#card-purchase-select-all");
+  if (selectAll) {
+    selectAll.checked = visibleIds.length > 0 && selectedVisible === visibleIds.length;
+    selectAll.indeterminate = selectedVisible > 0 && selectedVisible < visibleIds.length;
+  }
+  setText("selected-card-purchase-count", `已选 ${state.selectedCardPurchaseIds.size} 笔`);
+  const deleteButton = $("#delete-selected-card-purchases");
+  if (deleteButton) deleteButton.disabled = state.selectedCardPurchaseIds.size === 0;
+}
+
 function renderCardLedger(data) {
   state.ledgerData = data;
   updateLedgerCountsUI();
@@ -1855,6 +1869,7 @@ function renderCardLedger(data) {
                 ? `<span class="muted">已退款或关闭</span>`
                 : `<button type="button" class="table-link" data-focus-card-match="${esc(p.id)}">去核对</button>`;
             return `<tr>
+              <td class="selection-cell"><input type="checkbox" data-card-purchase-select="${esc(p.id)}" aria-label="选择卡网订单 ${esc(p.purchase_external_id)}" ${state.selectedCardPurchaseIds.has(String(p.id)) ? "checked" : ""}></td>
               <th scope="row"><div class="mono-id">${esc(p.purchase_external_id)}</div><small title="${esc(p.source || "")}">${esc(shortCardSource(p.source || ""))}${p.seller ? " · " + esc(p.seller) : ""}</small></th>
               <td class="cell-title"><div>${esc(p.product_title || "—")}</div><span class="cat-tag">${esc(p.category_group_label || p.category_label || "其他")}</span></td>
               <td><div>${esc(qtyLine)}</div><small>单价 ${money(p.unit_cost_fen)}</small></td>
@@ -1862,10 +1877,11 @@ function renderCardLedger(data) {
               <td><span class="mono-id">${esc(p.paid_at || "未知")}</span></td>
               <td><span class="status-pill ${esc(p.reconcile_status)}">${esc(p.reconcile_label)}</span></td>
               <td>${matchedHtml}</td>
+              <td><button type="button" class="table-link table-link-danger" data-delete-card-purchase="${esc(p.id)}">删除</button></td>
             </tr>`;
           })
           .join("")
-      : '<tr><td colspan="7" class="table-empty">当前筛选条件下没有卡网采购单</td></tr>';
+      : '<tr><td colspan="9" class="table-empty">当前筛选条件下没有卡网采购单</td></tr>';
   }
   if (ordersBody) {
     const rows = data.orders || [];
@@ -1887,10 +1903,12 @@ function renderCardLedger(data) {
           .join("")
       : '<tr><td colspan="6" class="table-empty">当前筛选条件下没有千牛订单</td></tr>';
   }
+  syncCardPurchaseSelectionUI(data.purchases || []);
 }
 
 async function loadCardLedger(context = scope()) {
   if (!context.store) return;
+  state.selectedCardPurchaseIds.clear();
   const params = new URLSearchParams({
     category: state.ledgerCategory || "all",
     status: $("#ledger-status")?.value || "all",
@@ -1928,6 +1946,57 @@ function activateLedgerTab(tabEl, { focus = false, reload = true } = {}) {
   if (focus) tabEl.focus();
   if (reload && state.store) loadCardLedger();
 }
+
+async function deleteCardPurchases(purchaseIds, button = null) {
+  const ids = [...new Set(purchaseIds.map((id) => String(id)).filter(Boolean))];
+  if (!ids.length || !state.store) return;
+  if (!window.confirm(`确定删除选中的 ${ids.length} 笔卡网订单吗？对应的核对记录也会删除。`)) return;
+  setBusy(button, true, "删除中…");
+  try {
+    const result = await api(`/api/stores/${state.store}/card-purchases`, {
+      method: "DELETE",
+      body: JSON.stringify({ purchase_ids: ids.map(Number) }),
+    });
+    state.selectedCardPurchaseIds.clear();
+    state.cardMatches = null;
+    toast(`已删除 ${result.deleted} 笔卡网订单${result.matched_deleted ? `，同步移除 ${result.matched_deleted} 条核对记录` : ""}`);
+    await loadCosts({ preserveCardResult: true });
+    await loadReport();
+    await runCostMatches(null, { silent: true });
+  } catch (err) {
+    toast(err.message, "error");
+  } finally {
+    setBusy(button, false);
+  }
+}
+
+$("#card-purchase-select-all")?.addEventListener("change", (event) => {
+  for (const row of state.ledgerData?.purchases || []) {
+    const id = String(row.id);
+    if (event.target.checked) state.selectedCardPurchaseIds.add(id);
+    else state.selectedCardPurchaseIds.delete(id);
+  }
+  renderCardLedger(state.ledgerData || { purchases: [], orders: [], counts: {} });
+});
+
+$("#delete-selected-card-purchases")?.addEventListener("click", (event) => {
+  deleteCardPurchases([...state.selectedCardPurchaseIds], event.currentTarget);
+});
+
+document.addEventListener("change", (event) => {
+  const checkbox = event.target.closest("[data-card-purchase-select]");
+  if (!checkbox) return;
+  const id = checkbox.dataset.cardPurchaseSelect;
+  if (checkbox.checked) state.selectedCardPurchaseIds.add(id);
+  else state.selectedCardPurchaseIds.delete(id);
+  syncCardPurchaseSelectionUI();
+});
+
+document.addEventListener("click", (event) => {
+  const button = event.target.closest("[data-delete-card-purchase]");
+  if (!button) return;
+  deleteCardPurchases([button.dataset.deleteCardPurchase], button);
+});
 
 $$('.ledger-tabs [role="tab"]').forEach((tab) => {
   tab.addEventListener("click", () => activateLedgerTab(tab, { focus: false, reload: false }));

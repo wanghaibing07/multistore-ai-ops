@@ -87,6 +87,9 @@ class CardMatchIn(BaseModel):
 class CardBatchMatchIn(BaseModel):
     items: list[CardMatchIn] = Field(min_length=1, max_length=300)
 
+class DeleteCardPurchasesIn(BaseModel):
+    purchase_ids: list[int] = Field(min_length=1, max_length=300)
+
 class CardSettingsIn(BaseModel):
     contact_email: str = Field(default="", max_length=200)
 
@@ -565,6 +568,32 @@ def card_purchases(store_id:int=Depends(require_store),db:Session=Depends(get_db
     return [{"id":x.id,"purchase_external_id":x.purchase_external_id,"product_title":x.product_title,"seller":x.seller,
              "quantity":x.quantity,"amount_fen":x.amount_fen,"refund_fen":x.refund_fen,"paid_at":x.paid_at,"status":x.status,
              "source":x.source,"batch_id":x.batch_id} for x in rows]
+
+@app.delete("/api/stores/{store_id}/card-purchases")
+def delete_card_purchases(body:DeleteCardPurchasesIn,store_id:int=Depends(require_store),db:Session=Depends(get_db)):
+    purchase_ids=list(dict.fromkeys(purchase_id for purchase_id in body.purchase_ids if purchase_id > 0))
+    if not purchase_ids:
+        raise HTTPException(400,"请至少选择一笔卡网订单")
+    importer.serialize_sqlite_writes(db)
+    purchases=list(db.scalars(select(CardPurchase).where(CardPurchase.store_id==store_id,CardPurchase.id.in_(purchase_ids))))
+    if not purchases:
+        return {"deleted":0,"missing":len(purchase_ids),"matched_deleted":0,"purchase_ids":[]}
+    existing_ids=[purchase.id for purchase in purchases]
+    matched_deleted=db.scalar(
+        select(func.count()).select_from(CardMatch).where(
+            CardMatch.store_id==store_id,
+            CardMatch.purchase_id.in_(existing_ids),
+        )
+    ) or 0
+    db.execute(delete(CardMatch).where(CardMatch.store_id==store_id,CardMatch.purchase_id.in_(existing_ids)))
+    db.execute(delete(CardPurchase).where(CardPurchase.store_id==store_id,CardPurchase.id.in_(existing_ids)))
+    db.commit()
+    return {
+        "deleted":len(existing_ids),
+        "missing":len(purchase_ids)-len(existing_ids),
+        "matched_deleted":int(matched_deleted),
+        "purchase_ids":existing_ids,
+    }
 
 @app.get("/api/stores/{store_id}/card-matches")
 def card_matches(store_id:int=Depends(require_store),db:Session=Depends(get_db)):
