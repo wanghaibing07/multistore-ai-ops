@@ -138,7 +138,7 @@ def config():
     return {
         "public_mode": public_mode,
         "quick_login_enabled": not public_mode,
-        "qianniu_url": os.environ.get("MULTISTORE_QIANNIU_URL", "https://myseller.taobao.com/home.htm/SellManage/orders"),
+        "qianniu_url": (os.environ.get("MULTISTORE_QIANNIU_URL") or "https://myseller.taobao.com/home.htm/trade-platform/tp/sold").strip(),
         "card_site_url": os.environ.get("MULTISTORE_CARD_SITE_URL", "https://www.16688.com.cn/"),
         "card_sites": {
             "16688": {
@@ -399,25 +399,28 @@ def batches(store_id:int=Depends(require_store),db:Session=Depends(get_db)):
 def latest_download_file(kind: str) -> Path:
     if kind not in ("orders", "refunds", "cashflows", "costs"):
         raise importer.ImportProblem("导入类型无效")
-    directory = Path(os.environ.get("MULTISTORE_DOWNLOADS_DIR", str(Path.home() / "Downloads"))).expanduser()
-    if not directory.is_dir():
+    configured = os.environ.get("MULTISTORE_DOWNLOADS_DIR", "").strip()
+    directories = [Path(item).expanduser() for item in configured.split(os.pathsep) if item.strip()] if configured else [Path.home() / "Downloads", Path.home() / "下载", Path("D:/下载")]
+    directories = [directory for directory in directories if directory.is_dir()]
+    if not directories:
         raise importer.ImportProblem("没有找到下载目录")
     hints = {
-        "orders": ("订单", "宝贝", "销售", "order"),
+        "orders": ("订单", "宝贝", "销售", "order", "exportorderlist"),
         "refunds": ("退款", "售后", "refund"),
         "cashflows": ("货款", "收入", "账单", "cash"),
         "costs": ("成本", "采购", "cost"),
     }[kind]
     candidates = []
-    for path in directory.iterdir():
-        if not path.is_file() or path.suffix.lower() not in (".csv", ".xlsx"):
-            continue
-        if path.stat().st_size > importer.MAX_FILE:
-            continue
-        name = path.name.lower()
-        score = sum(1 for hint in hints if hint.lower() in name)
-        if score:
-            candidates.append((score, path.stat().st_mtime_ns, path))
+    for directory in directories:
+        for path in directory.iterdir():
+            if not path.is_file() or path.suffix.lower() not in (".csv", ".xlsx"):
+                continue
+            if path.stat().st_size > importer.MAX_FILE:
+                continue
+            name = path.name.lower()
+            score = sum(1 for hint in hints if hint.lower() in name)
+            if score:
+                candidates.append((score, path.stat().st_mtime_ns, path))
     if not candidates:
         raise importer.ImportProblem("下载目录里没有匹配当前导入类型的 CSV 或 XLSX 文件")
     candidates.sort(key=lambda item: (item[0], item[1]), reverse=True)

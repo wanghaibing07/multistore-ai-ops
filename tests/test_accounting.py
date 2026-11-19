@@ -129,6 +129,23 @@ def test_duplicate_and_unsafe_excel_identifier_rejected(db):
     wb=Workbook();s=wb.active;s.append(['item_id']);s.append(['=1+1']);buf=io.BytesIO();wb.save(buf)
     with pytest.raises(importer.ImportProblem,match='公式'):importer.read_table('a.xlsx',buf.getvalue())
 
+def test_qianniu_sold_order_export_maps_native_headers(db):
+    wb=Workbook();sheet=wb.active
+    sheet.append(['订单编号','买家应付货款','订单状态','订单付款时间','商品标题','宝贝总数量','订单关闭原因','退款金额','商品属性SKU','商家编码'])
+    sheet.append(['Q-001','19.90','交易成功','2026-11-19 12:00:00','Gemini Pro 成品号',1,'订单未关闭','0.00','颜色分类:6个月',''])
+    sheet.append(['Q-002','29.90','交易关闭','2026-11-18 12:00:00','Gemini Pro 家庭组',1,'退款','29.90','颜色分类:1个月',''])
+    buf=io.BytesIO();wb.save(buf)
+    preview=importer.preview(db,1,'orders','ExportOrderList27431083391.xlsx',buf.getvalue(),'gross')
+    assert not preview['errors'],preview['errors']
+    assert preview['mapping']['quantity']=='宝贝总数量'
+    assert preview['mapping']['refund_status']=='订单关闭原因'
+    assert preview['preview'][0]['item_external_id']=='Q-001'
+    assert preview['preview'][0]['sku']=='颜色分类:6个月'
+    assert preview['preview'][1]['refund_status']=='success'
+    assert preview['preview'][1]['payment_fen']==2990
+    result=importer.commit(db,1,preview['batch_id'])
+    assert result['inserted']==2
+
 def test_sensitive_columns_not_persisted_in_preview(db):
     text=HEADER.strip()+',买家姓名,手机\ni1,o1,A,1,2026-10-01,completed,10,none,0,PrivateName,13800138000\n'
     p=importer.preview(db,1,'orders','a.csv',csv_bytes(text),'gross');row=db.scalar(select(ImportRow).where(ImportRow.batch_id==p['batch_id']))

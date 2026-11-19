@@ -18,20 +18,20 @@ from .models import Adjustment, Cashflow, CostVersion, ImportBatch, ImportRow, O
 MAX_FILE = 8 * 1024 * 1024
 MAX_EXPANDED = 80 * 1024 * 1024
 MAX_ROWS = 20000
-PARSER_VERSION = "2"
+PARSER_VERSION = "3"
 
 ALIASES = {
-    "item_id": ["子订单编号", "子订单号", "item_id", "item_external_id"],
+    "item_id": ["子订单编号", "子订单号", "子订单ID", "item_id", "item_external_id"],
     "order_id": ["主订单编号", "订单编号", "订单号", "order_id", "order_external_id"],
     "sku": ["SKU", "sku", "商家编码", "规格编码"],
     "product_id": ["商品ID", "商品id", "product_id"],
-    "property": ["商品属性", "商品sku信息", "SKU信息", "property"],
+    "property": ["商品属性", "商品sku信息", "SKU信息", "商品属性SKU", "property"],
     "title": ["商品标题", "宝贝标题", "title"],
-    "quantity": ["购买数量", "数量", "quantity"],
+    "quantity": ["购买数量", "数量", "宝贝总数量", "商品数量", "quantity"],
     "paid_at": ["订单付款时间", "付款时间", "paid_at"],
     "status": ["订单状态", "交易状态", "status"],
-    "payment": ["买家实付金额", "买家实际支付金额", "实付金额", "payment"],
-    "refund_status": ["退款状态", "refund_status"],
+    "payment": ["买家应付货款", "买家实付金额", "买家实际支付金额", "实付金额", "总金额", "payment"],
+    "refund_status": ["退款状态", "售后状态", "退款/售后状态", "订单关闭原因", "refund_status"],
     "refund_amount": ["退款金额", "退款总额", "退给买家金额", "refund_amount"],
     "refund_id": ["退款编号", "售后编号", "退款单号", "refund_id"],
     "completed_at": ["退款完结时间", "退款完成时间", "completed_at"],
@@ -146,6 +146,11 @@ def map_headers(headers: list[str], kind: str, supplied: dict[str, str] | None =
     for key in allowed - result.keys():
         result[key] = next((h for h in ALIASES[key] if h in headers), "")
     missing = sorted(k for k in REQUIRED[kind] if not result.get(k))
+    # Qianniu's sold-order export is one row per main order and does not
+    # provide a separate child-order column. The order number is a stable
+    # fallback for this export and keeps repeated imports idempotent.
+    if kind == "orders" and "item_id" in missing and result.get("order_id"):
+        missing.remove("item_id")
     if kind == "orders" and not (result.get("sku") or result.get("product_id")): missing.append("sku 或 product_id")
     if missing: raise ImportProblem("缺少必要字段：" + ", ".join(missing))
     selected = [x for x in result.values() if x]
@@ -164,33 +169,48 @@ def get(row, mapping, key): return row.get(mapping.get(key, ""))
 def order_state(value: Any) -> str:
     text = str(value or "").strip()
     lookup = {"交易成功":"completed", "已完成":"completed", "completed":"completed", "交易关闭":"closed", "已关闭":"closed", "closed":"closed", "等待买家确认收货":"pending", "买家已付款":"pending", "等待卖家发货":"pending", "已发货":"pending", "pending":"pending", "待付款":"unpaid", "等待买家付款":"unpaid", "unpaid":"unpaid"}
-    return lookup.get(text, "unknown")
+    if text in lookup:
+        return lookup[text]
+    if text.startswith(("卖家已发货", "买家已付款", "等待卖家发货", "等待买家确认")):
+        return "pending"
+    if text.startswith(("交易成功", "交易完成", "已完成")):
+        return "completed"
+    if text.startswith(("交易关闭", "已关闭")):
+        return "closed"
+    return "unknown"
 
 def refund_state(value: Any) -> str:
     text = str(value or "").strip()
-    lookup = {"没有申请退款":"none", "无退款":"none", "无退款申请":"none", "退款关闭":"closed", "none":"none", "退款成功":"success", "成功":"success", "success":"success", "退款中":"pending", "待处理":"pending", "退款待处理":"pending", "pending":"pending", "退款关闭/撤销":"closed", "closed":"closed"}
-    return lookup.get(text, "unknown")
+    lookup = {"没有申请退款":"none", "无退款":"none", "无退款申请":"none", "订单未关闭":"none", "退款关闭":"closed", "none":"none", "退款成功":"success", "成功":"success", "退款":"success", "success":"success", "退款中":"pending", "待处理":"pending", "退款待处理":"pending", "pending":"pending", "退款关闭/撤销":"closed", "closed":"closed"}
+    if text in lookup:
+        return lookup[text]
+    if "退款" in text and "关闭" not in text:
+        return "success"
+    return "unknown"
 
 def clean_row(raw: dict, m: dict, kind: str) -> dict:
     if kind == "orders":
+        order_id = identifier(get(raw,m,"order_id"), "主订单号")
         paid = timestamp(get(raw,m,"paid_at"), optional=True)
         unit = str(get(raw,m,"sku") or "").strip()
         product = identifier(get(raw,m,"product_id"), "商品ID", optional=True)
         prop = scrub(get(raw,m,"property")).strip()
+        title = scrub(get(raw,m,"title")).strip()
         if len(prop) > 300 or len(unit) > 500: raise ImportProblem("规格过长")
-        sku = unit or ((product + " | " + prop) if prop else product)
-        if not sku: raise ImportProblem("商品编码和商品 ID 均为空")
+        sku = unit or ((product + " | " + prop) if product and prop else product or prop) or title
+        if not sku: raise ImportProblem("商品编码、商品 ID 和商品标题均为空")
         try:
             qty = int(str(get(raw,m,"quantity")).strip())
             if qty < 1 or qty > 100000: raise ValueError
         except (ValueError, TypeError): raise ImportProblem("购买数量必须为正整数") from None
-        state = refund_state(get(raw,m,"refund_status"))
         amount = money(get(raw,m,"refund_amount"), optional=True)
+        state = refund_state(get(raw,m,"refund_status"))
         if state == "none" and amount is None: amount = 0
         payment = money(get(raw,m,"payment"), optional=True)
         if paid and payment is None: raise ImportProblem("已付款订单缺少实付金额")
-        return {"item_external_id":identifier(get(raw,m,"item_id"),"子订单号"), "order_external_id":identifier(get(raw,m,"order_id"),"主订单号"),
-                "sku":sku, "product_title":scrub(get(raw,m,"title"))[:300], "quantity":qty, "paid_at":paid,
+        item_id = identifier(get(raw,m,"item_id"), "子订单号", optional=True) or order_id
+        return {"item_external_id":item_id, "order_external_id":order_id,
+                "sku":sku, "product_title":title[:300], "quantity":qty, "paid_at":paid,
                 "status":order_state(get(raw,m,"status")), "payment_fen":payment, "refund_status":state, "refund_snapshot_fen":amount}
     if kind == "refunds":
         return {"external_id":identifier(get(raw,m,"refund_id"),"退款编号"),

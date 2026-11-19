@@ -197,59 +197,34 @@
 
     <div class="view" data-panel="import" hidden>
       <div class="page-heading">
-        <div><h2>导入千牛订单</h2><p class="muted">打开千牛导出后，选文件或直接读取最近下载；系统自动识别字段和日期。</p></div>
-        <span class="privacy-label">完整字段原样保留</span>
+        <div><h2>导入千牛订单</h2><p class="muted">从千牛“已卖出宝贝”导出页导入订单，系统自动识别字段、去重并显示结果。</p></div>
+        <span class="privacy-label">订单 · 结果</span>
       </div>
-      <section class="surface import-hero">
-        <div class="step-mark">1</div>
-        <div class="step-copy"><h3>从千牛拿到订单文件</h3><p>千牛导出 CSV 或 XLSX。首次使用建议在浏览器设置中关闭“下载前询问保存位置”。</p></div>
-        <div class="button-row compact"><a id="open-qianniu" class="button outline" href="#" target="_blank" rel="noopener noreferrer">打开千牛导出页</a><button id="latest-download-btn" type="button" class="button secondary">读取最近下载</button></div>
-      </section>
-      <section class="surface import-hero">
-        <div class="step-mark">2</div>
-        <div class="step-copy"><h3>把文件加进当前店铺</h3><p>选择文件后点一次“检查并导入”。有金额冲突或组合订单时，系统会停下来让你确认。</p></div>
-        <span id="file-count" class="badge">等待文件</span>
-      </section>
       <div class="two-column import-layout">
-        <section class="surface">
-          <form id="import-form" class="form-stack">
-            <label>数据类型
-              <select id="import-kind">
-                <option value="orders">千牛订单</option>
-                <option value="refunds">退款明细</option>
-                <option value="cashflows">货款流水</option>
-                <option value="costs">商品成本</option>
-              </select>
-            </label>
-            <label>账本单位
-              <input id="import-file" type="file" accept=".csv,.xlsx" required>
-              <small>最大 8 MB。长订单号请用文本格式保存。</small>
-            </label>
-            <div id="basis-wrap" class="basis-panel">
-              <label>订单金额口径
-                <select id="payment-basis">
-                  <option value="gross" selected>退款前买家实付金额</option>
-                  <option value="net">已经扣过退款的净额</option>
-                  <option value="unknown">暂不确定</option>
-                </select>
-              </label>
-              <p>当前按你确认的口径，默认统计退款前实付金额。</p>
-            </div>
+        <section class="surface import-order-card">
+          <div class="panel-title">
+            <div><span class="section-kicker">订单导入</span><h3 id="import-order-heading">添加千牛订单</h3><p class="muted">支持 CSV / XLSX，也可以直接读取最近下载。</p></div>
+            <span id="file-count" class="badge">等待文件</span>
+          </div>
+          <div class="button-row compact import-source-actions">
+            <a id="open-qianniu" class="button outline" href="#" target="_blank" rel="noopener noreferrer">打开千牛导出页</a>
+            <button id="latest-download-btn" type="button" class="button secondary">读取最近下载</button>
+          </div>
+          <form id="import-form" class="form-stack" aria-labelledby="import-order-heading">
+            <input id="import-kind" type="hidden" value="orders">
+            <input id="payment-basis" type="hidden" value="gross">
+            <label for="import-file">选择订单文件</label>
+            <input id="import-file" type="file" accept=".csv,.xlsx" aria-describedby="import-file-help" required>
+            <small id="import-file-help">最大 8 MB。长订单号请用文本格式保存。</small>
             <button type="submit" class="button primary">检查并导入</button>
           </form>
-          <details class="advanced-fields">
-            <summary>字段识别有误时再打开</summary>
-            <div id="mapping-fields" class="mapping-fields"><div class="empty">选好文件后显示字段。</div></div>
-          </details>
-          <div class="template-links">需要示例？ <a href="/api/templates/orders">订单</a> <a href="/api/templates/refunds">退款</a> <a href="/api/templates/costs">成本</a> <a href="/api/templates/cashflows">货款流水</a></div>
         </section>
         <section class="surface result-panel">
-          <div class="panel-title"><div><h3>导入结果</h3><p class="muted">显示日期、行数、重复和冲突。</p></div></div>
+          <div class="panel-title"><div><span class="section-kicker">结果</span><h3>导入结果</h3><p class="muted">显示日期、行数、重复和冲突。</p></div></div>
           <div id="import-result" aria-live="polite"><div class="empty">还没有选择文件。</div></div>
           <div class="button-row"><button id="preview-import" class="button secondary" hidden>重新检查</button><button id="commit-import" class="button primary" hidden>确认导入</button></div>
         </section>
       </div>
-      <section class="surface history"><div class="panel-title"><div><h3>最近导入</h3><p class="muted">每次更新保留批次，方便追溯。</p></div></div><div id="batch-list" class="muted">暂无导入记录</div></section>
     </div>
 
     <div class="view" data-panel="costs" hidden>

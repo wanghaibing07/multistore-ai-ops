@@ -404,7 +404,6 @@ $("#store-select").addEventListener("change", () => {
   setText("refund-review-source", "");
   setText("refund-review-history", "");
   $("#import-form").reset();
-  $("#basis-wrap").hidden = false;
   resetImport();
   $("#cost-form").reset();
   $("#cost-from").value = day(new Date());
@@ -856,11 +855,10 @@ $("#basis-review-form").addEventListener("submit", async (event) => {
     setBusy(button, false);
   }
 });
-$("#import-kind").addEventListener("change", () => {
-  $("#basis-wrap").hidden = $("#import-kind").value !== "orders";
+$("#import-kind")?.addEventListener("change", () => {
   resetImport();
 });
-$("#import-file").addEventListener("change", resetImport);
+$("#import-file")?.addEventListener("change", resetImport);
 function invalidateImportPreview() {
   state.importRevision++;
   state.batch = null;
@@ -871,8 +869,8 @@ function invalidateImportPreview() {
   if (state.columns)
     $("#import-result").textContent = "选择已变化，请重新预览后再导入。";
 }
-$("#payment-basis").addEventListener("change", invalidateImportPreview);
-$("#mapping-fields").addEventListener("change", (e) => {
+$("#payment-basis")?.addEventListener("change", invalidateImportPreview);
+$("#mapping-fields")?.addEventListener("change", (e) => {
   if (e.target.matches("[data-map]")) invalidateImportPreview();
 });
 function resetImport() {
@@ -881,8 +879,8 @@ function resetImport() {
   $("#preview-import").hidden = true;
   $("#commit-import").hidden = true;
   $("#file-count").textContent = "等待文件";
-  $("#mapping-fields").innerHTML =
-    '<div class="empty">选好文件后，这里会显示可识别的列。</div>';
+  const mappings = $("#mapping-fields");
+  if (mappings) mappings.innerHTML = '<div class="empty">字段将自动识别。</div>';
   $("#import-result").innerHTML = "";
 }
 const diffLabels = {
@@ -932,7 +930,9 @@ function formFile() {
 }
 function renderImportMappings(r) {
   $("#file-count").textContent = `${r.row_count} 行`;
-  $("#mapping-fields").innerHTML = r.fields
+  const mappings = $("#mapping-fields");
+  if (!mappings) return;
+  mappings.innerHTML = r.fields
     .map(
       (k) =>
         `<label class="mapping-line"><span>${esc(labels[k] || k)} ${r.required.includes(k) ? '<span class="required">*</span>' : ""}</span><select data-map="${esc(k)}"><option value="">不导入</option>${r.headers.map((h) => `<option value="${esc(h)}" ${r.suggested[k] === h ? "selected" : ""}>${esc(h)}</option>`).join("")}</select></label>`,
@@ -1001,6 +1001,7 @@ async function showImportPreview(r, name, button, autoCommit, context, revision)
   state.changesToken = null;
   state.multiConfirmed = false;
   const errors = r.errors || [];
+  $("#file-count").textContent = r.row_count ? `${r.row_count} 行` : "等待文件";
   const differences = Array.isArray(r.differences) ? r.differences : [];
   const needsConfirmation = Boolean(r.multi_parent_count || differences.length);
   $("#commit-import").hidden = !r.batch_id || r.duplicate || errors.length || !needsConfirmation;
@@ -1130,7 +1131,7 @@ $("#latest-download-btn").addEventListener("click", async (e) => {
   }
 });
 async function loadBatches() {
-  if (!state.store) return;
+  if (!state.store || !$("#batch-list")) return;
   let context = scope();
   try {
     let r = await api(`/api/stores/${context.store}/imports`);
