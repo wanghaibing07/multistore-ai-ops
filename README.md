@@ -178,5 +178,3 @@ uv run python -X utf8 scripts/evaluate_agent.py --output PATH_TO_NEW_SYNTHETIC_R
 ## 项目状态
 
 当前版本适合用于本机试用、面试演示和进一步扩展。发布前请替换自己的店铺名称、创建初始账号，并使用合成数据完成演示。
-
-\n

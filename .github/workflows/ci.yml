@@ -31,5 +31,3 @@ jobs:
 
       - name: Check migrations
         run: uv run alembic check
-
-\n
