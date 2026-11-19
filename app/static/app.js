@@ -25,7 +25,6 @@ const state = {
   cardMatchLimit: 12,
   loadedSettingsStore: null,
   captchaSession: null,
-  ledgerTab: "purchases",
   selectedCardPurchaseIds: new Set(),
   ledgerCategory: "all",
   ledgerData: null,
@@ -341,6 +340,10 @@ function goto(name) {
 }
 function route() {
   let name = location.hash.slice(1) || "overview";
+  if (name === "costs") {
+    name = "orders";
+    history.replaceState(null, "", "#orders");
+  }
   if (!$(`[data-panel="${name}"]`)) name = "overview";
   $$("[data-panel]").forEach((x) => (x.hidden = x.dataset.panel !== name));
   $$("[data-view]").forEach((x) =>
@@ -349,7 +352,6 @@ function route() {
   let title = {
     overview: "工作台",
     import: "导入数据",
-    costs: "成本核对",
     orders: "已入库订单",
     chats: "千牛聊天分析",
     assistant: "经营问答",
@@ -358,7 +360,7 @@ function route() {
   if (state.store) {
     if (name === "overview" || name === "orders") loadReport();
     if (name === "import") loadBatches();
-    if (name === "costs") loadCosts();
+    if (name === "orders") loadCosts();
     if (name === "chats") loadChatsOverview();
     if (name === "assistant") loadAskSkus();
   }
@@ -498,7 +500,6 @@ $("#store-select").addEventListener("change", () => {
   setText("match-results", "导入卡网采购单后开始核对。");
   state.loadedSettingsStore = null;
   state.captchaSession = null;
-  state.ledgerTab = "purchases";
   state.ledgerCategory = "all";
   state.ledgerData = null;
   state.chatCategory = "all";
@@ -522,7 +523,6 @@ $("#store-select").addEventListener("change", () => {
     pill.classList.toggle("active", active);
     pill.setAttribute("aria-pressed", String(active));
   });
-  activateLedgerTab($("#ledger-tab-purchases"), { focus: false, reload: false });
   state.orderLimit = 50;
   route();
   loadCardLedgerBadgeQuietly();
@@ -826,6 +826,7 @@ document.addEventListener("click", (e) => {
     $("#adjust-item").value = b.dataset.fix;
     state.adjustmentKey = null;
     loadAdjustmentHistory();
+    $("#order-adjustments")?.setAttribute("open", "");
     goto("orders");
     setTimeout(
       () =>
@@ -1847,20 +1848,15 @@ $("#cancel-card-captcha").addEventListener("click", () => {
 function updateLedgerCountsUI() {
   const counts = state.ledgerData?.counts;
   if (!counts) return;
-  setText("ledger-tab-purchases-count", String(counts.purchases_filtered ?? counts.purchases_total ?? 0));
-  setText("ledger-tab-orders-count", String(counts.orders_filtered ?? counts.orders_total ?? 0));
-  const isPurchases = state.ledgerTab === "purchases";
-  const catMap = isPurchases
-    ? (counts.category_group_counts || counts.category_counts)
-    : (counts.orders_category_group_counts || counts.orders_category_counts);
-  const allTotal = isPurchases ? (counts.purchases_total ?? 0) : (counts.orders_total ?? 0);
+  const catMap = counts.category_group_counts || counts.category_counts;
+  const allTotal = counts.purchases_total ?? 0;
   $$(".cat-count").forEach((node) => {
     const key = node.dataset.catCount;
     node.textContent = String(key === "all" ? allTotal : (catMap?.[key] ?? 0));
   });
   setText(
     "ledger-summary-badge",
-    `采购单 待核对 ${counts.purchases_pending ?? 0} / 已核对 ${counts.purchases_matched ?? 0} · 订单 待核对 ${counts.orders_pending ?? 0} / 已核对 ${counts.orders_matched ?? 0}`,
+    `待核对 ${counts.purchases_pending ?? 0} · 已核对 ${counts.purchases_matched ?? 0}`,
   );
 }
 
@@ -1881,7 +1877,6 @@ function renderCardLedger(data) {
   state.ledgerData = data;
   updateLedgerCountsUI();
   const purchasesBody = $("#ledger-purchases-body");
-  const ordersBody = $("#ledger-orders-body");
   if (purchasesBody) {
     const rows = data.purchases || [];
     purchasesBody.innerHTML = rows.length
@@ -1911,26 +1906,6 @@ function renderCardLedger(data) {
           .join("")
       : '<tr><td colspan="9" class="table-empty">当前筛选条件下没有卡网采购单</td></tr>';
   }
-  if (ordersBody) {
-    const rows = data.orders || [];
-    ordersBody.innerHTML = rows.length
-      ? rows
-          .map((o) => {
-            const matchedHtml = o.matched_purchase_ids?.length
-              ? `<div><strong>${esc(o.matched_at || "已记录")}</strong></div><div class="mono-id">${o.matched_purchase_ids.map((id) => esc(id)).join("<br>")}</div>`
-              : `<span class="muted">${o.reconcile_status === "excluded" ? "补差价/无需核对" : "待匹配卡网采购单"}</span>`;
-            return `<tr>
-              <th scope="row"><div class="mono-id">${esc(o.order_id)}</div><small class="mono-id">子单 ${esc(o.item_id)}</small></th>
-              <td class="cell-title"><div>${esc(o.product_title || o.sku)}</div><small>${esc(o.sku)}</small><span class="cat-tag">${esc(o.category_group_label || o.category_label || "其他")}</span></td>
-              <td><div>实付 ${money(o.payment_fen)}</div><small>成本 ${money(o.cost_fen)}</small></td>
-              <td><span class="mono-id">${esc(o.paid_at || "未知")}</span></td>
-              <td><span class="status-pill ${esc(o.reconcile_status)}">${esc(o.reconcile_label)}</span></td>
-              <td>${matchedHtml}</td>
-            </tr>`;
-          })
-          .join("")
-      : '<tr><td colspan="6" class="table-empty">当前筛选条件下没有千牛订单</td></tr>';
-  }
   syncCardPurchaseSelectionUI(data.purchases || []);
 }
 
@@ -1953,26 +1928,6 @@ async function loadCardLedger(context = scope()) {
   } catch (err) {
     if (current(context)) toast(err.message, "error");
   }
-}
-
-function activateLedgerTab(tabEl, { focus = false, reload = true } = {}) {
-  if (!tabEl) return;
-  const tabs = $$('.ledger-tabs [role="tab"]');
-  const nextKey = tabEl.id === "ledger-tab-orders" ? "orders" : "purchases";
-  state.ledgerTab = nextKey;
-  for (const t of tabs) {
-    const selected = t === tabEl;
-    t.setAttribute("aria-selected", String(selected));
-    t.tabIndex = selected ? 0 : -1;
-    const panelId = t.getAttribute("aria-controls");
-    const panel = panelId ? $("#" + panelId) : null;
-    if (panel) panel.hidden = !selected;
-  }
-  const sourceWrap = $("#ledger-source-wrap");
-  if (sourceWrap) sourceWrap.hidden = nextKey !== "purchases";
-  updateLedgerCountsUI();
-  if (focus) tabEl.focus();
-  if (reload && state.store) loadCardLedger();
 }
 
 async function deleteCardPurchases(purchaseIds, button = null) {
@@ -2024,24 +1979,6 @@ document.addEventListener("click", (event) => {
   const button = event.target.closest("[data-delete-card-purchase]");
   if (!button) return;
   deleteCardPurchases([button.dataset.deleteCardPurchase], button);
-});
-
-$$('.ledger-tabs [role="tab"]').forEach((tab) => {
-  tab.addEventListener("click", () => activateLedgerTab(tab, { focus: false, reload: false }));
-  tab.addEventListener("keydown", (e) => {
-    const tabs = $$('.ledger-tabs [role="tab"]');
-    const idx = tabs.indexOf(tab);
-    if (idx < 0) return;
-    let next = null;
-    if (e.key === "ArrowRight") next = tabs[(idx + 1) % tabs.length];
-    else if (e.key === "ArrowLeft") next = tabs[(idx - 1 + tabs.length) % tabs.length];
-    else if (e.key === "Home") next = tabs[0];
-    else if (e.key === "End") next = tabs[tabs.length - 1];
-    if (next) {
-      e.preventDefault();
-      activateLedgerTab(next, { focus: true, reload: false });
-    }
-  });
 });
 
 $$(".cat-pill").forEach((pill) => {
@@ -2441,11 +2378,6 @@ function updateGuidedWorkflow() {
     ?? state.cardMatches?.smart_summary?.actionable_missing_count
     ?? state.report?.counts?.needs_review
     ?? 0;
-  const navCostsBadge = $("#nav-costs-badge");
-  if (navCostsBadge) {
-    navCostsBadge.hidden = !(missingPending > 0);
-    navCostsBadge.textContent = String(missingPending);
-  }
   setText(
     "wf-step2-desc",
     missingPending > 0
@@ -2960,16 +2892,15 @@ function buildPaletteCommands() {
   return [
     { label: "前往：工作台", sub: "查看纯利润、营业额与待处理订单", kbd: "Alt+1", run: () => goto("overview") },
     { label: "前往：导入千牛订单", sub: "导入 CSV/XLSX 或读取最近下载", kbd: "Alt+2", run: () => goto("import") },
-    { label: "前往：成本核对", sub: "导入卡网订单并匹配千牛订单", kbd: "Alt+3", run: () => goto("costs") },
-    { label: "前往：已入库订单", sub: "按类目搜索订单并核对成本", kbd: "Alt+4", run: () => goto("orders") },
-    { label: "前往：千牛聊天分析", sub: "对话脱敏归档、高频痛点与标准话术库", kbd: "Alt+5", run: () => goto("chats") },
-    { label: "前往：问账", sub: "按时间范围提问利润与退款数据", kbd: "Alt+6", run: () => goto("assistant") },
+    { label: "前往：已入库订单", sub: "按类目搜索订单并核对成本", kbd: "Alt+3", run: () => goto("orders") },
+    { label: "前往：千牛聊天分析", sub: "对话脱敏归档、高频痛点与标准话术库", kbd: "Alt+4", run: () => goto("chats") },
+    { label: "前往：问账", sub: "按时间范围提问利润与退款数据", kbd: "Alt+5", run: () => goto("assistant") },
     {
       label: "动作：一键确认全部高匹配成本",
       sub: "批量确认高置信度成本匹配",
       kbd: "批量入账",
       run: async () => {
-        goto("costs");
+        goto("orders");
         if (!state.cardMatches) await runCostMatches(null, { silent: true });
         await batchConfirmHighMatches($("#batch-confirm-high-btn"));
       },
@@ -2979,7 +2910,7 @@ function buildPaletteCommands() {
       sub: "全店库存全局最优配对",
       kbd: "AI 核对",
       run: () => {
-        goto("costs");
+        goto("orders");
         runCostMatches($("#run-cost-matches"));
       },
     },
@@ -3102,7 +3033,7 @@ document.addEventListener("keydown", (e) => {
     $("#theme-toggle")?.click();
     return;
   }
-  const viewMap = { "1": "overview", "2": "import", "3": "costs", "4": "orders", "5": "chats", "6": "assistant" };
+  const viewMap = { "1": "overview", "2": "import", "3": "orders", "4": "chats", "5": "assistant" };
   if (e.altKey && viewMap[e.key]) {
     e.preventDefault();
     goto(viewMap[e.key]);
@@ -3121,8 +3052,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "/") {
     const activeView = location.hash.slice(1) || "overview";
     const searchTarget =
-      activeView === "costs" ? $("#ledger-search")
-      : activeView === "orders" ? $("#order-search")
+      activeView === "orders" ? $("#order-search")
       : activeView === "chats" ? $("#chat-search")
       : activeView === "assistant" ? $("#question")
       : null;
@@ -3134,7 +3064,7 @@ document.addEventListener("keydown", (e) => {
   }
 
   const activeView = location.hash.slice(1) || "overview";
-  if (activeView === "costs" && state.cardMatches?.suggestions?.length) {
+  if (activeView === "orders" && state.cardMatches?.suggestions?.length) {
     if (e.key === "j" || e.key === "J") {
       e.preventDefault();
       moveKbMatchFocus(1);

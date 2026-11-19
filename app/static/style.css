@@ -593,34 +593,7 @@ label small { font-weight: 400; color: var(--muted); }
 .button.mini { min-height: 32px; padding: 4px 10px; font-size: 12px; }
 .match-actions { display: flex; flex-direction: column; justify-content: center; gap: 8px; align-items: stretch; }
 
-/* Card ledger tabs, filters & responsive table */
-.ledger-tabs {
-  display: flex;
-  gap: 6px;
-  overflow-x: auto;
-  margin-top: 14px;
-  border-bottom: 1px solid var(--line);
-}
-.ledger-tabs [role="tab"] {
-  position: relative;
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 40px;
-  padding: 8px 14px;
-  background: transparent;
-  color: var(--muted);
-  font-weight: 650;
-  white-space: nowrap;
-}
-.ledger-tabs [role="tab"][aria-selected="true"] { color: var(--brand-dark); }
-.ledger-tabs [role="tab"][aria-selected="true"]::after {
-  content: "";
-  position: absolute;
-  inset: auto 0 0;
-  border-block-end: 3px solid var(--brand);
-}
+/* Card ledger filters & responsive table */
 .tab-count {
   padding: 1px 7px;
   border-radius: 999px;
@@ -750,13 +723,6 @@ label small { font-weight: 400; color: var(--muted); }
     --label-8: "核对时间与对应订单号";
     --label-9: "操作";
   }
-  .ledger-table-orders {
-    --label-2: "商品与规格 / 分类";
-    --label-3: "实付 / 成本";
-    --label-4: "付款时间";
-    --label-5: "核对状态";
-    --label-6: "核对时间与对应采购单号";
-  }
   .ledger-table-purchases td:nth-child(3)::before { content: var(--label-3) ": "; font-weight: 700; color: var(--muted); }
   .ledger-table-purchases td:nth-child(4)::before { content: var(--label-4) ": "; font-weight: 700; color: var(--muted); }
   .ledger-table-purchases td:nth-child(5)::before { content: var(--label-5) ": "; font-weight: 700; color: var(--muted); }
@@ -764,11 +730,6 @@ label small { font-weight: 400; color: var(--muted); }
   .ledger-table-purchases td:nth-child(7)::before { content: var(--label-7) ": "; font-weight: 700; color: var(--muted); }
   .ledger-table-purchases td:nth-child(8)::before { content: var(--label-8) ": "; font-weight: 700; color: var(--muted); }
   .ledger-table-purchases td:nth-child(9)::before { content: var(--label-9) ": "; font-weight: 700; color: var(--muted); }
-  .ledger-table-orders td:nth-child(2)::before { content: var(--label-2) ": "; font-weight: 700; color: var(--muted); }
-  .ledger-table-orders td:nth-child(3)::before { content: var(--label-3) ": "; font-weight: 700; color: var(--muted); }
-  .ledger-table-orders td:nth-child(4)::before { content: var(--label-4) ": "; font-weight: 700; color: var(--muted); }
-  .ledger-table-orders td:nth-child(5)::before { content: var(--label-5) ": "; font-weight: 700; color: var(--muted); }
-  .ledger-table-orders td:nth-child(6)::before { content: var(--label-6) ": "; font-weight: 700; color: var(--muted); }
 }
 .cost-form { display: grid; grid-template-columns: 1.2fr .8fr 1.2fr auto; gap: 12px; align-items: end; margin-top: 16px; }
 .cost-form .advanced-fields { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -1245,9 +1206,6 @@ body.ui-v2 .order-kpi strong { color: var(--brand); }
 body.ui-v2 .next-action { border-color: #efd1b8; border-radius: 12px; background: var(--warning-soft); }
 body.ui-v2 .calculation-note { border-radius: 12px; background: rgb(255 255 255 / .65); }
 
-body.ui-v2 .ledger-tabs [role="tab"] { min-height: 44px; }
-body.ui-v2 .ledger-tabs [role="tab"][aria-selected="true"] { color: var(--brand-dark); }
-body.ui-v2 .ledger-tabs [role="tab"][aria-selected="true"]::after { border-bottom-color: #e8c36b; }
 body.ui-v2 .cat-pill { border-radius: 9px; }
 body.ui-v2 .table-wrapper { border-radius: 12px; box-shadow: inset 0 1px rgb(255 255 255 / .7); }
 body.ui-v2 .ledger-table thead { background: #edf3f4; }
@@ -2733,63 +2691,63 @@ body.ui-v2 .page-heading > div > .muted,
 body.ui-v2 .page-heading .privacy-label,
 body.ui-v2 .surface > .card-import-head > div > .section-kicker,
 body.ui-v2 .surface > .card-import-head > div > p,
-body.ui-v2 .view[data-panel="costs"] .card-import-head > div > p,
-body.ui-v2 .view[data-panel="costs"] .site-url-list,
-body.ui-v2 .view[data-panel="costs"] .format-tags,
-body.ui-v2 .view[data-panel="costs"] .kb-review-bar {
+body.ui-v2 .orders-reconcile-zone .card-import-head > div > p,
+body.ui-v2 .orders-reconcile-zone .site-url-list,
+body.ui-v2 .orders-reconcile-zone .format-tags,
+body.ui-v2 .orders-reconcile-zone .kb-review-bar {
   display: none;
 }
 
-body.ui-v2 .view[data-panel="costs"] > .surface {
+body.ui-v2 .orders-reconcile-zone > .surface {
   margin-top: 12px;
   padding: 20px;
   border-radius: 18px;
   box-shadow: 0 7px 24px rgb(0 0 0 / .045);
 }
 
-body.ui-v2 .view[data-panel="costs"] .card-import-head {
+body.ui-v2 .orders-reconcile-zone .card-import-head {
   align-items: center;
   gap: 12px;
 }
 
-body.ui-v2 .view[data-panel="costs"] .card-import-head h3 {
+body.ui-v2 .orders-reconcile-zone .card-import-head h3 {
   margin: 0;
   font-size: 18px;
   letter-spacing: -.035em;
 }
 
-body.ui-v2 .view[data-panel="costs"] .card-settings-form {
+body.ui-v2 .orders-reconcile-zone .card-settings-form {
   margin-top: 14px;
 }
 
-body.ui-v2 .view[data-panel="costs"] .acquire-grid {
+body.ui-v2 .orders-reconcile-zone .acquire-grid {
   gap: 12px;
   margin-top: 12px;
 }
 
-body.ui-v2 .view[data-panel="costs"] .acquire-box {
+body.ui-v2 .orders-reconcile-zone .acquire-box {
   gap: 10px;
   padding: 14px;
 }
 
-body.ui-v2 .view[data-panel="costs"] .acquire-box > .helper-text {
+body.ui-v2 .orders-reconcile-zone .acquire-box > .helper-text {
   display: none;
 }
 
-body.ui-v2 .view[data-panel="costs"] .match-panel .match-toolbar-controls {
+body.ui-v2 .orders-reconcile-zone .match-panel .match-toolbar-controls {
   gap: 8px;
 }
 
-body.ui-v2 .view[data-panel="costs"] .manual-cost,
-body.ui-v2 .view[data-panel="costs"] .history {
+body.ui-v2 .orders-reconcile-zone .manual-cost,
+body.ui-v2 .orders-reconcile-zone .history {
   padding: 16px 20px;
 }
 
-body.ui-v2 .view[data-panel="costs"] .manual-cost .panel-title {
+body.ui-v2 .orders-reconcile-zone .manual-cost .panel-title {
   margin-bottom: 12px;
 }
 
-body.ui-v2 .view[data-panel="costs"] .history h3 {
+body.ui-v2 .orders-reconcile-zone .history h3 {
   margin: 0;
   font-size: 16px;
 }
@@ -2824,14 +2782,14 @@ body.ui-v2 .cmd-item > div {
 }
 
 @media (max-width: 760px) {
-  body.ui-v2 .view[data-panel="costs"] > .surface { padding: 16px; }
-  body.ui-v2 .view[data-panel="costs"] .card-import-head { align-items: stretch; }
-  body.ui-v2 .view[data-panel="costs"] .card-site-links { width: 100%; }
-  body.ui-v2 .view[data-panel="costs"] .card-site-links .button { flex: 1; }
+  body.ui-v2 .orders-reconcile-zone > .surface { padding: 16px; }
+  body.ui-v2 .orders-reconcile-zone .card-import-head { align-items: stretch; }
+  body.ui-v2 .orders-reconcile-zone .card-site-links { width: 100%; }
+  body.ui-v2 .orders-reconcile-zone .card-site-links .button { flex: 1; }
 }
 
 /* finesse · product refinement · one compact selection rail for destructive ledger actions */
-body.ui-v2 .view[data-panel="costs"] .ledger-selection-bar {
+body.ui-v2 .orders-reconcile-zone .ledger-selection-bar {
   display: flex;
   align-items: center;
   gap: 10px;
@@ -2840,48 +2798,144 @@ body.ui-v2 .view[data-panel="costs"] .ledger-selection-bar {
   padding: 0 2px;
 }
 
-body.ui-v2 .view[data-panel="costs"] .ledger-selection-bar .button {
+body.ui-v2 .orders-reconcile-zone .ledger-selection-bar .button {
   min-height: 32px;
   margin-left: auto;
   padding: 5px 11px;
   font-size: 12px;
 }
 
-body.ui-v2 .view[data-panel="costs"] .selection-cell {
+body.ui-v2 .orders-reconcile-zone .selection-cell {
   width: 42px;
   padding-inline: 12px 2px;
   text-align: center;
 }
 
-body.ui-v2 .view[data-panel="costs"] .selection-cell input {
+body.ui-v2 .orders-reconcile-zone .selection-cell input {
   width: 16px;
   min-height: 16px;
   margin: 0;
   accent-color: var(--brand);
 }
 
-body.ui-v2 .view[data-panel="costs"] .table-link-danger {
+body.ui-v2 .orders-reconcile-zone .table-link-danger {
   border-color: transparent;
   background: transparent;
   color: var(--danger);
 }
 
-body.ui-v2 .view[data-panel="costs"] .table-link-danger:hover {
+body.ui-v2 .orders-reconcile-zone .table-link-danger:hover {
   border-color: var(--danger);
   background: var(--danger-soft);
   color: var(--danger);
 }
 
-body.ui-v2 .view[data-panel="costs"] .ledger-table-purchases {
+body.ui-v2 .orders-reconcile-zone .ledger-table-purchases {
   min-width: 1010px;
 }
 
 @media (max-width: 760px) {
-  body.ui-v2 .view[data-panel="costs"] .ledger-selection-bar {
+  body.ui-v2 .orders-reconcile-zone .ledger-selection-bar {
     flex-wrap: wrap;
   }
 
-  body.ui-v2 .view[data-panel="costs"] .ledger-selection-bar .button {
+  body.ui-v2 .orders-reconcile-zone .ledger-selection-bar .button {
     margin-left: 0;
+  }
+}
+
+/* workflow refactor · keep cost review inside the order workspace */
+body.ui-v2 .orders-reconcile-zone {
+  margin-top: 24px;
+}
+
+body.ui-v2 .orders-reconcile-heading {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  margin-bottom: 10px;
+}
+
+body.ui-v2 .orders-reconcile-heading h2 {
+  margin: 0;
+  font-size: 20px;
+  letter-spacing: -.02em;
+}
+
+body.ui-v2 .orders-reconcile-zone .cost-tools,
+body.ui-v2 .order-adjustments {
+  overflow: hidden;
+  margin-top: 12px;
+}
+
+body.ui-v2 .cost-tools > summary,
+body.ui-v2 .order-adjustments > summary {
+  display: flex;
+  align-items: center;
+  min-height: 48px;
+  padding: 0 18px;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 700;
+  cursor: pointer;
+  list-style: none;
+}
+
+body.ui-v2 .cost-tools > summary::-webkit-details-marker,
+body.ui-v2 .order-adjustments > summary::-webkit-details-marker {
+  display: none;
+}
+
+body.ui-v2 .cost-tools > summary::after,
+body.ui-v2 .order-adjustments > summary::after {
+  margin-left: auto;
+  color: var(--muted);
+  content: "+";
+  font-size: 18px;
+  font-weight: 400;
+}
+
+body.ui-v2 .cost-tools[open] > summary::after,
+body.ui-v2 .order-adjustments[open] > summary::after {
+  content: "−";
+}
+
+body.ui-v2 .cost-tools[open] > summary,
+body.ui-v2 .order-adjustments[open] > summary {
+  border-bottom: 1px solid var(--line);
+}
+
+body.ui-v2 .cost-tools-content,
+body.ui-v2 .order-adjustments-content {
+  padding: 2px 18px 18px;
+}
+
+body.ui-v2 .cost-tools-content .panel-title {
+  margin-top: 12px;
+}
+
+body.ui-v2 .cost-tools-content .cost-history {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
+}
+
+body.ui-v2 .cost-tools-content .cost-history h3 {
+  margin: 0 0 10px;
+  font-size: 14px;
+}
+
+body.ui-v2 .order-adjustments-content > .surface {
+  margin-top: 12px;
+  box-shadow: none;
+}
+
+body.ui-v2 .table-wrapper {
+  container-type: inline-size;
+}
+
+@container (width < 680px) {
+  body.ui-v2 .orders-reconcile-zone .ledger-table-purchases {
+    min-width: 0;
   }
 }

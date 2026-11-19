@@ -56,12 +56,6 @@
         <span>导入订单</span>
         <kbd class="nav-kbd" aria-hidden="true">2</kbd>
       </a>
-      <a href="#costs" data-view="costs">
-        <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M10 2.5 11.8 7l4.7 1.8-4.7 1.8L10 15.3 8.2 10.6 3.5 8.8 8.2 7 10 2.5Z" stroke-linejoin="round"/><path d="M15.5 14v3M14 15.5h3" stroke-linecap="round"/></svg>
-        <span>成本核对</span>
-        <span id="nav-costs-badge" class="nav-count-badge" hidden>0</span>
-        <kbd class="nav-kbd" aria-hidden="true">3</kbd>
-      </a>
       <a href="#orders" data-view="orders">
         <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 5.5h12M4 10h12M4 14.5h8" stroke-linecap="round"/></svg>
         <span>已入库订单</span>
@@ -126,7 +120,7 @@
           <h3>店铺账本</h3>
           <div class="hero-actions">
             <button type="button" class="button primary" data-goto="import">导入千牛订单</button>
-            <button type="button" class="button outline" data-goto="costs">处理待核对</button>
+            <button type="button" class="button outline" data-goto="orders">处理待核对</button>
           </div>
           <p id="date-range-note" class="date-range-note overview-date-note">正在读取订单范围</p>
         </div>
@@ -155,7 +149,7 @@
       <section class="next-action" aria-live="polite">
         <div class="next-action-icon" aria-hidden="true">!</div>
         <div id="review-summary" class="next-action-copy"><strong>正在检查缺少的信息</strong><span>稍等片刻</span></div>
-        <button class="button secondary" type="button" data-goto="costs">去处理</button>
+        <button class="button secondary" type="button" data-goto="orders">去处理</button>
       </section>
       <section class="overview-lower-grid">
         <article class="surface category-overview-card">
@@ -164,7 +158,7 @@
         </article>
         <article class="surface overview-focus-card">
           <h3>待核对</h3>
-          <button type="button" class="button secondary" data-goto="costs">去处理</button>
+          <button type="button" class="button secondary" data-goto="orders">去处理</button>
         </article>
       </section>
       <details class="calculation-note">
@@ -210,11 +204,28 @@
       </div>
     </div>
 
-    <div class="view" data-panel="costs" hidden>
-      <div class="page-heading">
-        <div><h2>成本核对</h2></div>
+    <div class="view" data-panel="orders" hidden>
+      <div class="page-heading"><div><h2>已入库订单</h2></div><button class="button outline" data-goto="import">导入订单</button></div>
+      <div class="table-toolbar orders-command-bar">
+        <div class="orders-toolbar-copy"><strong id="order-total">0 笔付款订单</strong></div>
+        <div class="orders-toolbar-actions">
+          <label class="check-label"><input type="checkbox" id="review-only">只看待处理</label>
+          <label class="order-filter"><span class="sr-only">订单类目</span><select id="order-category-filter" aria-label="订单类目"><option value="all">全部类目</option><option value="finished">成品号</option><option value="activation">激活</option><option value="family">家庭组</option><option value="other">其他</option></select></label>
+          <search><label class="sr-only" for="order-search">搜索订单</label><input id="order-search" type="search" placeholder="搜订单号、商品或规格" autocomplete="off"></search>
+        </div>
       </div>
-      <section class="surface card-settings-panel">
+      <div class="orders-selection-bar" aria-live="polite">
+        <label class="check-label"><input type="checkbox" id="order-select-all">全选当前筛选</label>
+        <span id="selected-order-count" class="muted">已选 0 笔</span>
+        <button id="delete-selected-orders" class="button danger" type="button" disabled>删除选中订单</button>
+      </div>
+      <div id="orders-list" class="orders-list"><div class="empty">这个时间段还没有已付款订单。</div></div>
+      <div id="orders-load-more" class="load-more" hidden><button type="button" class="button secondary">继续显示</button></div>
+      <section class="orders-reconcile-zone" aria-labelledby="orders-reconcile-heading">
+        <div class="orders-reconcile-heading">
+          <h2 id="orders-reconcile-heading">成本核对</h2>
+        </div>
+<section class="surface card-settings-panel">
         <div class="card-import-head">
           <div><span class="section-kicker" aria-hidden="true">导入</span><h3 id="card-settings-heading">卡网订单与联系方式</h3></div>
           <div class="card-site-links">
@@ -308,14 +319,10 @@
       </section>
       <section class="surface card-ledger-panel">
         <div class="card-import-head">
-          <div><span class="section-kicker" aria-hidden="true">台账</span><h3 id="card-ledger-heading">核对台账</h3></div>
+          <div><span class="section-kicker" aria-hidden="true">台账</span><h3 id="card-ledger-heading">已导入卡网采购单</h3></div>
           <span id="ledger-summary-badge" class="badge">读取中…</span>
         </div>
-        <div class="ledger-tabs" role="tablist" aria-label="核对台账视图">
-          <button type="button" role="tab" id="ledger-tab-purchases" aria-selected="true" aria-controls="ledger-panel-purchases" tabindex="0">卡网采购单 <span id="ledger-tab-purchases-count" class="tab-count">0</span></button>
-          <button type="button" role="tab" id="ledger-tab-orders" aria-selected="false" aria-controls="ledger-panel-orders" tabindex="-1">千牛订单 <span id="ledger-tab-orders-count" class="tab-count">0</span></button>
-        </div>
-        <div class="ledger-category-bar" role="group" aria-label="按商品分类筛选">
+          <div class="ledger-category-bar" role="group" aria-label="按商品分类筛选">
           <button type="button" class="cat-pill active" data-ledger-cat="all" aria-pressed="true">全部 <span class="cat-count" data-cat-count="all">0</span></button>
           <button type="button" class="cat-pill" data-ledger-cat="finished" aria-pressed="false">成品号 <span class="cat-count" data-cat-count="finished">0</span></button>
           <button type="button" class="cat-pill" data-ledger-cat="activation" aria-label="代充、激活、开通，归类为激活" aria-pressed="false">激活 <span class="cat-count" data-cat-count="activation">0</span></button>
@@ -364,7 +371,7 @@
             </div>
           </form>
         </search>
-        <div id="ledger-panel-purchases" role="tabpanel" aria-labelledby="ledger-tab-purchases">
+        <div id="ledger-panel-purchases">
           <div class="ledger-table-box">
             <div tabindex="0" role="region" aria-labelledby="ledger-purchases-caption" class="table-wrapper">
               <table class="ledger-table ledger-table-purchases">
@@ -389,31 +396,12 @@
             </div>
           </div>
         </div>
-        <div id="ledger-panel-orders" role="tabpanel" aria-labelledby="ledger-tab-orders" hidden>
-          <div class="ledger-table-box">
-            <div tabindex="0" role="region" aria-labelledby="ledger-orders-caption" class="table-wrapper">
-              <table class="ledger-table ledger-table-orders">
-                <caption id="ledger-orders-caption" class="sr-only">千牛订单核对台账</caption>
-                <thead>
-                  <tr>
-                    <th scope="col">订单号</th>
-                    <th scope="col">商品与规格 / 分类</th>
-                    <th scope="col">实付 / 成本</th>
-                    <th scope="col">付款时间</th>
-                    <th scope="col">核对状态</th>
-                    <th scope="col">核对时间与对应采购单号</th>
-                  </tr>
-                </thead>
-                <tbody id="ledger-orders-body">
-                  <tr><td colspan="6" class="table-empty">正在读取千牛订单…</td></tr>
-                </tbody>
-              </table>
-            </div>
-          </div>
-        </div>
+
       </section>
-      <section class="surface manual-cost">
-        <div class="panel-title"><div><h3>手工补一个规格</h3></div><span id="sku-count" class="badge">0 个规格</span></div>
+      <details id="cost-tools" class="surface cost-tools">
+        <summary>成本规则与手工补录</summary>
+        <div class="cost-tools-content">
+<div class="panel-title"><div><h3>手工补一个规格</h3></div><span id="sku-count" class="badge">0 个规格</span></div>
         <form id="cost-form" class="cost-form">
           <label>商品规格<input id="cost-sku" list="sku-options" required autocomplete="off"><datalist id="sku-options"></datalist></label>
           <label>实际采购单价（元）<input id="unit-cost" inputmode="decimal" placeholder="例如 8.50" required></label>
@@ -421,30 +409,22 @@
           <button class="button primary" type="submit">保存成本</button>
         </form>
         <div id="sku-list" class="sku-list compact-list"><div class="empty">导入订单后显示商品规格。</div></div>
-      </section>
-      <section class="surface history"><h3>已保存的成本</h3><div id="cost-list" class="muted">暂无成本记录</div></section>
-    </div>
-
-    <div class="view" data-panel="orders" hidden>
-      <div class="page-heading"><div><h2>已入库订单</h2></div><button class="button outline" data-goto="overview">日期范围</button></div>
-      <div class="table-toolbar orders-command-bar">
-        <div class="orders-toolbar-copy"><strong id="order-total">0 笔付款订单</strong></div>
-        <div class="orders-toolbar-actions">
-          <label class="check-label"><input type="checkbox" id="review-only">只看待处理</label>
-          <label class="order-filter"><span class="sr-only">订单类目</span><select id="order-category-filter" aria-label="订单类目"><option value="all">全部类目</option><option value="finished">成品号</option><option value="activation">激活</option><option value="family">家庭组</option><option value="other">其他</option></select></label>
-          <search><label class="sr-only" for="order-search">搜索订单</label><input id="order-search" type="search" placeholder="搜订单号、商品或规格" autocomplete="off"></search>
+          <div class="cost-history">
+<h3>已保存的成本</h3><div id="cost-list" class="muted">暂无成本记录</div>
+          </div>
         </div>
-      </div>
-      <div class="orders-selection-bar" aria-live="polite">
-        <label class="check-label"><input type="checkbox" id="order-select-all">全选当前筛选</label>
-        <span id="selected-order-count" class="muted">已选 0 笔</span>
-        <button id="delete-selected-orders" class="button danger" type="button" disabled>删除选中订单</button>
-      </div>
-      <div id="orders-list" class="orders-list"><div class="empty">这个时间段还没有已付款订单。</div></div>
-      <div id="orders-load-more" class="load-more" hidden><button type="button" class="button secondary">继续显示</button></div>
+      </details>
+      </section>
+
+      <details id="order-adjustments" class="surface order-adjustments">
+        <summary>单笔订单调整</summary>
+        <div class="order-adjustments-content">
       <section class="surface adjustment"><h3>核对这笔订单的成本</h3><form id="adjustment-form" class="adjustment-form"><label>子订单编号<input id="adjust-item" required></label><input id="adjust-kind" type="hidden" value="cost_set"><label>实际采购总成本（元）<input id="adjust-amount" inputmode="decimal" required></label><label>核对依据<input id="adjust-note" maxlength="200" required placeholder="例如：卡网采购单 FF..."></label><button class="button primary" type="submit">保存这笔成本</button></form><div id="adjustment-history" class="adjustment-history" aria-live="polite"></div></section>
       <section id="basis-review-panel" class="surface adjustment" hidden><h3 id="basis-review-heading">核对单笔金额口径</h3><p id="basis-review-help" class="muted">来源变化后须重新核对。</p><div id="basis-review-source" aria-live="polite"></div><form id="basis-review-form" class="adjustment-form" aria-labelledby="basis-review-heading" method="post"><label>子订单编号<input id="basis-review-item" name="item_id" readonly required></label><label>金额口径<select id="basis-review-choice" name="basis" required aria-describedby="basis-review-help"><option value="">请选择</option><option value="gross">退款前买家实付金额</option><option value="net">已扣退款的净额</option></select></label><label>核对依据<input id="basis-review-note" name="note" maxlength="200" required></label><button class="button primary" type="submit">保存口径核对</button></form><div id="basis-review-history" class="adjustment-history" aria-live="polite"></div></section>
       <section id="refund-review-panel" class="surface adjustment" hidden><h3>核对历史退款</h3><div id="refund-review-source" aria-live="polite"></div><form id="refund-review-form" class="adjustment-form"><label>子订单编号<input id="refund-review-item" readonly required></label><label>累计成功退款（元）<input id="refund-review-amount" inputmode="decimal" required></label><label>核对依据<input id="refund-review-note" maxlength="200" required></label><button class="button primary" type="submit">保存核对</button></form><div id="refund-review-history" class="adjustment-history" aria-live="polite"></div></section>
+        </div>
+      </details>
+
     </div>
 
     <div class="view" data-panel="chats" hidden>
