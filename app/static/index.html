@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark" id="color-scheme-meta">
   <title>店铺账本 · MultiStore AI Ops</title>
-  <link rel="stylesheet" href="/static/style.css?v=precision-ledger-01">
-  <script src="/static/app.js?v=precision-ledger-01" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v=workbench-v3">
+  <script src="/static/app.js?v=workbench-v3" defer></script>
 </head>
 <body class="ui-v2">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -52,7 +52,7 @@
     <nav aria-label="主导航" class="nav">
       <a href="#overview" data-view="overview">
         <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><rect x="2.5" y="2.5" width="6.2" height="6.2" rx="1.4"/><rect x="11.3" y="2.5" width="6.2" height="6.2" rx="1.4"/><rect x="2.5" y="11.3" width="6.2" height="6.2" rx="1.4"/><rect x="11.3" y="11.3" width="6.2" height="6.2" rx="1.4"/></svg>
-        <span>经营概览</span>
+        <span>工作台</span>
         <kbd class="nav-kbd" aria-hidden="true">1</kbd>
       </a>
       <a href="#import" data-view="import">
@@ -68,7 +68,7 @@
       </a>
       <a href="#orders" data-view="orders">
         <svg class="nav-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" aria-hidden="true"><path d="M4 5.5h12M4 10h12M4 14.5h8" stroke-linecap="round"/></svg>
-        <span>订单明细</span>
+        <span>已入库订单</span>
         <kbd class="nav-kbd" aria-hidden="true">4</kbd>
       </a>
       <a href="#chats" data-view="chats">
@@ -95,7 +95,7 @@
 
   <main class="main-content" id="main-content">
     <header class="topbar">
-      <div><p class="top-kicker" id="store-name">我的店铺</p><h1 id="page-title">经营概览</h1></div>
+      <div><p class="top-kicker" id="store-name">我的店铺</p><h1 id="page-title">工作台</h1></div>
       <div class="top-actions">
         <span id="as-of" class="as-of">尚未导入数据</span>
         <button id="open-cmd-palette" class="cmd-trigger-btn" type="button" title="打开全局命令面板 (Ctrl+K)">
@@ -115,48 +115,30 @@
     </header>
 
     <div class="view overview-view" data-panel="overview">
-      <section id="guided-workflow" class="workflow-strip" aria-label="三步傻瓜式对账流程">
-        <button type="button" class="workflow-step" data-goto="import">
-          <span class="wf-num">1</span>
-          <span class="wf-body">
-            <strong>导千牛账单</strong>
-            <small id="wf-step1-desc">导入订单或读取最近下载</small>
-          </span>
-          <span id="wf-step1-badge" class="wf-pill">去导入</span>
-        </button>
-        <button type="button" class="workflow-step" data-goto="costs">
-          <span class="wf-num">2</span>
-          <span class="wf-body">
-            <strong>AI 核对采购成本</strong>
-            <small id="wf-step2-desc">16688 / 链动小铺一键配对</small>
-          </span>
-          <span id="wf-step2-badge" class="wf-pill warn">待核对</span>
-        </button>
-        <button type="button" class="workflow-step" data-goto="chats">
-          <span class="wf-num">3</span>
-          <span class="wf-body">
-            <strong>客服聊天复盘与问账</strong>
-            <small id="wf-step3-desc">自动脱敏整理痛点与标准话术</small>
-          </span>
-          <span id="wf-step3-badge" class="wf-pill">看洞察</span>
-        </button>
+      <section class="workbench-heading" aria-labelledby="overview-hero-title">
+        <div>
+          <h2 id="overview-hero-title">工作台</h2>
+          <p class="muted">订单、成本和退款结果。</p>
+        </div>
+        <form id="period-form" class="date-range workbench-date-range">
+          <label>开始日期<input id="start-date" type="date" required></label>
+          <span>至</span>
+          <label>结束日期<input id="end-date" type="date" required></label>
+          <button class="button primary" type="submit">刷新数据</button>
+        </form>
       </section>
-      <section class="overview-hero" aria-labelledby="overview-hero-title">
+      <section class="overview-hero overview-hero-v3" aria-label="经营工作区入口">
         <div class="overview-hero-copy">
-          <span class="section-kicker">本期经营摘要</span>
-          <h2 id="overview-hero-title">把每一笔订单，<br><em>变成清楚的结果。</em></h2>
-          <p class="muted">营业额按退款前实付统计。纯利润只汇总成本和退款信息都已核实的有效订单。</p>
-          <form id="period-form" class="date-range">
-            <label>开始日期<input id="start-date" type="date" required></label>
-            <span>至</span>
-            <label>结束日期<input id="end-date" type="date" required></label>
-            <button class="button primary" type="submit">刷新数据</button>
-          </form>
+          <h3>店铺账本</h3>
+          <p class="muted">导入订单，核对成本，查看结果。</p>
+          <div class="hero-actions">
+            <button type="button" class="button primary" data-goto="import">导入千牛订单</button>
+            <button type="button" class="button outline" data-goto="costs">处理待核对</button>
+          </div>
           <p id="date-range-note" class="date-range-note overview-date-note">正在读取订单范围</p>
         </div>
         <figure class="overview-hero-visual">
-          <img src="/static/ops-hero.webp" alt="蓝色透明方块放在带有账本网格的纸面上">
-          <figcaption><span>Ledger / 01</span><span>本机数据 · 安全保存</span></figcaption>
+          <img src="/static/ops-hero-v2.png" alt="青绿色玻璃方块与金色圆片置于带网格的纸面上">
         </figure>
       </section>
       <section id="overview-metrics" class="kpi-board" aria-label="经营核心指标" aria-busy="true">
@@ -184,7 +166,18 @@
       <section class="next-action" aria-live="polite">
         <div class="next-action-icon" aria-hidden="true">!</div>
         <div id="review-summary" class="next-action-copy"><strong>正在检查缺少的信息</strong><span>稍等片刻</span></div>
-        <button class="button secondary" type="button" data-goto="costs">处理缺失成本</button>
+        <button class="button secondary" type="button" data-goto="costs">去处理</button>
+      </section>
+      <section class="overview-lower-grid">
+        <article class="surface category-overview-card">
+          <div class="panel-title"><div><h3>已入库订单类目</h3></div><button type="button" class="link-button" data-goto="orders">查看订单</button></div>
+          <div id="overview-category-mix" class="overview-category-mix" aria-live="polite"><div class="empty">正在读取订单类目…</div></div>
+        </article>
+        <article class="surface overview-focus-card">
+          <h3>待核对</h3>
+          <p class="muted">处理缺少采购成本的订单。</p>
+          <button type="button" class="button secondary" data-goto="costs">去处理</button>
+        </article>
       </section>
       <details class="calculation-note">
         <summary>这四个数怎么算？</summary>
@@ -451,12 +444,12 @@
     </div>
 
     <div class="view" data-panel="orders" hidden>
-      <div class="page-heading"><div><h2>订单明细</h2><p class="muted">先看缺少成本的订单，再搜索订单号或商品处理。</p></div><button class="button outline" data-goto="overview">修改日期范围</button></div>
+      <div class="page-heading"><div><h2>已入库订单</h2><p class="muted">按类目或关键词查找订单。</p></div><button class="button outline" data-goto="overview">日期范围</button></div>
       <div class="table-toolbar orders-command-bar">
-        <div class="orders-toolbar-copy"><strong id="order-total">0 笔付款订单</strong><span id="order-scope" class="muted">按日期、状态和关键词快速定位</span></div>
+        <div class="orders-toolbar-copy"><strong id="order-total">0 笔付款订单</strong><span id="order-scope" class="muted">按类目、日期和关键词定位</span></div>
         <div class="orders-toolbar-actions">
           <label class="check-label"><input type="checkbox" id="review-only">只看待处理</label>
-          <label class="order-filter"><span class="sr-only">订单状态</span><select id="order-status-filter" aria-label="订单状态"><option value="all">全部状态</option><option value="needs_review">待核对</option><option value="settled">已核算</option><option value="pending">待支付</option><option value="closed">已关闭</option><option value="refunded">已退款</option></select></label>
+          <label class="order-filter"><span class="sr-only">订单类目</span><select id="order-category-filter" aria-label="订单类目"><option value="all">全部类目</option><option value="finished">成品号</option><option value="activation">激活</option><option value="family">家庭组</option><option value="other">其他</option></select></label>
           <search><label class="sr-only" for="order-search">搜索订单</label><input id="order-search" type="search" placeholder="搜订单号、商品或规格" autocomplete="off"></search>
         </div>
       </div>
