@@ -294,7 +294,6 @@ function showLogin() {
   setText("match-results", "导入卡网采购单后开始核对。");
   setText("orders-list", "请登录后查看订单。");
   setText("batch-list", "请登录后查看导入批次。");
-  setText("cost-list", "请登录后查看成本记录。");
   setText("order-total", "请登录后查看订单");
   for (const id of ["profit-value", "sales-value", "cost-value"]) setText(id, "—");
   setText("settled-count", "0");
@@ -463,9 +462,6 @@ $("#store-select").addEventListener("change", () => {
   setText("refund-review-history", "");
   $("#import-form").reset();
   resetImport();
-  $("#cost-form").reset();
-  $("#cost-from").value = day(new Date());
-  $("#sku-options").innerHTML = "";
   $("#adjustment-form").reset();
   $("#adjust-note").required = true;
   $("#adjustment-history").textContent = "";
@@ -475,12 +471,11 @@ $("#store-select").addEventListener("change", () => {
   for (const id of ["profit-value", "sales-value", "cost-value"])
     setText(id, "—");
   setText("settled-count", "0");
-  for (const id of ["orders-list", "batch-list", "sku-list", "cost-list"])
+  for (const id of ["orders-list", "batch-list"])
     setText(id, "正在读取当前店铺…");
   setText("scope-note", "");
   setText("gross-basis-result", "");
   setText("as-of", "正在读取当前店铺…");
-  setText("sku-count", "—");
   setText("order-total", "正在读取当前店铺…");
   const search = $("#order-search");
   if (search) search.value = "";
@@ -539,7 +534,6 @@ let now = new Date(),
 start.setDate(start.getDate() - 29);
 $("#start-date").value = day(start);
 $("#end-date").value = day(now);
-$("#cost-from").value = day(now);
 $("#period-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const button = e.submitter || e.currentTarget.querySelector("button");
@@ -730,7 +724,10 @@ function renderOrders() {
             (() => {
               const category = orderCategory(x);
               const profitValue = x.profit_fen !== null && x.profit_fen !== undefined ? x.profit_fen : x.estimated_profit_fen;
-              return `<div class="order-row ${state.selectedOrderIds.has(x.item_id) ? "is-selected" : ""}" data-order-row="${esc(x.item_id)}"><div class="order-main"><label class="order-select"><input type="checkbox" data-order-select="${esc(x.item_id)}" aria-label="选择订单 ${esc(x.order_id || x.item_id)}" ${state.selectedOrderIds.has(x.item_id) ? "checked" : ""}></label><div><div class="order-title-line"><strong>${esc(x.title || x.sku)}</strong><span class="order-category-chip order-category-${category}">${ORDER_CATEGORY_LABELS[category]}</span></div><span>${esc(x.sku)}</span><span>主订单 ${esc(x.order_id)} · 子订单 ${esc(x.item_id)} · ${esc(x.paid_at || "")}</span></div></div><div><span>退款后实收</span><span class="amount">${money(x.net_sales_fen)}</span><span>${fulfillmentLabel(x.fulfillment_status)} · ${refundLabel(x.refund_status)} · 成本 ${money(x.cost_fen)}</span></div><div><span>利润</span><span class="amount">${money(profitValue)}</span><span class="issue">${esc(orderIssueLabel(x.reasons, x.estimated_profit_fen))}</span></div><div class="order-actions">${orderActionMarkup(x)}</div></div>`;
+              const orderLabel = x.item_id && x.item_id !== x.order_id
+                ? `订单 ${x.order_id} · 子单 ${x.item_id}`
+                : `订单 ${x.order_id || x.item_id}`;
+              return `<div class="order-row ${state.selectedOrderIds.has(x.item_id) ? "is-selected" : ""}" data-order-row="${esc(x.item_id)}"><div class="order-main"><label class="order-select"><input type="checkbox" data-order-select="${esc(x.item_id)}" aria-label="选择订单 ${esc(x.order_id || x.item_id)}" ${state.selectedOrderIds.has(x.item_id) ? "checked" : ""}></label><div><div class="order-title-line"><strong>${esc(x.title || x.sku)}</strong><span class="order-category-chip order-category-${category}">${ORDER_CATEGORY_LABELS[category]}</span></div><span class="order-sku">${esc(x.sku)}</span><span class="order-meta">${esc(orderLabel)}${x.paid_at ? ` · ${esc(x.paid_at)}` : ""}</span></div></div><div class="order-metric"><span>实收</span><span class="amount">${money(x.net_sales_fen)}</span><span>${fulfillmentLabel(x.fulfillment_status)} · ${refundLabel(x.refund_status)} · 成本 ${money(x.cost_fen)}</span></div><div class="order-metric"><span>利润</span><span class="amount">${money(profitValue)}</span><span class="issue">${esc(orderIssueLabel(x.reasons, x.estimated_profit_fen))}</span></div><div class="order-actions">${orderActionMarkup(x)}</div></div>`;
             })(),
         )
         .join("")
@@ -1254,9 +1251,7 @@ async function loadCosts({ preserveCardResult = false } = {}) {
   if (!state.store) return;
   let context = scope();
   try {
-    let [items, costs, purchases, matches, cardSettings] = await Promise.all([
-      api(`/api/stores/${context.store}/skus`),
-      api(`/api/stores/${context.store}/costs`),
+    let [purchases, matches, cardSettings] = await Promise.all([
       api(`/api/stores/${context.store}/card-purchases`),
       api(`/api/stores/${context.store}/card-matches`),
       api(`/api/stores/${context.store}/card-settings`),
@@ -1270,35 +1265,9 @@ async function loadCosts({ preserveCardResult = false } = {}) {
     setText(
       "card-settings-status",
       cardSettings.contact_email
-        ? `已保存联系方式：${cardSettings.contact_email}${cardSettings.updated_at ? "（更新于 " + formatCardSettingTime(cardSettings.updated_at) + "）" : ""}`
-        : "尚未保存联系方式；填写邮箱后可直接 AI 查询卡网订单。",
+        ? `已保存：${cardSettings.contact_email}${cardSettings.updated_at ? " · " + formatCardSettingTime(cardSettings.updated_at) : ""}`
+        : "尚未保存",
     );
-    $("#sku-count").textContent = `${items.length} 个规格`;
-    $("#sku-options").innerHTML = items
-      .map((x) => `<option value="${esc(x.sku)}">${esc(x.title)}</option>`)
-      .join("");
-    $("#sku-list").innerHTML = items.length
-      ? items
-          .map(
-            (x) =>
-              `<div class="sku-row"><div><button data-sku="${esc(x.sku)}">${esc(x.sku)}</button><small>${esc(x.title)}</small></div><span>${x.missing_cost} 笔子订单缺成本</span></div>`,
-          )
-          .join("")
-      : '<div class="empty"><p>还没有商品。先导入千牛订单账单。</p><button type="button" class="button secondary" data-goto="import">先导入订单</button></div>';
-    $("#cost-list").innerHTML = costs.length || matches.length
-      ? costs
-          .map(
-            (x) =>
-              `<div class="cost-row"><div><strong>${esc(x.sku)}</strong><small>版本 ${esc(x.id)} · 生效：${esc(x.valid_from)} ${x.supplier ? " · " + esc(x.supplier) : ""}</small></div><strong>${money(x.unit_cost_fen)}</strong></div>`,
-          )
-          .join("") +
-        matches
-          .map(
-            (x) =>
-              `<div class="cost-row"><div><strong>${esc(x.sale_title || x.item_external_id)}</strong><small>订单 ${esc(x.order_external_id || x.item_external_id)} · 卡网单 ${esc(x.purchase_external_id)}${x.quantity > 1 ? `（分配 ${x.allocated_quantity}/${x.quantity} 件）` : ""} · ${esc(x.purchase_paid_at || "采购时间未知")} · 匹配度 ${x.score}%</small></div><strong>${money(x.cost_fen)}</strong></div>`,
-          )
-          .join("")
-      : '<div class="empty"><p>还没有成本记录。补上成本后，利润才会开始核算。</p><button type="button" class="button secondary" data-goto="orders">去处理待核对</button></div>';
     if (!preserveCardResult) {
       $("#card-import-result").innerHTML = purchases.length
         ? `<div class="import-message ok">已保存 ${purchases.length} 张卡网采购单，最近一张：${esc(purchases[0].purchase_external_id)} · ${esc(purchases[0].product_title)}</div>`
@@ -2135,37 +2104,6 @@ document.addEventListener("click", async (e) => {
     } catch {
       toast("浏览器未授权剪贴板，请手动复制", "error");
     }
-  }
-});
-document.addEventListener("click", (e) => {
-  let b = e.target.closest("[data-sku]");
-  if (b) {
-    $("#cost-sku").value = b.dataset.sku;
-    $("#unit-cost").focus();
-  }
-});
-$("#cost-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  let btn = e.submitter;
-  setBusy(btn, true);
-  try {
-    let r = await api(`/api/stores/${state.store}/costs`, {
-      method: "POST",
-      body: JSON.stringify({
-        sku: $("#cost-sku").value,
-        unit_cost: $("#unit-cost").value,
-        valid_from: $("#cost-from").value,
-        supplier: $("#supplier").value,
-      }),
-    });
-    toast(`成本已保存，补齐 ${r.matched_orders} 笔订单`);
-    $("#unit-cost").value = "";
-    await loadCosts();
-    await loadReport();
-  } catch (err) {
-    toast(err.message);
-  } finally {
-    setBusy(btn, false);
   }
 });
 $("#adjustment-form").addEventListener("input", () => {

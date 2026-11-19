@@ -205,19 +205,19 @@
     </div>
 
     <div class="view" data-panel="orders" hidden>
-      <div class="page-heading"><div><h2>已入库订单</h2></div><button class="button outline" data-goto="import">导入订单</button></div>
       <div class="table-toolbar orders-command-bar">
         <div class="orders-toolbar-copy"><strong id="order-total">0 笔付款订单</strong></div>
         <div class="orders-toolbar-actions">
+          <button class="button primary orders-import-button" data-goto="import" type="button">导入订单</button>
           <label class="check-label"><input type="checkbox" id="review-only">只看待处理</label>
           <label class="order-filter"><span class="sr-only">订单类目</span><select id="order-category-filter" aria-label="订单类目"><option value="all">全部类目</option><option value="finished">成品号</option><option value="activation">激活</option><option value="family">家庭组</option><option value="other">其他</option></select></label>
           <search><label class="sr-only" for="order-search">搜索订单</label><input id="order-search" type="search" placeholder="搜订单号、商品或规格" autocomplete="off"></search>
         </div>
       </div>
       <div class="orders-selection-bar" aria-live="polite">
-        <label class="check-label"><input type="checkbox" id="order-select-all">全选当前筛选</label>
+        <label class="check-label"><input type="checkbox" id="order-select-all">全选</label>
         <span id="selected-order-count" class="muted">已选 0 笔</span>
-        <button id="delete-selected-orders" class="button danger" type="button" disabled>删除选中订单</button>
+        <button id="delete-selected-orders" class="button danger" type="button" disabled>删除订单</button>
       </div>
       <div id="orders-list" class="orders-list"><div class="empty">这个时间段还没有已付款订单。</div></div>
       <div id="orders-load-more" class="load-more" hidden><button type="button" class="button secondary">继续显示</button></div>
@@ -225,9 +225,10 @@
         <div class="orders-reconcile-heading">
           <h2 id="orders-reconcile-heading">成本核对</h2>
         </div>
+        <div class="reconcile-acquire-surface">
 <section class="surface card-settings-panel">
         <div class="card-import-head">
-          <div><span class="section-kicker" aria-hidden="true">导入</span><h3 id="card-settings-heading">卡网订单与联系方式</h3></div>
+           <div><h3 id="card-settings-heading">卡网入口</h3></div>
           <div class="card-site-links">
             <a id="open-card-16688" class="button outline" href="https://www.16688.com.cn/order" target="_blank" rel="noopener noreferrer">16688 查询页</a>
             <a id="open-card-wzyp" class="button outline" href="https://wzyp.cn/order" target="_blank" rel="noopener noreferrer">链动小铺查询页</a>
@@ -241,15 +242,15 @@
           </div>
           <button type="submit" class="button primary">保存联系方式</button>
         </form>
-        <p id="card-settings-status" class="helper-text" aria-live="polite">正在读取已保存的联系方式…</p>
+         <p id="card-settings-status" class="helper-text" aria-live="polite">正在读取联系方式…</p>
       </section>
       <section class="surface card-import-panel">
         <div class="card-import-head">
-          <div><span class="section-kicker" aria-hidden="true">导入</span><h3 id="card-import-heading">导入卡网采购单</h3></div>
+           <div><h3 id="card-import-heading">导入采购单</h3></div>
         </div>
         <div class="acquire-grid">
           <div class="acquire-box">
-            <h4 id="card-ai-query-heading">方式 A · AI 自动查询订单</h4>
+             <h4 id="card-ai-query-heading">AI 查询</h4>
             <form id="card-ai-query-form" class="ai-query-form" aria-labelledby="card-ai-query-heading">
               <div class="form-field">
                 <label for="card-ai-site">查询站点</label>
@@ -259,7 +260,7 @@
                   <option value="wzyp">仅查询链动小铺</option>
                 </select>
               </div>
-              <button id="run-card-ai-query" class="button primary" type="submit">AI 查询订单</button>
+                <button id="run-card-ai-query" class="button primary" type="submit">AI 查询</button>
             </form>
             <div id="card-captcha-panel" class="captcha-panel" hidden>
               <form id="card-captcha-form" class="captcha-form" aria-label="输入链动小铺图形验证码">
@@ -276,12 +277,12 @@
             </div>
           </div>
           <div class="acquire-box">
-            <h4 id="card-paste-heading">方式 B · 直接粘贴或上传导出文件</h4>
+             <h4 id="card-paste-heading">粘贴或文件</h4>
             <form id="card-paste-form" class="paste-import-form" aria-labelledby="card-paste-heading">
-              <label for="card-paste-text">粘贴查询结果或上传文件</label>
+              <label for="card-paste-text">粘贴查询结果</label>
               <textarea id="card-paste-text" name="text" rows="4" placeholder="把 16688 查询结果全文、链动小铺订单表格或 Markdown 粘贴到这里…" required></textarea>
               <div class="button-row compact">
-                <button class="button secondary" type="submit">识别并导入粘贴内容</button>
+                <button class="button secondary" type="submit">导入粘贴内容</button>
                 <button id="read-card-clipboard" class="button outline" type="button">从剪贴板读取</button>
               </div>
             </form>
@@ -294,24 +295,24 @@
         </div>
         <div id="card-import-result" class="inline-result" aria-live="polite"></div>
       </section>
+        </div>
       <section class="surface match-panel">
         <div class="card-import-head">
           <div>
-            <span class="section-kicker" aria-hidden="true">核对</span>
-            <h3>核对建议</h3>
+            <h3>AI 核对</h3>
           </div>
           <div class="match-toolbar-controls">
             <label class="compact-inline-select" for="match-scope">
               <span class="sr-only">核对范围</span>
               <select id="match-scope" title="选择 AI 核对的订单范围">
-                <option value="all" selected>全店待核对订单（推荐）</option>
+                <option value="all" selected>全店待核对（推荐）</option>
                 <option value="period">仅概览日期范围</option>
               </select>
             </label>
             <label class="check-label compact-check" title="对分数接近的疑难候选调用本地大模型做语义复核">
-              <input type="checkbox" id="match-use-ai">AI 语义复核
+              <input type="checkbox" id="match-use-ai">语义复核
             </label>
-            <button id="run-cost-matches" class="button primary" type="button">开始 AI 核对</button>
+            <button id="run-cost-matches" class="button primary" type="button">开始核对</button>
           </div>
         </div>
         <div id="match-summary-dashboard" class="match-summary-dashboard" hidden></div>
@@ -329,16 +330,16 @@
           <button type="button" class="cat-pill" data-ledger-cat="family" aria-pressed="false">家庭组 <span class="cat-count" data-cat-count="family">0</span></button>
         </div>
         <div class="ledger-selection-bar" aria-live="polite">
-          <label class="check-label"><input type="checkbox" id="card-purchase-select-all">全选当前筛选</label>
+          <label class="check-label"><input type="checkbox" id="card-purchase-select-all">全选</label>
           <span id="selected-card-purchase-count" class="muted">已选 0 笔</span>
-          <button id="delete-selected-card-purchases" class="button danger" type="button" disabled>删除选中</button>
+          <button id="delete-selected-card-purchases" class="button danger" type="button" disabled>删除</button>
         </div>
         <search>
           <form id="ledger-filter-form" class="ledger-filters" aria-labelledby="card-ledger-heading">
             <div class="form-field">
-              <label for="ledger-status">核对状态</label>
+              <label for="ledger-status">核对</label>
               <select id="ledger-status" name="status">
-                <option value="all">全部状态</option>
+                <option value="all">全部</option>
                 <option value="pending">待核对</option>
                 <option value="partial">部分核对</option>
                 <option value="matched">已核对</option>
@@ -366,7 +367,7 @@
               <input id="ledger-search" name="q" type="search" placeholder="输入订单号、商品名、规格或商家" autocomplete="off">
             </div>
             <div class="button-row compact ledger-filter-actions">
-              <button type="submit" class="button primary">筛选查询</button>
+              <button type="submit" class="button primary">筛选</button>
               <button id="ledger-reset" type="button" class="button outline">重置</button>
             </div>
           </form>
@@ -398,22 +399,6 @@
         </div>
 
       </section>
-      <details id="cost-tools" class="surface cost-tools">
-        <summary>成本规则与手工补录</summary>
-        <div class="cost-tools-content">
-<div class="panel-title"><div><h3>手工补一个规格</h3></div><span id="sku-count" class="badge">0 个规格</span></div>
-        <form id="cost-form" class="cost-form">
-          <label>商品规格<input id="cost-sku" list="sku-options" required autocomplete="off"><datalist id="sku-options"></datalist></label>
-          <label>实际采购单价（元）<input id="unit-cost" inputmode="decimal" placeholder="例如 8.50" required></label>
-          <div class="advanced-fields"><label>生效日期<input id="cost-from" type="date" required></label><label>供货渠道<input id="supplier" maxlength="120" placeholder="选填"></label></div>
-          <button class="button primary" type="submit">保存成本</button>
-        </form>
-        <div id="sku-list" class="sku-list compact-list"><div class="empty">导入订单后显示商品规格。</div></div>
-          <div class="cost-history">
-<h3>已保存的成本</h3><div id="cost-list" class="muted">暂无成本记录</div>
-          </div>
-        </div>
-      </details>
       </section>
 
       <details id="order-adjustments" class="surface order-adjustments">
