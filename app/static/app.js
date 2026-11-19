@@ -1191,6 +1191,39 @@ $("#latest-download-btn").addEventListener("click", async (e) => {
     setBusy(button, false);
   }
 });
+
+$("#ai-import-qianniu").addEventListener("click", async (e) => {
+  const button = e.currentTarget;
+  state.columns = null;
+  state.kind = "orders";
+  invalidateImportPreview();
+  const context = scope();
+  const revision = state.importRevision;
+  const progress = $("#qianniu-ai-progress");
+  const status = $("#qianniu-ai-status");
+  setBusy(button, true, "正在读取千牛…");
+  progress.hidden = false;
+  progress.removeAttribute("value");
+  status.textContent = "正在读取千牛订单…";
+  try {
+    const r = await api(`/api/stores/${context.store}/imports/qianniu-ai`, {
+      method: "POST",
+      body: JSON.stringify({ basis: $("#payment-basis").value }),
+    });
+    if (!current(context) || revision !== state.importRevision) return;
+    await showImportPreview(r, r.file_name || "千牛订单", button, true, context, revision);
+    status.textContent = "千牛订单已读取";
+  } catch (err) {
+    if (current(context) && revision === state.importRevision) {
+      $("#import-result").innerHTML = `<div class="import-message bad">${esc(err.message)}</div>`;
+      status.textContent = err.message;
+      toast(err.message, "error");
+    }
+  } finally {
+    progress.hidden = true;
+    setBusy(button, false);
+  }
+});
 async function loadBatches() {
   if (!state.store || !$("#batch-list")) return;
   let context = scope();

@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from . import agent, card_reconciliation, card_query_ai, cashflow, importer, payment_basis_review, qianniu_chats, refund_review
+from . import agent, card_reconciliation, card_query_ai, cashflow, importer, payment_basis_review, qianniu_chats, qianniu_orders, refund_review
 from .accounting import calculate
 from .auth import COOKIE, current_session, login, quick_login, list_quick_users, require_store
 from .db import get_db
@@ -68,6 +68,9 @@ class BulkBasisIn(BaseModel):
 class LatestDownloadIn(BaseModel):
     kind: str = "orders"
     basis: str | None = "gross"
+
+class QianniuAiImportIn(BaseModel):
+    basis: str = "gross"
 
 class CardAllocationIn(BaseModel):
     purchase_id: int
@@ -442,6 +445,17 @@ def import_latest_download(body:LatestDownloadIn,store_id:int=Depends(require_st
     except IntegrityError:
         db.rollback()
         raise HTTPException(409, "读取下载文件时发生冲突，请重试") from None
+
+@app.post("/api/stores/{store_id}/imports/qianniu-ai")
+def import_qianniu_ai(body:QianniuAiImportIn,store_id:int=Depends(require_store),db:Session=Depends(get_db)):
+    try:
+        return qianniu_orders.preview_from_browser(db, store_id, body.basis)
+    except (importer.ImportProblem, ValueError) as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc)) from None
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "AI 导入千牛订单时发生冲突，请重试") from None
 
 @app.get("/api/stores/{store_id}/card-settings")
 def get_card_settings(store_id:int=Depends(require_store),db:Session=Depends(get_db)):

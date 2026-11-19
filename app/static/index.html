@@ -190,6 +190,7 @@
           <div class="button-row compact import-source-actions">
             <a id="open-qianniu" class="button outline" href="#" target="_blank" rel="noopener noreferrer">打开千牛导出页</a>
             <button id="latest-download-btn" type="button" class="button secondary">读取最近下载</button>
+            <button id="ai-import-qianniu" type="button" class="button primary">AI 导入千牛订单</button>
           </div>
           <form id="import-form" class="form-stack" aria-labelledby="import-order-heading">
             <input id="import-kind" type="hidden" value="orders">
@@ -201,6 +202,8 @@
         </section>
         <section class="surface result-panel">
           <div class="panel-title"><div><span class="section-kicker">结果</span><h3>导入结果</h3></div></div>
+          <progress id="qianniu-ai-progress" hidden aria-label="AI 导入千牛订单进度"></progress>
+          <p id="qianniu-ai-status" class="sr-only" role="status" aria-live="polite"></p>
           <div id="import-result" aria-live="polite"><div class="empty">还没有选择文件。</div></div>
           <div class="button-row"><button id="preview-import" class="button secondary" hidden>重新检查</button><button id="commit-import" class="button primary" hidden>确认导入</button></div>
         </section>
