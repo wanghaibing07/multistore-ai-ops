@@ -243,5 +243,3 @@ class ChatKnowledgeItem(Base):
     source_count: Mapped[int] = mapped_column(Integer, default=1)
     is_pinned: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[str] = mapped_column(String(40), default=now_iso)
-
-\n

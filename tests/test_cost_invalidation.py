@@ -57,5 +57,3 @@ def test_new_cost_version_does_not_restore_invalidated_cost_in_api(client):
     assert report['known']['profit_fen']==1200
 
 from test_api_agent import client
-
-\n
