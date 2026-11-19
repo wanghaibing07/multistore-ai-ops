@@ -82,26 +82,34 @@ def calculate(db: Session, store_id: int, start: str, end: str, sku: str | None 
         source_hash=fingerprint(o,ref_rows,cashflow_rows) if review_eligible(o,cashflow_rows) else None
         review=latest_review.get(o.item_external_id)
         active_review=review if source_hash and review and review.source_fingerprint==source_hash else None
+        snapshot=o.refund_snapshot_fen
+        refund_auto_verified=(
+            o.refund_status=="success"
+            and snapshot is not None
+            and snapshot>0
+            and not any(r.status in ("pending","unknown") for r in ref_rows)
+            and (not successful or event_sum==snapshot)
+        )
+        refund_verified=bool(active_review or refund_auto_verified)
         basis_hash=basis_fingerprint(o,ref_rows,by_all_cashflow[(o.order_external_id,o.item_external_id)],active_review)
         basis_review=latest_basis.get(o.item_external_id)
         active_basis=basis_review if basis_review and basis_review.source_fingerprint==basis_hash else None
         effective_basis=active_basis.basis if active_basis else ("unknown" if basis_review else o.payment_basis)
         if any(r.status in ("pending","unknown") for r in ref_rows): reasons.append("退款流水尚未完成")
         if o.refund_status in ("pending","unknown"): reasons.append("订单退款状态未确认")
-        if o.refund_status=="success" and not active_review: reasons.append("退款历史是否完整尚未核对")
-        if o.refund_status=="closed" and not active_review: reasons.append("退款申请已关闭，需核对历史退款")
-        if o.status=="closed" and o.refund_status=="none" and not active_review: reasons.append("已关闭订单需核对退款结果")
-        if cashflow_rows and o.refund_status=="none" and not active_review: reasons.append("货款账单有售后退款而订单快照无退款，需核对退款历史")
+        if o.refund_status=="success" and not refund_verified: reasons.append("退款数据无法自动确认")
+        if o.refund_status=="closed" and not refund_verified: reasons.append("退款申请已关闭，需核对历史退款")
+        if o.status=="closed" and o.refund_status=="none" and not refund_verified: reasons.append("已关闭订单需核对退款结果")
+        if cashflow_rows and o.refund_status=="none" and not refund_verified: reasons.append("货款账单有售后退款而订单快照无退款，需核对退款历史")
         if o.payment_fen is None: reasons.append("缺少实付金额")
         if effective_basis=="unknown": reasons.append("未确认金额是否已扣退款")
         if o.status=="unknown": reasons.append("订单状态未识别")
         if o.status in ("completed", "closed") and fulfillment=="unknown": reasons.append("未确认是否已发货")
         if cost_needs_review: reasons.append("订单信息已变化，请核对原成本和调整后重新设置逐单成本")
-        snapshot=o.refund_snapshot_fen
         if o.refund_status=="success" and (snapshot is None or snapshot==0): reasons.append("缺少已成功退款金额")
         if not active_review:
-            if o.refund_status=="none" and snapshot not in (None,0): reasons.append("退款状态与金额不一致")
             if successful and (snapshot is None or snapshot!=event_sum): reasons.append("退款流水与订单快照不一致")
+            if o.refund_status=="none" and snapshot not in (None,0): reasons.append("退款状态与金额不一致")
             if o.refund_status=="none" and successful: reasons.append("退款流水与订单状态不一致")
         elif successful and active_review.refund_fen!=event_sum:
             reasons.append("人工核对与退款流水不一致")
@@ -127,7 +135,7 @@ def calculate(db: Session, store_id: int, start: str, end: str, sku: str | None 
         net_sales=None if o.payment_fen is None or effective_basis=="unknown" else o.payment_fen-(refund_value if effective_basis=="gross" else 0)
         estimate=None if net_sales is None or total_cost is None else net_sales-total_cost-fee
         soft_review_reasons={
-            "退款历史是否完整尚未核对",
+            "退款数据无法自动确认",
             "退款申请已关闭，需核对历史退款",
         }
         estimated_profit = (
@@ -155,8 +163,9 @@ def calculate(db: Session, store_id: int, start: str, end: str, sku: str | None 
             "reasons":reasons,"batch_id":o.batch_id,"cost_version_id":None if cost_override else o.cost_version_id,
             "cost_batch_id":None if cost_override else cost_batches.get(o.cost_version_id),"cost_override_id":cost_override.id if cost_override else None,"cost_needs_review":cost_needs_review,
             "refund_review_fingerprint":source_hash,"refund_review_id":active_review.id if active_review else None,
+            "refund_auto_verified":refund_auto_verified and not active_review,
             "reviewed_refund_fen":active_review.refund_fen if active_review else None,
-            "refund_review_stale":bool(review and not active_review),
+            "refund_review_stale":bool(review and not active_review and not refund_auto_verified),
             "refund_records":[{"refund_id":r.external_id,"status":r.status,"amount_fen":r.amount_fen,"completed_at":r.completed_at,"batch_id":r.batch_id} for r in ref_rows],
             "cashflow_refund_records":[{"refund_id":x.refund_external_id,"amount_fen":x.amount_fen,"settled_at":x.settled_at,"batch_id":x.batch_id} for x in cashflow_rows],
             "adjustment_ids":[a.id for a in adj],"refund_batch_ids":sorted({r.batch_id for r in ref_rows})})

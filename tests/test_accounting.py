@@ -50,7 +50,8 @@ def test_refund_cost_and_adjustment_are_calculated_once(db):
     assert report['known']['profit_fen']==-50
     import_file(db,'refunds','refund_id,item_id,order_id,refund_status,refund_amount,completed_at\nr1,i1,o1,success,10.00,2026-11-02\n')
     stale=calculate(db,1,'2026-10-01','2026-10-31')
-    assert next(x for x in stale['items'] if x['item_id']=='i1')['refund_review_stale']
+    auto_item=next(x for x in stale['items'] if x['item_id']=='i1')
+    assert auto_item['refund_auto_verified'] and not auto_item['refund_review_stale']
     verify_synthetic_refund(db,'i1',1000)
     again=calculate(db,1,'2026-10-01','2026-10-31')
     assert again['known']['profit_fen']==-50
@@ -64,10 +65,11 @@ def test_refund_cost_follows_fulfillment_state(db):
           'shipped,os,A,1,2026-10-02,closed,2026-10-02 10:00:00,10,success,10\n'+
           'partial,op,A,1,2026-10-03,completed,2026-10-03 10:00:00,10,success,3\n')
     import_file(db,'orders',data)
-    pending_review=calculate(db,1,'2026-10-01','2026-10-31')
-    pending_items={item['item_id']:item for item in pending_review['items']}
-    assert pending_items['unshipped']['profit_fen'] is None and pending_items['unshipped']['estimated_profit_fen']==0
-    assert pending_items['shipped']['profit_fen'] is None and pending_items['shipped']['estimated_profit_fen']==-700
+    auto_review=calculate(db,1,'2026-10-01','2026-10-31')
+    auto_items={item['item_id']:item for item in auto_review['items']}
+    assert auto_items['unshipped']['profit_fen']==0 and auto_items['unshipped']['refund_auto_verified']
+    assert auto_items['shipped']['profit_fen']==-700 and auto_items['shipped']['refund_auto_verified']
+    assert auto_items['partial']['profit_fen']==0 and auto_items['partial']['refund_auto_verified']
     verify_synthetic_refund(db,'unshipped',1000)
     verify_synthetic_refund(db,'shipped',1000)
     verify_synthetic_refund(db,'partial',300)

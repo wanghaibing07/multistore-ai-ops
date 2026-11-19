@@ -108,9 +108,15 @@ def safe_data(report: dict):
     success_items=[x for x in report["items"] if x["refund_status"]=="success"]
     snapshot_summary={"成功退款子订单数":len(success_items),"退款快照合计元":yuan(sum(x["refund_fen"] or 0 for x in success_items)),
                       "说明":"金额来自订单导出快照，存在待核对订单时只能作为待核对金额"}
-    checked_success=[x for x in report["items"] if x["refund_review_id"] is not None and x["refund_status"]=="success"]
+    def verified_refund_amount(item):
+        if item["refund_review_id"] is not None:
+            return item["reviewed_refund_fen"] or 0
+        if item.get("refund_auto_verified"):
+            return item["refund_fen"] or 0
+        return None
+    checked_success=[x for x in report["items"] if verified_refund_amount(x) is not None and x["refund_status"]=="success"]
     snapshot_summary["成功退款历史已核对子订单数"]=len(checked_success)
-    snapshot_summary["成功退款历史已核对累计金额元"]=yuan(sum(x["reviewed_refund_fen"] for x in checked_success))
+    snapshot_summary["成功退款历史已核对累计金额元"]=yuan(sum(verified_refund_amount(x) for x in checked_success))
     reviewed=[x for x in report["items"] if x["refund_review_id"] is not None and x["refund_status"]!="success"]
     snapshot_summary["其他订单人工核对子订单数"]=len(reviewed)
     snapshot_summary["其他订单人工核对成功退款元"]=yuan(sum(x["reviewed_refund_fen"] for x in reviewed))
@@ -118,7 +124,7 @@ def safe_data(report: dict):
     ranking_evidence={"口径":"订单快照中标为退款成功的子订单；金额为已记录的退款快照，非退款率",
                       "笔数最高":ranks["count"],"金额最高":None if ranks["amount"] is None else {**ranks["amount"],"value":yuan(ranks["amount"]["value"])},
                       "成功退款缺少快照金额数":ranks["missing"],"并列商品最多显示":20}
-    details=[{"序号":i+1,"商品":aliases[x["sku"]],"付款日期":x["paid_at"][:10],"数量":x["quantity"],"实付快照元":yuan(x["payment_fen"]),"退款快照元":yuan(x["refund_fen"]),"已核对累计退款元":yuan(x["reviewed_refund_fen"]) if x["refund_review_id"] is not None else None,"利润元":yuan(x["profit_fen"]),"需核对":bool(x["reasons"])} for i,x in enumerate(report["items"][:20])]
+    details=[{"序号":i+1,"商品":aliases[x["sku"]],"付款日期":x["paid_at"][:10],"数量":x["quantity"],"实付快照元":yuan(x["payment_fen"]),"退款快照元":yuan(x["refund_fen"]),"已核对累计退款元":yuan(verified_refund_amount(x)) if verified_refund_amount(x) is not None else None,"利润元":yuan(x["profit_fen"]),"需核对":bool(x["reasons"])} for i,x in enumerate(report["items"][:20])]
     return {"get_profit_summary":common,"get_order_details":{"范围":common,"条目":details,"条目上限":20},"get_refund_summary":{"范围":common,"退款快照":snapshot_summary,"商品退款":refunds[:100],"排行依据":ranking_evidence}}, {v:k for k,v in aliases.items()}
 
 def verified_answer(report: dict, question: str, aliases: dict[str,str]) -> str:
@@ -154,9 +160,15 @@ def verified_answer(report: dict, question: str, aliases: dict[str,str]) -> str:
         missing=sum(x["refund_fen"] is None for x in success)
         total=sum(x["refund_fen"] or 0 for x in success)
         parts.append(f"订单快照中有 {len(success)} 笔子订单显示退款成功，已记录退款金额合计 {yuan(total)} 元。")
-        checked_success=[x for x in report["items"] if x["refund_review_id"] is not None and x["refund_status"]=="success"]
+        def verified_refund_amount(item):
+            if item["refund_review_id"] is not None:
+                return item["reviewed_refund_fen"] or 0
+            if item.get("refund_auto_verified"):
+                return item["refund_fen"] or 0
+            return None
+        checked_success=[x for x in report["items"] if verified_refund_amount(x) is not None and x["refund_status"]=="success"]
         if checked_success:
-            parts.append(f"其中 {len(checked_success)} 笔已核对完整退款历史，累计成功退款 {yuan(sum(x['reviewed_refund_fen'] for x in checked_success))} 元；这些订单也包含在上述快照中。")
+            parts.append(f"其中 {len(checked_success)} 笔已自动核对完整退款历史，累计成功退款 {yuan(sum(verified_refund_amount(x) for x in checked_success))} 元；这些订单也包含在上述快照中。")
         reviewed=[x for x in report["items"] if x["refund_review_id"] is not None and x["refund_status"]!="success"]
         if reviewed:
             parts.append(f"另有 {len(reviewed)} 笔订单经人工核对，成功退款合计 {yuan(sum(x['reviewed_refund_fen'] for x in reviewed))} 元；与上述快照分开统计。")

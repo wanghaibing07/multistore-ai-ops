@@ -103,7 +103,7 @@ function refundLabel(status) {
 }
 function orderIssueLabel(reasons, estimatedProfit) {
   const labels = (reasons || []).map((reason) => ({
-    "退款历史是否完整尚未核对": "待核对退款",
+    "退款数据无法自动确认": "退款数据需处理",
     "退款申请已关闭，需核对历史退款": "待核对退款",
     "缺少商品成本": "待补成本",
     "订单信息已变化，请核对原成本和调整后重新设置逐单成本": "成本已变化",
@@ -874,7 +874,7 @@ document.addEventListener("click", async (event) => {
   $("#basis-review-choice").value = "";
   $("#basis-review-note").value = "";
   $("#basis-review-source").textContent =
-    `订单实付快照 ${money(item.payment_fen)}；退款快照 ${money(item.refund_fen)}；${item.refund_review_id ? "已核对累计退款 " + money(item.reviewed_refund_fen) : "退款历史尚未确认或不适用"}。${item.basis_review_stale ? "之前的口径核对已失效。" : ""}`;
+    `订单实付快照 ${money(item.payment_fen)}；退款快照 ${money(item.refund_fen)}；${item.refund_review_id ? "已核对累计退款 " + money(item.reviewed_refund_fen) : item.refund_auto_verified ? "系统已自动核对退款" : "退款历史尚未确认或不适用"}。${item.basis_review_stale ? "之前的口径核对已失效。" : ""}`;
   $("#basis-review-panel").hidden = false;
   try {
     await loadBasisHistory(selected);
