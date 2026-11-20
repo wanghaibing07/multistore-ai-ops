@@ -1090,8 +1090,11 @@ async function showImportPreview(r, name, button, autoCommit, context, revision)
   const time = r.time_start
     ? `${esc(labels[r.time_field] || r.time_field)}：${esc(r.time_start)} 至 ${esc(r.time_end)}；${esc(r.time_missing)} 行缺少该时间`
     : "文件中没有可用的时间";
+  const duplicateNote = r.source_duplicate_rows
+    ? `已自动跳过 ${esc(r.source_duplicate_rows)} 条重复千牛记录。`
+    : "";
   $("#import-result").innerHTML =
-    `<div class="import-message ${needsConfirmation ? "bad" : "ok"}">${esc(name || "文件")} 已识别 ${esc(r.row_count)} 行。${time}${r.multi_parent_count ? `<p>其中 ${esc(r.multi_parent_count)} 个主订单有多个子订单，需要确认金额已拆分。</p>` : ""}${differenceDetails(differences)}</div>`;
+    `<div class="import-message ${needsConfirmation ? "bad" : "ok"}">${esc(name || "文件")} 已识别 ${esc(r.row_count)} 行。${duplicateNote}${time}${r.multi_parent_count ? `<p>其中 ${esc(r.multi_parent_count)} 个主订单有多个子订单，需要确认金额已拆分。</p>` : ""}${differenceDetails(differences)}</div>`;
   if (autoCommit && !needsConfirmation && r.batch_id) {
     await commitImportBatch(button, context, revision);
   } else if (needsConfirmation) {

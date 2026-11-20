@@ -68,10 +68,12 @@ function extractPage() {{
     }});
   }}
   const next = document.querySelector("button[aria-label^='下一页']");
+  const pageText = tables.map((table) => table.innerText || "").join("\\n---\\n");
   return {{
     rows,
+    pageText,
     nextDisabled: !next || next.disabled,
-    hasOrderPage: tables.length > 0,
+    hasOrderPage: rows.length > 0,
     hasLoginPrompt: /登录|请先登录|重新登录/.test(document.body?.innerText || ""),
   }};
 }}
@@ -86,6 +88,8 @@ try {{
   const first = await page.evaluate(extractPage);
   if (first.hasLoginPrompt && !first.hasOrderPage) {{
     console.log(SENTINEL + JSON.stringify({{ok: false, status: "needs_login"}}));
+  }} else if (!first.hasOrderPage) {{
+    console.log(SENTINEL + JSON.stringify({{ok: false, error: "当前千牛页面没有可导入订单，请先完成验证并加载订单"}}));
   }} else {{
     const rows = [];
     let pages = 0;
@@ -101,7 +105,12 @@ try {{
         return true;
       }});
       if (!moved) break;
-      await page.waitForTimeout(550);
+      await page.waitForFunction((previous) => {{
+        const rowText = Array.from(document.querySelectorAll("table.next-table-row tbody > tr:not(.next-table-group-header)"))
+          .map((row) => row.innerText || "")
+          .join("\\n---\\n");
+        return Boolean(rowText) && rowText !== previous.pageText;
+      }}, {{pageText: current.pageText}}, {{timeout: 8000}});
       current = await page.evaluate(extractPage);
     }}
     console.log(SENTINEL + JSON.stringify({{ok: true, rows, pages}}));
@@ -174,6 +183,25 @@ def _csv_bytes(rows: list[dict[str, Any]]) -> bytes:
     return output.getvalue().encode("utf-8-sig")
 
 
+def _dedupe_browser_rows(rows: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], int]:
+    """Keep the latest row for each browser-generated child-order key."""
+    unique: list[dict[str, Any]] = []
+    positions: dict[str, int] = {}
+    duplicate_count = 0
+    for row in rows:
+        item_id = str(row.get("item_id") or "").strip()
+        if not item_id:
+            unique.append(row)
+            continue
+        if item_id not in positions:
+            positions[item_id] = len(unique)
+            unique.append(row)
+            continue
+        duplicate_count += 1
+        unique[positions[item_id]] = row
+    return unique, duplicate_count
+
+
 def preview_from_browser(
     db: Session,
     store_id: int,
@@ -186,7 +214,8 @@ def preview_from_browser(
         raise importer.ImportProblem("请先在千牛完成登录，再点击 AI 导入千牛订单")
     if not result.get("ok"):
         raise importer.ImportProblem(str(result.get("error") or "千牛页面没有返回订单数据"))
-    rows = [row for row in result.get("rows", []) if isinstance(row, dict)]
+    source_rows = [row for row in result.get("rows", []) if isinstance(row, dict)]
+    rows, duplicate_count = _dedupe_browser_rows(source_rows)
     if not rows:
         raise importer.ImportProblem("当前千牛页面没有可导入订单，请先筛选并加载订单")
     filename = f"qianniu-ai-{datetime.now().strftime('%Y%m%d-%H%M%S')}.csv"
@@ -195,6 +224,7 @@ def preview_from_browser(
         "file_name": filename,
         "source": "qianniu-ai",
         "source_pages": int(result.get("pages") or 0),
-        "source_rows": len(rows),
+        "source_rows": len(source_rows),
+        "source_duplicate_rows": duplicate_count,
     })
     return preview

@@ -50,6 +50,18 @@ def test_qianniu_ai_preview_reuses_order_import_pipeline(db):
                     "refund_status": "无退款",
                     "refund_amount": "",
                 },
+                {
+                    "item_id": "item-1",
+                    "order_id": "order-1",
+                    "title": "Gemini Pro 成品号",
+                    "property": "18个月",
+                    "quantity": "1",
+                    "paid_at": "2026-11-20 10:00:00",
+                    "status": "卖家已发货",
+                    "payment": "15.99",
+                    "refund_status": "无退款",
+                    "refund_amount": "",
+                },
             ],
         }
 
@@ -58,6 +70,8 @@ def test_qianniu_ai_preview_reuses_order_import_pipeline(db):
     assert result["source"] == "qianniu-ai"
     assert result["source_pages"] == 2
     assert result["row_count"] == 2
+    assert result["source_rows"] == 3
+    assert result["source_duplicate_rows"] == 1
     assert result["errors"] == []
     assert result["preview"][0]["order_external_id"] == "order-1"
     assert result["preview"][0]["sku"] == "Gemini Pro 成品号 | 18个月"
@@ -69,3 +83,18 @@ def test_qianniu_ai_requires_login():
 
     with pytest.raises(importer.ImportProblem, match="完成登录"):
         qianniu_orders.preview_from_browser(None, 1, runner=runner)
+
+
+def test_qianniu_ai_rejects_empty_order_page():
+    def runner(_script):
+        return {"ok": True, "pages": 1, "rows": []}
+
+    with pytest.raises(importer.ImportProblem, match="没有可导入订单"):
+        qianniu_orders.preview_from_browser(None, 1, runner=runner)
+
+
+def test_qianniu_script_waits_for_new_order_rows():
+    script = qianniu_orders._build_qianniu_order_script()
+
+    assert "hasOrderPage: rows.length > 0" in script
+    assert "rowText !== previous.pageText" in script
