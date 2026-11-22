@@ -1,0 +1,20 @@
+execution_mode: dry_run
+db_path: ./data/redeem.sqlite3
+storage_dir: ./data/private
+public_base_url: https://redeem.example.com
+admin_token: replace-with-a-long-random-token
+canboso_base_url: https://canboso.com
+canboso_api_secret: replace-me
+canboso_timeout_seconds: 15
+canboso_low_balance_threshold_usd: 80
+channel16688_base_url: https://www.16688.com.cn
+channel16688_api_key: replace-me
+channel16688_api_secret: replace-me
+smtp_host: smtp.example.com
+smtp_port: 587
+smtp_username: merchant@example.com
+smtp_password: replace-me
+smtp_from: merchant@example.com
+merchant_email: merchant@example.com
+poll_interval_seconds: 60
+
