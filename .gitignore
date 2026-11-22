@@ -1,8 +1,16 @@
+.venv/
+.env
 __pycache__/
 .pytest_cache/
 *.py[cod]
-.venv/
+*.db
+*.sqlite*
 data/
-*.sqlite3
-.env
+private/
+evidence/
+outputs/
+*.csv
+*.xlsx
+!tests/fixtures/*.csv
 
+.finesse/
