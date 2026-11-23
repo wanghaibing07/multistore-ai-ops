@@ -814,19 +814,10 @@ export function AdminOrderDrawer({
       {screenshotZoomOpen && screenshotUrl && (
         <div
           role="dialog"
+          className="admin-screenshot-lightbox"
           aria-modal="true"
           aria-label="放大查看保修截图"
           onClick={() => setScreenshotZoomOpen(false)}
-          style={{
-            position: "fixed",
-            inset: 0,
-            zIndex: 120,
-            background: "rgba(15, 23, 42, 0.82)",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center",
-            padding: 20,
-          }}
         >
           <div
             onClick={(event) => event.stopPropagation()}

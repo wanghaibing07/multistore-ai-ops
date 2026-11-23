@@ -1,0 +1,121 @@
+{
+  "project": "plan2-redeem-frontend",
+  "theme": "ZZZ-Architected x Castorice Obsidian Neon (Scheme A)",
+  "palette": {
+    "bg_void": "#0B0A10",
+    "bg_surface": "#14121D",
+    "bg_surface_alt": "#1C1829",
+    "accent_primary": "#D96BFF",
+    "accent_secondary": "#F2A7FF",
+    "ink_primary": "#F4F2FA",
+    "ink_secondary": "#C2BAD4"
+  },
+  "style_reference": "public/media/preview.jpg",
+  "local_media": [
+    {
+      "id": "hero-video",
+      "path": "public/media/瑕蝶.mp4",
+      "public_url": "/media/瑕蝶.mp4",
+      "type": "video/mp4",
+      "specs": "1920x1200 @ 60fps H.264 High yuv420p, 10.07s seamless cross-blended loop, silent (-an), zero black frames",
+      "usage": "Fullscreen muted looping dynamic wallpaper for buyer HomePage, RedeemPage, and merchant Admin console"
+    },
+    {
+      "id": "hero-poster",
+      "path": "public/media/preview.jpg",
+      "public_url": "/media/preview.jpg",
+      "type": "image/jpeg",
+      "usage": "Hero video poster, reduced-motion fallback, and imagegen style reference"
+    }
+  ],
+  "generated_assets": [
+    {
+      "id": "bg-nebula-grid",
+      "filename": "bg-nebula-grid.png",
+      "output_path": "public/assets/generated/bg-nebula-grid.png",
+      "public_url": "/assets/generated/bg-nebula-grid.png",
+      "category": "section-background",
+      "transparent_background": false,
+      "aspect": "landscape-16:9",
+      "usage": "Section 02 Showcase & /r/:code RedeemPage dark atmospheric backdrop",
+      "prompt": "Dark atmospheric website section background texture inspired by the color harmony and luminous anime painterly finish of the reference image. Deep obsidian charcoal and dark plum-black void (#0B0A10 to #14121D) layered with subtle glowing orchid-magenta butterfly dust, faint geometric cyber halftone grid, soft starlight bokeh, and delicate lavender rim light beams along the edges. High negative space in center for white UI typography, sleek dark-mode urban-fantasy aesthetic, no characters, no text, no watermark."
+    },
+    {
+      "id": "bg-arcade-hazard",
+      "filename": "bg-arcade-hazard.png",
+      "output_path": "public/assets/generated/bg-arcade-hazard.png",
+      "public_url": "/assets/generated/bg-arcade-hazard.png",
+      "category": "section-background",
+      "transparent_background": false,
+      "aspect": "landscape-16:9",
+      "usage": "Section 03 Workflow Feed & Section 04 Gallery dark ambient texture",
+      "prompt": "Ultra-dark obsidian cyber-arcade background texture matching the lilac-violet and rose-amethyst glow of the reference image. Deep charcoal-black base (#0B0A10) with subtle diagonal brushed industrial bands, translucent amethyst butterfly-wing prism shards drifting in the periphery, delicate neon pink-purple edge reflections (#D96BFF and #F2A7FF), and faint starlight mist. Calm low-contrast center suitable behind crisp UI cards, no faces, no text, no logos."
+    },
+    {
+      "id": "showcase-shared-slot",
+      "filename": "showcase-shared-slot.png",
+      "output_path": "public/assets/generated/showcase-shared-slot.png",
+      "public_url": "/assets/generated/showcase-shared-slot.png",
+      "category": "feature-card-illustration",
+      "transparent_background": false,
+      "aspect": "landscape-16:9",
+      "usage": "Section 02 Showcase Tab 1 (共享车位) & Section 04 Gallery Card 1",
+      "prompt": "High-craft anime semi-impasto illustration matching the delicate luminous brushwork, silver-lavender highlights, and glowing magenta-violet butterfly aesthetic of the reference image. Subject: a sleek futuristic obsidian-and-glass invitation terminal floating in a dark cyber studio, projecting five luminous orchid-purple constellation rings and delicate crystalline butterfly wings symbolizing shared family-group slots, framed by subtle retro CRT scan-glow and glowing star particles on a deep #0B0A10 background. Bold urban-fantasy visual energy, crisp silhouette, no text, no numbers, no watermark."
+    },
+    {
+      "id": "showcase-exclusive-group",
+      "filename": "showcase-exclusive-group.png",
+      "output_path": "public/assets/generated/showcase-exclusive-group.png",
+      "public_url": "/assets/generated/showcase-exclusive-group.png",
+      "category": "feature-card-illustration",
+      "transparent_background": false,
+      "aspect": "landscape-16:9",
+      "usage": "Section 02 Showcase Tab 2 (独享整组) & Section 04 Gallery Card 2",
+      "prompt": "High-craft anime semi-impasto illustration matching the refined thick-painted shading, plum-black velvet tones, and luminous pink-violet butterfly glow of the reference image. Subject: a luxury cyber-arcade obsidian vault keycard and faceted amethyst diamond crest hovering above a sleek dark console, surrounded by radiant orchid butterfly wings, translucent ribbon trails, and subtle starlight sparks against a deep dark charcoal-violet backdrop (#0B0A10). Dramatic rim lighting, premium collectible game-UI key art feel, no text, no letters, no watermark."
+    },
+    {
+      "id": "showcase-warranty-shield",
+      "filename": "showcase-warranty-shield.png",
+      "output_path": "public/assets/generated/showcase-warranty-shield.png",
+      "public_url": "/assets/generated/showcase-warranty-shield.png",
+      "category": "feature-card-illustration",
+      "transparent_background": false,
+      "aspect": "landscape-16:9",
+      "usage": "Section 02 Showcase Tab 3 (实时履约与质保) & Section 04 Gallery Card 3",
+      "prompt": "High-craft anime semi-impasto illustration in the exact luminous orchid-purple, pale silver, and deep charcoal-violet color palette of the reference image. Subject: an angular holographic guardian crest shaped like twin crystalline butterfly wings forming a protective emblem above a retro-futuristic dark CRT telemetry screen with glowing magenta-lavender waveform ribbons and floating sakura-tinted light petals on a deep #0B0A10 backdrop. Clean dynamic composition, no text, no UI words, no watermark."
+    },
+    {
+      "id": "card-merchant-console",
+      "filename": "card-merchant-console.png",
+      "output_path": "public/assets/generated/card-merchant-console.png",
+      "public_url": "/assets/generated/card-merchant-console.png",
+      "category": "feature-card-illustration",
+      "transparent_background": false,
+      "aspect": "landscape-16:9",
+      "usage": "Section 04 Gallery Card 4 (商家发码与履约终端) & AdminLogin visual header",
+      "prompt": "High-craft anime semi-impasto illustration matching the refined painterly finish and lavender-magenta neon palette of the reference image. Subject: a moody urban-fantasy arcade dispatch desk with stacked sleek retro CRT monitors glowing with neon orchid-violet geometric waveforms, obsidian cassette cartridges inlaid with luminous butterfly gems, and warm pale starlight reflections against a deep #0B0A10 shadow backdrop. Sharp neo-retro industrial charm, no text, no readable letters, no watermark."
+    },
+    {
+      "id": "sticker-butterfly-emblem",
+      "filename": "sticker-butterfly-emblem.png",
+      "output_path": "public/assets/generated/sticker-butterfly-emblem.png",
+      "public_url": "/assets/generated/sticker-butterfly-emblem.png",
+      "category": "transparent-sticker",
+      "transparent_background": true,
+      "aspect": "square-1:1",
+      "usage": "Hero angled arcade badge sticker & Showcase corner emblem",
+      "prompt": "Die-cut urban cyber-arcade vinyl sticker badge on a fully transparent background, inspired by the purple butterfly brooch and faceted magenta diamond crown gem in the reference image. Crisp anime thick-painted style inside a bold obsidian black and ice-white sticker outline: glowing orchid-magenta crystalline butterfly wings (#D96BFF and #F2A7FF) framing a faceted amethyst diamond star crest with tiny golden-white sparkles. Sharp clean edges, centered icon badge, strictly transparent background, no text, no letters."
+    },
+    {
+      "id": "sticker-crt-wing-seal",
+      "filename": "sticker-crt-wing-seal.png",
+      "output_path": "public/assets/generated/sticker-crt-wing-seal.png",
+      "public_url": "/assets/generated/sticker-crt-wing-seal.png",
+      "category": "transparent-sticker",
+      "transparent_background": true,
+      "aspect": "square-1:1",
+      "usage": "Section 03 Workflow & Section 04 Gallery decorative arcade seal",
+      "prompt": "Die-cut Japanese street-arcade vinyl sticker on a fully transparent background matching the lavender-pink and deep plum palette of the reference image. Subject: a stylized miniature retro CRT television emblem with a dark obsidian chassis, glowing neon pink-purple butterfly silhouette on the screen, small silver starlight accents, and bold white-and-black vinyl sticker border. Clean isolated cutout, strictly transparent background, no text, no letters, no watermark."
+    }
+  ]
+}

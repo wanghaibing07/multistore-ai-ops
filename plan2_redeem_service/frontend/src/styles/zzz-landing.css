@@ -1,0 +1,496 @@
+/* =========================================================================
+   Buyer Wallpaper & Frosted-Glass Single-Screen Home
+   Palette: Castorice Obsidian (#0B0A10 / #14121D) + Orchid Neon (#D96BFF / #F2A7FF)
+   ========================================================================= */
+
+.buyer-wallpaper {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  background: #0b0a10;
+  pointer-events: none;
+}
+
+.buyer-wallpaper-video,
+.buyer-wallpaper-poster {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 62% 24%;
+  transform: translateZ(0);
+  will-change: transform;
+}
+
+.buyer-wallpaper-scrim {
+  position: absolute;
+  inset: 0;
+}
+
+.buyer-wallpaper--hero .buyer-wallpaper-scrim {
+  background:
+    linear-gradient(
+      90deg,
+      rgba(10, 8, 18, 0.72) 0%,
+      rgba(10, 8, 18, 0.48) 38%,
+      rgba(10, 8, 18, 0.16) 66%,
+      rgba(10, 8, 18, 0.28) 100%
+    ),
+    radial-gradient(
+      circle at 18% 54%,
+      rgba(217, 107, 255, 0.14) 0%,
+      rgba(11, 10, 16, 0) 56%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(10, 8, 18, 0.36) 0%,
+      rgba(10, 8, 18, 0.06) 28%,
+      rgba(10, 8, 18, 0.14) 76%,
+      rgba(10, 8, 18, 0.56) 100%
+    );
+}
+
+.buyer-wallpaper--detail .buyer-wallpaper-video,
+.buyer-wallpaper--detail .buyer-wallpaper-poster {
+  object-position: 56% 22%;
+  filter: saturate(0.92) brightness(0.76);
+}
+
+.buyer-wallpaper--detail .buyer-wallpaper-scrim {
+  background:
+    linear-gradient(
+      180deg,
+      rgba(10, 8, 18, 0.58) 0%,
+      rgba(10, 8, 18, 0.68) 52%,
+      rgba(10, 8, 18, 0.78) 100%
+    ),
+    radial-gradient(
+      circle at 72% 18%,
+      rgba(217, 107, 255, 0.14) 0%,
+      rgba(11, 10, 16, 0) 54%
+    );
+}
+
+/* =========================================================================
+   Single-Screen Home Layout
+   ========================================================================= */
+.zzz-home {
+  position: relative;
+  isolation: isolate;
+  min-height: 100dvh;
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow-x: clip;
+}
+
+.has-demo-banner .zzz-home {
+  min-height: calc(100dvh - 46px);
+}
+
+.zzz-shell {
+  position: relative;
+  z-index: 2;
+  flex: 1 0 auto;
+  width: 100%;
+  max-width: 1360px;
+  margin: 0 auto;
+  padding: max(22px, env(safe-area-inset-top)) clamp(20px, 5vw, 72px) max(28px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+}
+
+/* Minimal Top-Left Glass Brand Pill */
+.zzz-topbar {
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  flex: 0 0 auto;
+}
+
+.zzz-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 11px;
+  padding: 7px 16px 7px 9px;
+  border-radius: 14px;
+  text-decoration: none;
+  color: #f4f2fa;
+  background: linear-gradient(145deg, rgba(22, 18, 36, 0.58) 0%, rgba(12, 10, 22, 0.48) 100%);
+  border: 1px solid rgba(242, 167, 255, 0.24);
+  box-shadow:
+    0 14px 32px -16px rgba(4, 3, 10, 0.72),
+    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
+  transition: border-color 160ms var(--ease-mech), transform 160ms var(--ease-mech);
+}
+
+.zzz-brand:hover {
+  border-color: rgba(242, 167, 255, 0.44);
+  transform: translateY(-1px);
+}
+
+.zzz-brand:focus-visible {
+  outline: 2px solid var(--accent-2);
+  outline-offset: 2px;
+}
+
+.zzz-brand-emblem {
+  width: 34px;
+  height: 34px;
+  object-fit: contain;
+  flex: 0 0 auto;
+  filter: drop-shadow(0 2px 10px rgba(217, 107, 255, 0.42));
+}
+
+.zzz-brand-copy {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+}
+
+.zzz-brand-title {
+  font-size: 14.5px;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  color: #f4f2fa;
+}
+
+.zzz-brand-sub {
+  font-size: 11.5px;
+  line-height: 1.2;
+  color: rgba(242, 167, 255, 0.88);
+}
+
+/* Hero Main Stage */
+.zzz-stage {
+  flex: 1 0 auto;
+  display: flex;
+  align-items: center;
+  justify-content: flex-start;
+  padding: 28px 0 24px;
+}
+
+.zzz-hero-stack {
+  width: 100%;
+  max-width: 520px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+/* Frosted Glass Redeem Card */
+.zzz-glass-card {
+  position: relative;
+  padding: 30px 28px 24px;
+  border-radius: 20px;
+  background: linear-gradient(
+    155deg,
+    rgba(24, 19, 38, 0.62) 0%,
+    rgba(13, 11, 23, 0.56) 100%
+  );
+  border: 1px solid rgba(242, 167, 255, 0.24);
+  box-shadow:
+    0 28px 64px -24px rgba(4, 3, 10, 0.82),
+    0 0 38px -16px rgba(217, 107, 255, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18),
+    inset 0 -1px 0 rgba(217, 107, 255, 0.10);
+  backdrop-filter: blur(24px) saturate(155%);
+  -webkit-backdrop-filter: blur(24px) saturate(155%);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.zzz-glass-card::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  left: 24px;
+  right: 24px;
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    rgba(242, 167, 255, 0) 0%,
+    rgba(242, 167, 255, 0.55) 50%,
+    rgba(242, 167, 255, 0) 100%
+  );
+  pointer-events: none;
+}
+
+.zzz-heading-block {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.zzz-hero-title {
+  margin: 0;
+  font-size: clamp(28px, 3.1vw, 38px);
+  font-weight: 800;
+  line-height: 1.12;
+  letter-spacing: -0.025em;
+  color: #ffffff;
+  text-shadow: 0 6px 24px rgba(10, 8, 18, 0.45);
+}
+
+.zzz-hero-subhead {
+  margin: 0;
+  font-size: clamp(17px, 1.7vw, 20px);
+  font-weight: 700;
+  line-height: 1.35;
+  color: #f2a7ff;
+}
+
+.zzz-hero-lead {
+  margin: 2px 0 0;
+  font-size: 14.5px;
+  line-height: 1.65;
+  color: #ddd6ec;
+}
+
+/* Redeem Form */
+.zzz-form {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.zzz-field-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: #f4f2fa;
+}
+
+.zzz-field-label svg {
+  color: #f2a7ff;
+  flex: 0 0 auto;
+}
+
+.zzz-input-row {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.zzz-input {
+  width: 100%;
+  min-height: 48px;
+  padding: 0 15px;
+  border-radius: 12px;
+  font-size: 14.5px;
+  color: #f4f2fa;
+  background: rgba(9, 7, 17, 0.62);
+  border: 1px solid rgba(242, 167, 255, 0.24);
+  box-shadow: inset 0 2px 8px rgba(4, 3, 10, 0.45);
+  transition: border-color 150ms var(--ease-mech), box-shadow 150ms var(--ease-mech), background-color 150ms var(--ease-mech);
+}
+
+.zzz-input::placeholder {
+  color: rgba(206, 196, 226, 0.56);
+}
+
+.zzz-input:hover {
+  border-color: rgba(242, 167, 255, 0.38);
+}
+
+.zzz-input:focus {
+  outline: none;
+  background: rgba(11, 9, 20, 0.78);
+  border-color: #d96bff;
+  box-shadow:
+    0 0 0 3px rgba(217, 107, 255, 0.22),
+    inset 0 2px 8px rgba(4, 3, 10, 0.45);
+}
+
+.zzz-input.is-error {
+  border-color: rgba(255, 110, 148, 0.8);
+  box-shadow: 0 0 0 3px rgba(255, 110, 148, 0.18);
+}
+
+.zzz-submit-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 48px;
+  padding: 0 20px;
+  border: none;
+  border-radius: 12px;
+  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
+  background: linear-gradient(105deg, #e796ff 0%, #d45eff 55%, #f4b6ff 100%);
+  color: #130b1d;
+  font-size: 15.5px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  box-shadow: 0 14px 30px -12px rgba(217, 107, 255, 0.65);
+  transition: transform 150ms var(--ease-mech), filter 150ms var(--ease-mech), box-shadow 150ms var(--ease-mech);
+}
+
+.zzz-submit-btn:hover {
+  transform: translateY(-1px);
+  filter: brightness(1.06);
+  box-shadow: 0 18px 34px -12px rgba(217, 107, 255, 0.8);
+}
+
+.zzz-submit-btn:active {
+  transform: translateY(0) scale(0.99);
+}
+
+.zzz-submit-btn:focus-visible {
+  outline: 2px solid #f4f2fa;
+  outline-offset: 2px;
+}
+
+.zzz-field-error {
+  font-size: 13px;
+  line-height: 1.5;
+  color: #ff9cb6;
+  padding: 8px 12px;
+  border-radius: 10px;
+  background: rgba(145, 24, 58, 0.28);
+  border: 1px solid rgba(255, 110, 148, 0.35);
+}
+
+.zzz-card-note {
+  margin: 0;
+  padding-top: 14px;
+  border-top: 1px solid rgba(255, 255, 255, 0.09);
+  font-size: 13px;
+  line-height: 1.5;
+  color: rgba(216, 207, 232, 0.78);
+}
+
+/* Demo Shortcuts Glass Tray (?demo=1 only) */
+.zzz-demo-card {
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: rgba(16, 13, 28, 0.58);
+  border: 1px solid rgba(242, 167, 255, 0.20);
+  box-shadow:
+    0 18px 40px -20px rgba(4, 3, 10, 0.78),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  backdrop-filter: blur(20px) saturate(145%);
+  -webkit-backdrop-filter: blur(20px) saturate(145%);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.zzz-demo-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #e6dcf7;
+}
+
+.zzz-demo-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.zzz-demo-pill {
+  display: inline-flex;
+  align-items: center;
+  min-height: 30px;
+  padding: 4px 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: #eae4f7;
+  text-decoration: none;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(242, 167, 255, 0.22);
+  transition: background-color 140ms var(--ease-mech), border-color 140ms var(--ease-mech), color 140ms var(--ease-mech);
+}
+
+.zzz-demo-pill:hover {
+  background: rgba(217, 107, 255, 0.22);
+  border-color: rgba(242, 167, 255, 0.5);
+  color: #ffffff;
+}
+
+/* =========================================================================
+   Responsive (Mobile 390x844 & Tablet)
+   ========================================================================= */
+@media (max-width: 768px) {
+  .buyer-wallpaper--hero .buyer-wallpaper-video,
+  .buyer-wallpaper--hero .buyer-wallpaper-poster {
+    object-position: 54% 16%;
+  }
+
+  .buyer-wallpaper--hero .buyer-wallpaper-scrim {
+    background:
+      linear-gradient(
+        180deg,
+        rgba(10, 8, 18, 0.42) 0%,
+        rgba(10, 8, 18, 0.16) 24%,
+        rgba(10, 8, 18, 0.56) 52%,
+        rgba(10, 8, 18, 0.80) 100%
+      );
+  }
+
+  .zzz-shell {
+    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+  }
+
+  .zzz-stage {
+    align-items: flex-end;
+    justify-content: center;
+    padding: 150px 0 8px;
+  }
+
+  .zzz-hero-stack {
+    max-width: 100%;
+  }
+
+  .zzz-glass-card {
+    padding: 22px 18px 18px;
+    border-radius: 18px;
+    gap: 16px;
+    background: linear-gradient(
+      160deg,
+      rgba(22, 18, 36, 0.70) 0%,
+      rgba(12, 10, 22, 0.66) 100%
+    );
+  }
+
+  .zzz-hero-title {
+    font-size: 26px;
+  }
+
+  .zzz-hero-subhead {
+    font-size: 16.5px;
+  }
+
+  .zzz-hero-lead {
+    font-size: 13.5px;
+  }
+}
+
+.buyer-page .btn-primary:disabled,
+.buyer-page .btn-primary[aria-disabled="true"] {
+  opacity: 1;
+  background: rgba(217, 107, 255, 0.16);
+  color: rgba(244, 240, 255, 0.58);
+  border-color: rgba(242, 167, 255, 0.24);
+  box-shadow: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .zzz-brand,
+  .zzz-input,
+  .zzz-submit-btn,
+  .zzz-demo-pill {
+    transition: none;
+  }
+}

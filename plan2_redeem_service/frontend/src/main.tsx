@@ -5,6 +5,7 @@ import { App } from "./App";
 import { syncDemoModeFromLocation } from "./api/client";
 import { ToastProvider } from "./components/ToastProvider";
 import "./styles/theme.css";
+import "./styles/zzz-landing.css";
 
 syncDemoModeFromLocation();
 

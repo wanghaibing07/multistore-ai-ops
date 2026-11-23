@@ -286,7 +286,7 @@ export function AdminOverviewPage({
       </section>
 
       <section className="stack-sm" aria-label="订单状态统计">
-        <div className="row-between">
+        <div className="admin-section-bar">
           <h2 className="card-title" style={{ fontSize: 16 }}>
             订单处理进度
           </h2>

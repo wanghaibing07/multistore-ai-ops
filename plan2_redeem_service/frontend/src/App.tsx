@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Link, Route, Routes, useLocation, useNavigate } from "react-router-dom";
 import { ArrowLeft, Compass, TicketCheck } from "lucide-react";
 import { isDemoMode, setDemoMode, syncDemoModeFromLocation } from "./api/client";
+import { BuyerWallpaper } from "./components/BuyerWallpaper";
 import { HomePage } from "./pages/HomePage";
 import { RedeemPage } from "./pages/RedeemPage";
 import { AdminPage } from "./pages/admin/AdminPage";
@@ -9,13 +10,14 @@ import { AdminPage } from "./pages/admin/AdminPage";
 function NotFoundPage() {
   return (
     <div className="buyer-page">
+      <BuyerWallpaper variant="detail" />
       <div className="buyer-container">
         <header className="buyer-topbar">
           <Link to="/" className="brand-lockup">
             <span className="brand-mark" aria-hidden="true">
               <TicketCheck size={18} />
             </span>
-            <span>VEO3 Ultra x20 自助提货</span>
+            <span>Google AI Ultra 20x 自助提货</span>
           </Link>
         </header>
 
@@ -66,7 +68,7 @@ export function App() {
   };
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell ${demoActive ? "has-demo-banner" : ""}`}>
       {demoActive && (
         <div className="demo-banner" role="region" aria-label="本地演练模式提示">
           <div className="demo-banner-inner">

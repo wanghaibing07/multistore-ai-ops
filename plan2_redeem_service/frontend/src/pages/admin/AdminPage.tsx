@@ -16,12 +16,14 @@ import {
 } from "../../api/client";
 import { useToast } from "../../components/ToastProvider";
 import type { AdminOverviewResponse, CodeStatus } from "../../types/api";
+import "../../styles/admin-glass.css";
 import { AdminIssuePage } from "./AdminIssuePage";
 import { AdminLoginPage } from "./AdminLoginPage";
 import { AdminOrderDrawer } from "./AdminOrderDrawer";
 import { AdminOrdersPage } from "./AdminOrdersPage";
 import { AdminOverviewPage } from "./AdminOverviewPage";
 import { AdminSettingsPage } from "./AdminSettingsPage";
+import { AdminWallpaperBackdrop } from "./AdminWallpaperBackdrop";
 
 const ADMIN_TOKEN_STORAGE_KEY = "plan2_admin_token";
 
@@ -196,20 +198,25 @@ export function AdminPage() {
     }
   };
 
-  if (checkingSession) {
+  const isAuthenticated = Boolean(!checkingSession && token && overview);
+
+  if (!isAuthenticated || !token || !overview) {
     return (
-      <div className="login-shell">
-        <div className="login-card card stack">
-          <div className="skeleton" style={{ height: 26, width: "55%" }} />
-          <div className="skeleton" style={{ height: 18, width: "80%" }} />
-          <div className="skeleton" style={{ height: 48, width: "100%" }} />
-        </div>
+      <div className="admin-glass-stage">
+        <AdminWallpaperBackdrop variant="login" />
+        {checkingSession ? (
+          <div className="login-shell">
+            <div className="login-card card admin-login-panel stack">
+              <div className="skeleton" style={{ height: 26, width: "55%" }} />
+              <div className="skeleton" style={{ height: 18, width: "80%" }} />
+              <div className="skeleton" style={{ height: 48, width: "100%" }} />
+            </div>
+          </div>
+        ) : (
+          <AdminLoginPage embeddedBackdrop onAuthenticated={handleAuthenticated} />
+        )}
       </div>
     );
-  }
-
-  if (!token || !overview) {
-    return <AdminLoginPage onAuthenticated={handleAuthenticated} />;
   }
 
   const navItems: Array<{
@@ -231,7 +238,9 @@ export function AdminPage() {
   const modeLabel = overview.execution_mode === "live" ? "生产模式" : "演练模式";
 
   return (
-    <div className="admin-shell">
+    <div className="admin-glass-stage">
+      <AdminWallpaperBackdrop variant="workspace" />
+      <div className="admin-shell">
       <aside className="admin-rail" aria-label="商家后台侧栏">
         <div className="admin-rail-top-mobile">
           <Link
@@ -376,6 +385,7 @@ export function AdminPage() {
         onUnauthorized={handleUnauthorized}
         onMutated={handleDataMutated}
       />
+      </div>
     </div>
   );
 }

@@ -24,6 +24,7 @@ import {
   refreshPublicCode,
   submitPublicWarranty,
 } from "../api/client";
+import { BuyerWallpaper } from "../components/BuyerWallpaper";
 import { CopyButton } from "../components/CopyButton";
 import { GmailDoubleInput } from "../components/GmailDoubleInput";
 import { ToneBadge } from "../components/StatusBadge";
@@ -410,6 +411,7 @@ export function RedeemPage() {
 
   return (
     <div className="buyer-page">
+      <BuyerWallpaper variant="detail" />
       <div className="buyer-container">
         <header className="buyer-topbar">
           <Link to="/" className="brand-lockup">
@@ -628,7 +630,7 @@ export function RedeemPage() {
                     onEmailChange={setBuyerEmail}
                     disabled={submittingRedeem}
                     primaryLabel="收家庭组邀请的 Gmail"
-                    warningText="别输错邮箱！提交后系统立刻排单，改不了邮箱，点提交前看清拼写。"
+                    warningText="别输错邮箱！提交后会立刻开始安排拉人，改不了邮箱，点提交前看清拼写。"
                   />
 
                   <div className="presubmit-card" aria-live="polite">
@@ -682,7 +684,7 @@ export function RedeemPage() {
                   <div>
                     <strong>已经排上队了，等发邀请就行</strong>
                     <div style={{ marginTop: 4 }}>
-                      一般 1~6 小时内拉人，最晚 24 小时。系统每 20 分钟自动查一次上游进度，本页也会自动刷新，建议收藏链接随时回来看。
+                      一般 1~6 小时内拉人，最晚 24 小时。页面会自动刷新进度，建议收藏链接随时回来看。
                     </div>
                   </div>
                 </div>

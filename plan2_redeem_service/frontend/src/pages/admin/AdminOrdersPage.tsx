@@ -190,7 +190,7 @@ export function AdminOrdersPage({
         </div>
       </header>
 
-      <div className="stack-sm">
+      <section className="admin-toolbar-glass stack-sm" aria-label="订单筛选工具栏">
         <div className="pill-scroller" role="tablist" aria-label="按订单状态筛选">
           {STATUS_TABS.map((tab) => (
             <button
@@ -256,7 +256,7 @@ export function AdminOrdersPage({
             <span>筛选</span>
           </button>
         </form>
-      </div>
+      </section>
 
       {error && (
         <div className="callout callout-danger" role="alert">
@@ -428,7 +428,7 @@ export function AdminOrdersPage({
           </div>
 
           {totalPages > 1 && (
-            <div className="row-between">
+            <div className="row-between admin-pagination-bar">
               <span style={{ fontSize: 13, color: "var(--ink-3)" }}>
                 第 {page} / {totalPages} 页 · 共 {total} 条
               </span>

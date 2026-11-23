@@ -4,12 +4,15 @@ import { AlertCircle, ArrowLeft, Eye, EyeOff, KeyRound, Loader2, ShieldCheck } f
 import { ApiError, getAdminOverview, isDemoMode } from "../../api/client";
 import type { AdminOverviewResponse } from "../../types/api";
 import { isImeComposing } from "../../utils/ime";
+import "../../styles/admin-glass.css";
+import { AdminWallpaperBackdrop } from "./AdminWallpaperBackdrop";
 
 interface AdminLoginPageProps {
   onAuthenticated: (token: string, initialOverview: AdminOverviewResponse) => void;
+  embeddedBackdrop?: boolean;
 }
 
-export function AdminLoginPage({ onAuthenticated }: AdminLoginPageProps) {
+export function AdminLoginPage({ onAuthenticated, embeddedBackdrop = false }: AdminLoginPageProps) {
   const [token, setToken] = useState("");
   const [showToken, setShowToken] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -52,7 +55,7 @@ export function AdminLoginPage({ onAuthenticated }: AdminLoginPageProps) {
     }
   };
 
-  return (
+  const content = (
     <div className="login-shell">
       <div className="login-card stack">
         <div className="row-between">
@@ -63,9 +66,9 @@ export function AdminLoginPage({ onAuthenticated }: AdminLoginPageProps) {
           {demo && <span className="badge badge-accent">本地演练模式</span>}
         </div>
 
-        <form className="card stack" onSubmit={handleSubmit} noValidate>
-          <div className="row">
-            <span className="brand-mark" aria-hidden="true">
+        <form className="card admin-login-panel stack" onSubmit={handleSubmit} noValidate>
+          <div className="admin-login-head">
+            <span className="admin-login-emblem" aria-hidden="true">
               <ShieldCheck size={18} />
             </span>
             <div>
@@ -144,6 +147,17 @@ export function AdminLoginPage({ onAuthenticated }: AdminLoginPageProps) {
           </p>
         </form>
       </div>
+    </div>
+  );
+
+  if (embeddedBackdrop) {
+    return content;
+  }
+
+  return (
+    <div className="admin-glass-stage">
+      <AdminWallpaperBackdrop variant="login" />
+      {content}
     </div>
   );
 }

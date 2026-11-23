@@ -1,7 +1,8 @@
-import { useState, type FormEvent, type KeyboardEvent } from "react";
+import { useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import { ArrowRight, KeyRound, ShieldCheck, TicketCheck, Users } from "lucide-react";
+import { ArrowRight, KeyRound } from "lucide-react";
 import { isDemoMode } from "../api/client";
+import { BuyerWallpaper } from "../components/BuyerWallpaper";
 import { isImeComposing } from "../utils/ime";
 import { extractRedeemCode } from "../utils/validation";
 
@@ -20,13 +21,15 @@ const DEMO_SHORTCUTS = [
 export function HomePage() {
   const [rawInput, setRawInput] = useState("");
   const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement | null>(null);
   const navigate = useNavigate();
   const demo = isDemoMode();
 
   const submitLookup = () => {
     const extracted = extractRedeemCode(rawInput);
     if (!extracted || extracted.length < 4) {
-      setError("请输入有效的兑换码，或者直接粘贴客服发给你的整条提货链接");
+      setError("请输入有效的兑换码，或者直接粘贴客服发给你的提货链接");
+      inputRef.current?.focus();
       return;
     }
     setError(null);
@@ -46,108 +49,94 @@ export function HomePage() {
   };
 
   return (
-    <div className="buyer-page">
-      <div className="buyer-container">
-        <header className="buyer-topbar">
-          <Link to="/" className="brand-lockup">
-            <span className="brand-mark" aria-hidden="true">
-              <TicketCheck size={18} />
+    <div className="zzz-home">
+      <BuyerWallpaper variant="hero" />
+
+      <div className="zzz-shell">
+        <header className="zzz-topbar">
+          <Link to="/" className="zzz-brand">
+            <img
+              src="/assets/generated/sticker-butterfly-emblem.png"
+              alt=""
+              aria-hidden="true"
+              className="zzz-brand-emblem"
+            />
+            <span className="zzz-brand-copy">
+              <span className="zzz-brand-title">Google AI Ultra 20x</span>
+              <span className="zzz-brand-sub">自助提货</span>
             </span>
-            <span>Google AI Ultra 20x 自助提货</span>
           </Link>
         </header>
 
-        <main className="card stack">
-          <div>
-            <h1 className="card-title" style={{ fontSize: 22 }}>
-              输入兑换码，立即提货或查进度
-            </h1>
-            <p className="card-subtitle">
-              淘宝、16688 订单都能用。直接粘贴客服发的整段消息或链接，系统会自动认出兑换码。
-            </p>
-          </div>
+        <main className="zzz-stage">
+          <div className="zzz-hero-stack">
+            <section className="zzz-glass-card" aria-labelledby="home-hero-heading">
+              <div className="zzz-heading-block">
+                <h1 id="home-hero-heading" className="zzz-hero-title">
+                  Google AI Ultra 20x
+                </h1>
+                <p className="zzz-hero-subhead">输入兑换码，立即提货或查进度</p>
+                <p className="zzz-hero-lead">
+                  粘贴客服发给你的兑换码或提货链接，系统会自动识别。
+                </p>
+              </div>
 
-          <form onSubmit={handleSubmit} className="stack">
-            <div className="field-group">
-              <label className="field-label" htmlFor="redeem-code-input">
-                <span>兑换码或提货链接</span>
-                <span className="field-hint">自动识别兑换码</span>
-              </label>
-              <input
-                id="redeem-code-input"
-                type="text"
-                enterKeyHint="go"
-                autoComplete="off"
-                spellCheck={false}
-                aria-invalid={Boolean(error) || undefined}
-                aria-describedby={error ? "redeem-code-error" : undefined}
-                className={`input mono ${error ? "input-error" : ""}`}
-                placeholder="例如：U20S-8K3M-9P2Q 或整条提货链接"
-                value={rawInput}
-                onKeyDown={handleKeyDown}
-                onChange={(event) => {
-                  setRawInput(event.target.value);
-                  if (error) setError(null);
-                }}
-              />
-              {error ? (
-                <div id="redeem-code-error" className="field-error" role="alert">
-                  {error}
+              <form onSubmit={handleSubmit} className="zzz-form" noValidate>
+                <label htmlFor="redeem-code-input" className="zzz-field-label">
+                  <KeyRound size={15} aria-hidden="true" />
+                  <span>兑换码或提货链接</span>
+                </label>
+
+                <div className="zzz-input-row">
+                  <input
+                    ref={inputRef}
+                    id="redeem-code-input"
+                    type="text"
+                    enterKeyHint="go"
+                    autoComplete="off"
+                    spellCheck={false}
+                    aria-invalid={Boolean(error) || undefined}
+                    aria-describedby={error ? "redeem-code-error" : undefined}
+                    className={`zzz-input mono ${error ? "is-error" : ""}`}
+                    placeholder="例如：U20S-8K3M-9P2Q 或直接粘贴链接"
+                    value={rawInput}
+                    onKeyDown={handleKeyDown}
+                    onChange={(event) => {
+                      setRawInput(event.target.value);
+                      if (error) setError(null);
+                    }}
+                  />
+
+                  <button type="submit" className="zzz-submit-btn">
+                    <span>查进度 / 去提货</span>
+                    <ArrowRight size={17} aria-hidden="true" />
+                  </button>
                 </div>
-              ) : null}
-            </div>
 
-            <button type="submit" className="btn btn-primary btn-lg btn-block">
-              <KeyRound size={17} />
-              <span>查进度 / 去提货</span>
-              <ArrowRight size={17} />
-            </button>
-          </form>
+                {error ? (
+                  <div id="redeem-code-error" className="zzz-field-error" role="alert">
+                    {error}
+                  </div>
+                ) : null}
+              </form>
 
-          <div className="sku-ledger" aria-label="两种规格说明">
-            <div className="sku-ledger-row">
-              <div className="sku-ledger-head">
-                <span className="sku-ledger-icon slot" aria-hidden="true">
-                  <Users size={15} />
-                </span>
-                <span className="sku-tag sku-tag-shared">共享车位</span>
-              </div>
-              <p className="sku-ledger-desc">
-                填你的 Gmail 等拉人，一般 1~6 小时、最晚 24 小时，随时回本页看进度。
-              </p>
-            </div>
-            <div className="sku-ledger-row">
-              <div className="sku-ledger-head">
-                <span className="sku-ledger-icon account" aria-hidden="true">
-                  <ShieldCheck size={15} />
-                </span>
-                <span className="sku-tag sku-tag-exclusive">独享整组</span>
-              </div>
-              <p className="sku-ledger-desc">
-                先领商店邮箱，用你主力 Gmail 建家庭组邀请它，再传截图交保修。
-              </p>
-            </div>
+              <p className="zzz-card-note">提货后可收藏专属链接，随时回来查进度</p>
+            </section>
+
+            {demo ? (
+              <section className="zzz-demo-card" aria-label="演示模式快捷入口">
+                <div className="zzz-demo-title">演练快捷入口（本地模拟，不会扣钱）</div>
+                <div className="zzz-demo-pills">
+                  {DEMO_SHORTCUTS.map((item) => (
+                    <Link key={item.code} to={`/r/${item.code}`} className="zzz-demo-pill">
+                      {item.label}
+                    </Link>
+                  ))}
+                </div>
+              </section>
+            ) : null}
           </div>
         </main>
-
-        {demo ? (
-          <section className="card card-compact stack-sm" aria-label="演示模式快捷入口">
-            <div className="row-between">
-              <strong style={{ fontSize: 13.5 }}>演练快捷入口（本地模拟，不扣钱）</strong>
-            </div>
-            <div className="pill-scroller">
-              {DEMO_SHORTCUTS.map((item) => (
-                <Link key={item.code} to={`/r/${item.code}`} className="filter-pill">
-                  {item.label}
-                </Link>
-              ))}
-            </div>
-          </section>
-        ) : null}
-
-        <footer className="footer-links">
-          <span>提货后建议收藏专属链接，随时回来查进度</span>
-        </footer>
       </div>
     </div>
   );
