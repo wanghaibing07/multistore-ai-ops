@@ -2,12 +2,9 @@ import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { App } from "./App";
-import { syncDemoModeFromLocation } from "./api/client";
 import { ToastProvider } from "./components/ToastProvider";
 import "./styles/theme.css";
 import "./styles/zzz-landing.css";
-
-syncDemoModeFromLocation();
 
 const rootElement = document.getElementById("root");
 if (!rootElement) {

@@ -87,10 +87,6 @@ export function getUpstreamStatusLabel(status: string | null | undefined): strin
       return "上游已取消";
     case "refunded":
       return "上游已退款";
-    case "dry_run_paid":
-      return "演练已付款";
-    case "dry_run_delivered":
-      return "演练已发货";
     default:
       return status;
   }

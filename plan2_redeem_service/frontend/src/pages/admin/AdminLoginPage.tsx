@@ -1,7 +1,7 @@
 import { useId, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link } from "react-router-dom";
-import { AlertCircle, ArrowLeft, Eye, EyeOff, KeyRound, Loader2, ShieldCheck } from "lucide-react";
-import { ApiError, getAdminOverview, isDemoMode } from "../../api/client";
+import { AlertCircle, ArrowLeft, Eye, EyeOff, Loader2, ShieldCheck } from "lucide-react";
+import { ApiError, getAdminOverview } from "../../api/client";
 import type { AdminOverviewResponse } from "../../types/api";
 import { isImeComposing } from "../../utils/ime";
 import "../../styles/admin-glass.css";
@@ -19,17 +19,12 @@ export function AdminLoginPage({ onAuthenticated, embeddedBackdrop = false }: Ad
   const [error, setError] = useState<string | null>(null);
   const inputId = useId();
   const errorId = useId();
-  const demo = isDemoMode();
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const trimmed = token.trim();
     if (!trimmed) {
       setError("请输入管理口令");
-      return;
-    }
-    if (demo && trimmed.length < 4) {
-      setError("演练模式下至少输入 4 位字符");
       return;
     }
 
@@ -42,7 +37,7 @@ export function AdminLoginPage({ onAuthenticated, embeddedBackdrop = false }: Ad
       if (caught instanceof ApiError) {
         setError(caught.message || "管理口令不对，请重试");
       } else {
-        setError("连不上后台服务，请确认服务已启动或改用演练模式");
+        setError("连不上后台服务，请确认服务已启动");
       }
     } finally {
       setSubmitting(false);
@@ -63,7 +58,6 @@ export function AdminLoginPage({ onAuthenticated, embeddedBackdrop = false }: Ad
             <ArrowLeft size={15} />
             <span>返回买家提货页</span>
           </Link>
-          {demo && <span className="badge badge-accent">本地演练模式</span>}
         </div>
 
         <form className="card admin-login-panel stack" onSubmit={handleSubmit} noValidate>
@@ -77,15 +71,6 @@ export function AdminLoginPage({ onAuthenticated, embeddedBackdrop = false }: Ad
             </div>
           </div>
 
-          {demo && (
-            <div className="callout callout-info">
-              <KeyRound size={17} className="callout-icon" aria-hidden="true" />
-              <div>
-                演练模式已开启：输入任意 4 位以上字符（例如 <strong>demo-admin</strong>）就能进后台体验发码、查单、保修和价格保护流程。
-              </div>
-            </div>
-          )}
-
           <div className="field-group">
             <label htmlFor={inputId} className="field-label">
               <span>管理口令</span>
@@ -96,7 +81,7 @@ export function AdminLoginPage({ onAuthenticated, embeddedBackdrop = false }: Ad
                 id={inputId}
                 type={showToken ? "text" : "password"}
                 className={`input input-with-action ${error ? "input-error" : ""}`}
-                placeholder={demo ? "例如：demo-admin" : "请输入后台配置的管理口令"}
+                placeholder="请输入后台配置的管理口令"
                 autoComplete="current-password"
                 enterKeyHint="go"
                 value={token}

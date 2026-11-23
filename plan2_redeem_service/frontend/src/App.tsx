@@ -1,7 +1,5 @@
-import { useEffect, useState } from "react";
-import { Link, Route, Routes, useLocation, useNavigate } from "react-router-dom";
+import { Link, Route, Routes } from "react-router-dom";
 import { ArrowLeft, Compass, TicketCheck } from "lucide-react";
-import { isDemoMode, setDemoMode, syncDemoModeFromLocation } from "./api/client";
 import { BuyerWallpaper } from "./components/BuyerWallpaper";
 import { HomePage } from "./pages/HomePage";
 import { RedeemPage } from "./pages/RedeemPage";
@@ -42,47 +40,8 @@ function NotFoundPage() {
 }
 
 export function App() {
-  const location = useLocation();
-  const navigate = useNavigate();
-  const [demoActive, setDemoActive] = useState<boolean>(() => isDemoMode());
-
-  useEffect(() => {
-    const synced = syncDemoModeFromLocation();
-    setDemoActive(synced);
-  }, [location.search]);
-
-  const handleExitDemo = () => {
-    setDemoMode(false);
-    setDemoActive(false);
-    const params = new URLSearchParams(location.search);
-    params.delete("demo");
-    const nextSearch = params.toString();
-    navigate(
-      {
-        pathname: location.pathname,
-        search: nextSearch ? `?${nextSearch}` : "",
-      },
-      { replace: true }
-    );
-    window.location.reload();
-  };
-
   return (
-    <div className={`app-shell ${demoActive ? "has-demo-banner" : ""}`}>
-      {demoActive && (
-        <div className="demo-banner" role="region" aria-label="本地演练模式提示">
-          <div className="demo-banner-inner">
-            <span className="demo-banner-text">
-              <span className="demo-pill-dot" aria-hidden="true" />
-              <span>正在用本地演练数据，不会真的下单或扣钱。</span>
-            </span>
-            <button type="button" className="demo-banner-action" onClick={handleExitDemo}>
-              退出演练
-            </button>
-          </div>
-        </div>
-      )}
-
+    <div className="app-shell">
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/r/:code" element={<RedeemPage />} />

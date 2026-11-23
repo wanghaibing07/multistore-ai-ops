@@ -9,7 +9,7 @@
   position: relative;
   flex: 1 0 auto;
   width: 100%;
-  min-height: calc(100dvh - var(--demo-banner-h, 0px));
+  min-height: 100dvh;
   display: flex;
   flex-direction: column;
   min-width: 0;
@@ -175,7 +175,7 @@
 .admin-glass-stage .login-shell {
   position: relative;
   flex: 1 0 auto;
-  min-height: calc(100dvh - var(--demo-banner-h, 0px));
+  min-height: 100dvh;
   background: transparent;
   background-image: none;
 }
@@ -274,12 +274,12 @@
 .admin-glass-stage .admin-shell {
   position: relative;
   background: transparent;
-  min-height: calc(100dvh - var(--demo-banner-h, 0px));
+  min-height: 100dvh;
 }
 
 .admin-glass-stage .admin-rail {
-  top: var(--demo-banner-h, 0px);
-  height: calc(100dvh - var(--demo-banner-h, 0px));
+  top: 0;
+  height: 100dvh;
   background: var(--glass-rail-bg);
   border-right: 1px solid var(--glass-border);
   box-shadow:
@@ -329,12 +329,6 @@
 
 .admin-glass-stage .admin-rail-footer {
   border-top-color: rgba(242, 167, 255, 0.15);
-}
-
-.admin-glass-stage .rail-mode-pill {
-  background: rgba(16, 13, 28, 0.68);
-  border-color: rgba(242, 167, 255, 0.17);
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.07);
 }
 
 /* =========================================================================
@@ -766,7 +760,7 @@
    ========================================================================= */
 @media (max-width: 860px) {
   .admin-glass-stage .admin-rail {
-    top: var(--demo-banner-h, 0px);
+    top: 0;
     height: auto;
     border-right: 0;
     border-bottom: 1px solid var(--glass-border);

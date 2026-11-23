@@ -86,10 +86,6 @@
   overflow-x: clip;
 }
 
-.has-demo-banner .zzz-home {
-  min-height: calc(100dvh - 46px);
-}
-
 .zzz-shell {
   position: relative;
   z-index: 2;
@@ -371,54 +367,6 @@
   color: rgba(216, 207, 232, 0.78);
 }
 
-/* Demo Shortcuts Glass Tray (?demo=1 only) */
-.zzz-demo-card {
-  padding: 16px 18px;
-  border-radius: 16px;
-  background: rgba(16, 13, 28, 0.58);
-  border: 1px solid rgba(242, 167, 255, 0.20);
-  box-shadow:
-    0 18px 40px -20px rgba(4, 3, 10, 0.78),
-    inset 0 1px 0 rgba(255, 255, 255, 0.12);
-  backdrop-filter: blur(20px) saturate(145%);
-  -webkit-backdrop-filter: blur(20px) saturate(145%);
-  display: flex;
-  flex-direction: column;
-  gap: 10px;
-}
-
-.zzz-demo-title {
-  font-size: 12.5px;
-  font-weight: 600;
-  color: #e6dcf7;
-}
-
-.zzz-demo-pills {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.zzz-demo-pill {
-  display: inline-flex;
-  align-items: center;
-  min-height: 30px;
-  padding: 4px 11px;
-  border-radius: 999px;
-  font-size: 12px;
-  color: #eae4f7;
-  text-decoration: none;
-  background: rgba(255, 255, 255, 0.06);
-  border: 1px solid rgba(242, 167, 255, 0.22);
-  transition: background-color 140ms var(--ease-mech), border-color 140ms var(--ease-mech), color 140ms var(--ease-mech);
-}
-
-.zzz-demo-pill:hover {
-  background: rgba(217, 107, 255, 0.22);
-  border-color: rgba(242, 167, 255, 0.5);
-  color: #ffffff;
-}
-
 /* =========================================================================
    Responsive (Mobile 390x844 & Tablet)
    ========================================================================= */
@@ -489,8 +437,7 @@
 @media (prefers-reduced-motion: reduce) {
   .zzz-brand,
   .zzz-input,
-  .zzz-submit-btn,
-  .zzz-demo-pill {
+  .zzz-submit-btn {
     transition: none;
   }
 }

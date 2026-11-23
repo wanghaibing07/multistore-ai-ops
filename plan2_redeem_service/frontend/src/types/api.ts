@@ -1,7 +1,6 @@
 export type SkuKey = "ultra_shared_slot" | "ultra_exclusive_admin";
 export type ProductType = "slot" | "account";
 export type Channel = "taobao" | "16688";
-export type ExecutionMode = "dry_run" | "live";
 
 export type CodeStatus =
   | "unused"
@@ -111,7 +110,6 @@ export interface AdminOverviewCounts {
 }
 
 export interface AdminOverviewResponse {
-  execution_mode: ExecutionMode;
   public_base_url: string;
   canboso: AdminCanbosoStatus;
   skus: AdminSkuStatus[];

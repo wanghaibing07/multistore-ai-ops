@@ -47,8 +47,6 @@
   --rail-accent-ink: #f2a7ff;
   --rail-danger-bg: rgba(255, 107, 129, 0.22);
   --rail-danger-ink: #ffb3bf;
-  --rail-live-bg: rgba(217, 107, 255, 0.24);
-  --rail-live-ink: #f6c7ff;
 
   /* Semantic colors (high legibility on dark obsidian surfaces) */
   --up: #4de8a8;
@@ -95,7 +93,6 @@
   --z-drawer: 45;
   --z-toast: 60;
   --nav-h: 58px;
-  --demo-banner-h: 0px;
 
   /* Type */
   --font-display: "Bahnschrift", "DIN Alternate", "Segoe UI Variable Display", "HarmonyOS Sans SC", "PingFang SC", "Microsoft YaHei UI", sans-serif;
@@ -136,10 +133,6 @@ body {
   min-height: 100dvh;
   display: flex;
   flex-direction: column;
-}
-
-.app-shell.has-demo-banner {
-  --demo-banner-h: 46px;
 }
 
 ::selection {
@@ -213,80 +206,6 @@ p {
   clip-path: inset(50%);
   white-space: nowrap;
   border: 0;
-}
-
-/* =========================================================================
-   Demo Mode Banner
-   ========================================================================= */
-.demo-banner {
-  position: sticky;
-  top: 0;
-  z-index: 42;
-  min-height: 46px;
-  background: rgba(15, 12, 24, 0.96);
-  backdrop-filter: blur(10px);
-  color: var(--rail-ink-strong);
-  border-bottom: 1px solid var(--accent-border);
-  padding: 4px max(16px, env(safe-area-inset-left)) 4px max(16px, env(safe-area-inset-right));
-  font-size: 13px;
-}
-
-.demo-banner-inner {
-  max-width: 1200px;
-  margin: 0 auto;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  flex-wrap: wrap;
-}
-
-.demo-banner-text {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  color: var(--rail-ink);
-}
-
-.demo-pill-dot {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--rail-accent-ink);
-  flex: 0 0 auto;
-}
-
-.demo-banner-action {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  background: var(--rail-2);
-  color: var(--rail-ink-strong);
-  border: 1px solid var(--accent-border);
-  border-radius: 4px;
-  padding: 0 16px;
-  min-height: 34px;
-  font-size: 12.5px;
-  font-weight: 500;
-  cursor: pointer;
-  white-space: nowrap;
-  transition: background-color 140ms var(--ease-mech), border-color 140ms var(--ease-mech), transform 120ms var(--ease-mech);
-}
-
-.demo-banner-action:focus-visible {
-  outline: 2px solid var(--focus-ring-dark);
-  outline-offset: 2px;
-}
-
-@media (hover: hover) and (pointer: fine) {
-  .demo-banner-action:hover {
-    background: var(--rail-3);
-  }
-}
-
-.demo-banner-action:active {
-  transform: translateY(1px) scale(0.985);
 }
 
 /* =========================================================================
@@ -1577,7 +1496,7 @@ p {
   flex: 1 1 140px;
 }
 
-/* Demo pills scroller */
+/* Filter pills scroller */
 .pill-scroller {
   display: flex;
   align-items: center;
@@ -1891,37 +1810,6 @@ dialog.native-dialog::backdrop {
   display: flex;
   flex-direction: column;
   gap: 8px;
-}
-
-.rail-mode-pill {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 9px 11px;
-  border-radius: 10px;
-  background: var(--rail-2);
-  border: 1px solid var(--rail-border);
-  font-size: 12.5px;
-  color: var(--rail-ink);
-}
-
-.rail-mode-tag {
-  font-family: var(--font-mono);
-  font-size: 11.5px;
-  font-weight: 700;
-  padding: 2px 7px;
-  border-radius: var(--r-pill);
-}
-
-.rail-mode-tag.dry {
-  background: var(--rail-accent-soft);
-  color: var(--rail-accent-ink);
-}
-
-.rail-mode-tag.live {
-  background: var(--rail-live-bg);
-  color: var(--rail-live-ink);
 }
 
 .admin-workspace {

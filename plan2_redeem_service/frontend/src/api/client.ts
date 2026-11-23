@@ -15,9 +15,6 @@ import type {
   RedeemSlotRequest,
   SkuKey,
 } from "../types/api";
-import { demoMockStore, MockApiError } from "./mockServer";
-
-const DEMO_STORAGE_KEY = "plan2_demo_mode";
 
 export class ApiError extends Error {
   status: number;
@@ -28,42 +25,6 @@ export class ApiError extends Error {
     this.status = status;
     this.errorCode = errorCode;
   }
-}
-
-export function syncDemoModeFromLocation(): boolean {
-  if (typeof window === "undefined") return false;
-  const params = new URLSearchParams(window.location.search);
-  const flag = params.get("demo");
-  if (flag === "1" || flag === "true") {
-    sessionStorage.setItem(DEMO_STORAGE_KEY, "1");
-    return true;
-  }
-  if (flag === "0" || flag === "false") {
-    sessionStorage.removeItem(DEMO_STORAGE_KEY);
-    return false;
-  }
-  return sessionStorage.getItem(DEMO_STORAGE_KEY) === "1";
-}
-
-export function isDemoMode(): boolean {
-  if (typeof window === "undefined") return false;
-  return sessionStorage.getItem(DEMO_STORAGE_KEY) === "1";
-}
-
-export function setDemoMode(enabled: boolean): void {
-  if (typeof window === "undefined") return;
-  if (enabled) {
-    sessionStorage.setItem(DEMO_STORAGE_KEY, "1");
-  } else {
-    sessionStorage.removeItem(DEMO_STORAGE_KEY);
-  }
-}
-
-function mapMockError(error: unknown): never {
-  if (error instanceof MockApiError) {
-    throw new ApiError(error.status, error.errorCode, error.message);
-  }
-  throw error;
 }
 
 async function requestJson<T>(url: string, init: RequestInit = {}): Promise<T> {
@@ -121,13 +82,6 @@ function authHeaders(token: string, withJson = false): HeadersInit {
 }
 
 export async function getPublicCode(code: string): Promise<PublicCodeResponse> {
-  if (isDemoMode()) {
-    try {
-      return demoMockStore.getPublicCode(code);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   return requestJson<PublicCodeResponse>(`/api/v1/public/codes/${encodeURIComponent(code)}`);
 }
 
@@ -135,13 +89,6 @@ export async function redeemPublicCode(
   code: string,
   payload: RedeemSlotRequest | RedeemExclusiveRequest
 ): Promise<PublicCodeResponse> {
-  if (isDemoMode()) {
-    try {
-      return demoMockStore.redeemCode(code, payload);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   return requestJson<PublicCodeResponse>(
     `/api/v1/public/codes/${encodeURIComponent(code)}/redeem`,
     {
@@ -153,13 +100,6 @@ export async function redeemPublicCode(
 }
 
 export async function refreshPublicCode(code: string): Promise<PublicCodeResponse> {
-  if (isDemoMode()) {
-    try {
-      return demoMockStore.refreshPublicCode(code);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   return requestJson<PublicCodeResponse>(
     `/api/v1/public/codes/${encodeURIComponent(code)}/refresh`,
     { method: "POST" }
@@ -170,13 +110,6 @@ export async function submitPublicWarranty(
   code: string,
   formData: FormData
 ): Promise<PublicCodeResponse> {
-  if (isDemoMode()) {
-    try {
-      return await demoMockStore.submitWarranty(code, formData);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   return requestJson<PublicCodeResponse>(
     `/api/v1/public/codes/${encodeURIComponent(code)}/warranty`,
     {
@@ -187,26 +120,12 @@ export async function submitPublicWarranty(
 }
 
 export async function getAdminOverview(token: string): Promise<AdminOverviewResponse> {
-  if (isDemoMode()) {
-    try {
-      return demoMockStore.getOverview(token);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   return requestJson<AdminOverviewResponse>("/api/v1/admin/overview", {
     headers: authHeaders(token),
   });
 }
 
 export async function refreshAdminUpstream(token: string): Promise<AdminOverviewResponse> {
-  if (isDemoMode()) {
-    try {
-      return demoMockStore.refreshUpstream(token);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   return requestJson<AdminOverviewResponse>("/api/v1/admin/upstream/refresh", {
     method: "POST",
     headers: authHeaders(token),
@@ -217,13 +136,6 @@ export async function issueAdminCode(
   token: string,
   payload: AdminIssueCodeRequest
 ): Promise<AdminIssueCodeResponse> {
-  if (isDemoMode()) {
-    try {
-      return demoMockStore.issueCode(token, payload);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   return requestJson<AdminIssueCodeResponse>("/api/v1/admin/codes/issue", {
     method: "POST",
     headers: authHeaders(token, true),
@@ -235,13 +147,6 @@ export async function batchAdminCodes(
   token: string,
   payload: AdminBatchCodeRequest
 ): Promise<AdminBatchCodeResponse> {
-  if (isDemoMode()) {
-    try {
-      return demoMockStore.batchCodes(token, payload);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   return requestJson<AdminBatchCodeResponse>("/api/v1/admin/codes/batch", {
     method: "POST",
     headers: authHeaders(token, true),
@@ -262,13 +167,6 @@ export async function listAdminCodes(
   token: string,
   params: ListCodesParams
 ): Promise<AdminCodeListResponse> {
-  if (isDemoMode()) {
-    try {
-      return demoMockStore.listCodes(token, params);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   const search = new URLSearchParams();
   if (params.status) search.set("status", params.status);
   if (params.channel) search.set("channel", params.channel);
@@ -283,13 +181,6 @@ export async function listAdminCodes(
 }
 
 export async function getAdminCodeDetail(token: string, code: string): Promise<AdminCodeDetail> {
-  if (isDemoMode()) {
-    try {
-      return demoMockStore.getCodeDetail(token, code);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   return requestJson<AdminCodeDetail>(`/api/v1/admin/codes/${encodeURIComponent(code)}`, {
     headers: authHeaders(token),
   });
@@ -299,14 +190,6 @@ export async function fetchAdminWarrantyScreenshot(
   token: string,
   code: string
 ): Promise<{ url: string; revoke: () => void }> {
-  if (isDemoMode()) {
-    try {
-      const dataUrl = demoMockStore.getWarrantyScreenshotUrl(token, code);
-      return { url: dataUrl, revoke: () => undefined };
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   const response = await fetch(
     `/api/v1/admin/codes/${encodeURIComponent(code)}/warranty-screenshot`,
     { headers: authHeaders(token) }
@@ -341,13 +224,6 @@ export async function fetchAdminWarrantyScreenshot(
 }
 
 export async function pollAdminCode(token: string, code: string): Promise<AdminCodeDetail> {
-  if (isDemoMode()) {
-    try {
-      return demoMockStore.pollCode(token, code);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   return requestJson<AdminCodeDetail>(`/api/v1/admin/codes/${encodeURIComponent(code)}/poll`, {
     method: "POST",
     headers: authHeaders(token),
@@ -359,13 +235,6 @@ export async function revokeAdminCode(
   code: string,
   reason: string
 ): Promise<AdminCodeDetail> {
-  if (isDemoMode()) {
-    try {
-      return demoMockStore.revokeCode(token, code, reason);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   return requestJson<AdminCodeDetail>(`/api/v1/admin/codes/${encodeURIComponent(code)}/revoke`, {
     method: "POST",
     headers: authHeaders(token, true),
@@ -378,13 +247,6 @@ export async function retryAdminCode(
   code: string,
   payload: { override_price_limit?: boolean; note?: string }
 ): Promise<AdminCodeDetail> {
-  if (isDemoMode()) {
-    try {
-      return demoMockStore.retryCode(token, code, payload);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   return requestJson<AdminCodeDetail>(`/api/v1/admin/codes/${encodeURIComponent(code)}/retry`, {
     method: "POST",
     headers: authHeaders(token, true),
@@ -397,13 +259,6 @@ export async function ackAdminWarranty(
   code: string,
   note: string
 ): Promise<AdminCodeDetail> {
-  if (isDemoMode()) {
-    try {
-      return demoMockStore.ackWarranty(token, code, note);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   return requestJson<AdminCodeDetail>(
     `/api/v1/admin/codes/${encodeURIComponent(code)}/warranty-ack`,
     {
@@ -419,13 +274,6 @@ export async function updateAdminSku(
   skuKey: SkuKey,
   payload: AdminUpdateSkuRequest
 ): Promise<AdminSkuStatus> {
-  if (isDemoMode()) {
-    try {
-      return demoMockStore.updateSku(token, skuKey, payload);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   return requestJson<AdminSkuStatus>(
     `/api/v1/admin/settings/skus/${encodeURIComponent(skuKey)}`,
     {
@@ -437,13 +285,6 @@ export async function updateAdminSku(
 }
 
 export async function sendAdminTestEmail(token: string): Promise<AdminTestEmailResponse> {
-  if (isDemoMode()) {
-    try {
-      return demoMockStore.sendTestEmail(token);
-    } catch (error) {
-      mapMockError(error);
-    }
-  }
   return requestJson<AdminTestEmailResponse>("/api/v1/admin/notifications/test-email", {
     method: "POST",
     headers: authHeaders(token),

@@ -84,10 +84,10 @@ export function AdminPage() {
       setActiveTab(nextTab);
       const targetPath = TAB_PATHS[nextTab];
       if (location.pathname !== targetPath) {
-        navigate({ pathname: targetPath, search: location.search });
+        navigate(targetPath);
       }
     },
-    [location.pathname, location.search, navigate]
+    [location.pathname, navigate]
   );
 
   const clearSession = useCallback(
@@ -235,7 +235,6 @@ export function AdminPage() {
     },
     { id: "settings", label: "价格与设置", icon: Sliders },
   ];
-  const modeLabel = overview.execution_mode === "live" ? "生产模式" : "演练模式";
 
   return (
     <div className="admin-glass-stage">
@@ -244,7 +243,7 @@ export function AdminPage() {
       <aside className="admin-rail" aria-label="商家后台侧栏">
         <div className="admin-rail-top-mobile">
           <Link
-            to={{ pathname: "/admin", search: location.search }}
+            to="/admin"
             className="admin-rail-brand"
             onClick={() => setActiveTab("overview")}
           >
@@ -258,13 +257,6 @@ export function AdminPage() {
           </Link>
 
           <div className="admin-mobile-actions">
-            <span
-              className={`rail-mode-tag ${
-                overview.execution_mode === "live" ? "live" : "dry"
-              }`}
-            >
-              {modeLabel}
-            </span>
             <button
               type="button"
               className="rail-nav-btn"
@@ -304,17 +296,7 @@ export function AdminPage() {
         </nav>
 
         <div className="admin-rail-footer">
-          <div className="rail-mode-pill">
-            <span>运行模式</span>
-            <span
-              className={`rail-mode-tag ${
-                overview.execution_mode === "live" ? "live" : "dry"
-              }`}
-            >
-              {modeLabel}
-            </span>
-          </div>
-          <Link to={{ pathname: "/", search: location.search }} className="rail-nav-btn">
+          <Link to="/" className="rail-nav-btn">
             <span className="rail-nav-left">
               <ArrowLeft size={15} aria-hidden="true" />
               <span>返回买家页</span>

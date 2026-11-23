@@ -1,7 +1,6 @@
 import { useState } from "react";
 import {
   AlertTriangle,
-  CheckCircle2,
   Clock,
   Loader2,
   RefreshCw,
@@ -35,7 +34,7 @@ export function AdminOverviewPage({
     }
   };
 
-  const { canboso, counts, skus, execution_mode } = overview;
+  const { canboso, counts, skus } = overview;
 
   const kpiItems: Array<{
     key: string;
@@ -117,10 +116,6 @@ export function AdminOverviewPage({
           </p>
         </div>
         <div className="row">
-          <span className={`badge ${execution_mode === "live" ? "badge-warning" : "badge-accent"}`}>
-            <span className="badge-dot" aria-hidden="true" />
-            <span>{execution_mode === "live" ? "生产模式" : "演练模式"}</span>
-          </span>
           <button
             type="button"
             className={`btn btn-secondary ${refreshing ? "is-loading" : ""}`}
@@ -133,15 +128,6 @@ export function AdminOverviewPage({
           </button>
         </div>
       </header>
-
-      {execution_mode === "dry_run" && (
-        <div className="callout callout-info">
-          <CheckCircle2 size={18} className="callout-icon" aria-hidden="true" />
-          <div>
-            当前处于 <strong>演练模式</strong>，买家提货只会模拟走流程，不会向 Canboso 发起真实扣款下单。
-          </div>
-        </div>
-      )}
 
       {canboso.is_low_balance && (
         <div className="callout callout-danger" role="alert">
