@@ -68,7 +68,7 @@ export interface PublicCodeResponse {
 
 export interface RedeemSlotRequest {
   buyer_email: string;
-  buyer_email_confirm: string;
+  buyer_email_confirm?: string;
   preflight_confirmed: true;
 }
 
@@ -128,7 +128,9 @@ export interface AdminCodeSummary {
   external_order_id: string | null;
   remark: string | null;
   status: CodeStatus;
+  buyer_email: string | null;
   buyer_email_masked: string | null;
+  store_email: string | null;
   upstream_order_code: string | null;
   upstream_status: string | null;
   cost_usd: number | null;

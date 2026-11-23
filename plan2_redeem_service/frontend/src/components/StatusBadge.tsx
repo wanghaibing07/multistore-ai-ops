@@ -1,5 +1,10 @@
-import type { CodeStatus, WarrantyStatus } from "../types/api";
-import { getCodeStatusMeta, getWarrantyStatusMeta, type Tone } from "../utils/format";
+import type { CodeStatus, SkuKey, WarrantyStatus } from "../types/api";
+import {
+  getCodeStatusMeta,
+  getOrderDisplayStatusMeta,
+  getWarrantyStatusMeta,
+  type Tone,
+} from "../utils/format";
 
 export function ToneBadge({
   label,
@@ -28,4 +33,22 @@ export function CodeStatusBadge({ status }: { status: CodeStatus }) {
 export function WarrantyStatusBadge({ status }: { status: WarrantyStatus | null }) {
   const meta = getWarrantyStatusMeta(status);
   return <ToneBadge label={meta.label} tone={meta.tone} />;
+}
+
+export function OrderDisplayStatusBadge({
+  skuKey,
+  status,
+  warrantyStatus,
+}: {
+  skuKey: SkuKey;
+  status: CodeStatus;
+  warrantyStatus?: WarrantyStatus | null;
+}) {
+  const meta = getOrderDisplayStatusMeta({
+    sku_key: skuKey,
+    status,
+    warranty_status: warrantyStatus,
+  });
+  const pulse = status === "waiting_fulfillment" || status === "validating" || status === "purchasing";
+  return <ToneBadge label={meta.label} tone={meta.tone} pulse={pulse} />;
 }

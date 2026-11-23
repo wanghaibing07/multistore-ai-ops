@@ -16,6 +16,8 @@ uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 
 打开 `http://127.0.0.1:8000/`。前端构建产物存在于 `frontend/dist/` 时，FastAPI 会同源托管静态资源和 SPA 路由。
 
+后台默认每 20 分钟（1200 秒）自动轮询一次 Canboso 共享车位订单。可通过 `PLAN2_POLL_INTERVAL_SECONDS` 调整，服务端会保留至少 10 秒的下限。买家端查询自己订单的 30 秒刷新节奏不受此配置影响。
+
 ## 单台云服务器启动
 
 ```bash
@@ -32,7 +34,7 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 1
 
 ## 配置项
 
-`PLAN2_CONFIG_FILE` 可选，指向 YAML 配置文件。环境变量会覆盖 YAML 中的同名字段。`PLAN2_DB_PATH` 指向 SQLite 文件，`PLAN2_STORAGE_DIR` 保存不公开的保修截图，`PLAN2_PUBLIC_BASE_URL` 用于生成提货链接。`PLAN2_ADMIN_TOKEN` 保护所有 `/api/v1/admin/*` 接口。`PLAN2_CANBOSO_API_SECRET` 填 Canboso buyer key，`PLAN2_CANBOSO_BASE_URL` 默认使用 `https://canboso.com`。16688 的 `PLAN2_CHANNEL16688_API_KEY` 对应 Open API 的 `app_id`。SMTP 配置控制商家告警和履约通知。
+`PLAN2_CONFIG_FILE` 可选，指向 YAML 配置文件。环境变量会覆盖 YAML 中的同名字段。`PLAN2_DB_PATH` 指向 SQLite 文件，`PLAN2_STORAGE_DIR` 保存不公开的保修截图，`PLAN2_PUBLIC_BASE_URL` 用于生成提货链接。`PLAN2_ADMIN_TOKEN` 保护所有 `/api/v1/admin/*` 接口。`PLAN2_CANBOSO_API_SECRET` 填 Canboso buyer key，`PLAN2_CANBOSO_BASE_URL` 默认使用 `https://canboso.com`。16688 的 `PLAN2_CHANNEL16688_API_KEY` 对应 Open API 的 `app_id`。SMTP 配置控制商家告警和履约通知。`PLAN2_POLL_INTERVAL_SECONDS` 控制后台上游轮询间隔，默认 1200 秒，代码下限为 10 秒。
 
 ## 验证
 

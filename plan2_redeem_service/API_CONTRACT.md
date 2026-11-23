@@ -121,10 +121,10 @@
 ```json
 {
   "buyer_email": "alice@gmail.com",
-  "buyer_email_confirm": "alice@gmail.com",
   "preflight_confirmed": true
 }
 ```
+- 说明：`buyer_email_confirm` 为选填兼容字段（`string | null`）；不传或传空字符串时跳过二次邮箱比对，仅在显式传了非空值且与 `buyer_email` 不一致时返回 `422 EMAIL_MISMATCH`。
 - 请求体（`ultra_exclusive_admin`）：
 ```json
 {
@@ -148,12 +148,13 @@
 `POST /api/v1/public/codes/{code}/warranty`
 
 - `Content-Type: multipart/form-data`
-  - `admin_email`：必填，合法 Gmail
-  - `admin_email_confirm`：必填，须与 `admin_email` 一致
+  - `admin_email`：必填，合法 Gmail（提交后会同步写入 `codes.buyer_email` 与 `codes.buyer_email_masked`；公网接口仍只返回脱敏值）
+  - `admin_email_confirm`：选填（向后兼容）；不传或传空时跳过二次比对，仅在显式传了非空值且与 `admin_email` 不一致时返回 `422 EMAIL_MISMATCH`
   - `screenshot`：必填，图片文件（`image/jpeg`, `image/png`, `image/webp`，最大 5MB）
   - `note`：选填，最多 300 字
 - 允许在 `delivered_pending_warranty`（首次提交）或 `completed` 且 `warranty.status == "submitted"`（报备前修改重传）时提交；若已 `registered_upstream` 返回 `409 WARRANTY_LOCKED`。
 - `200 OK`：返回更新后的 `PublicCodeResponse`（`status = "completed"`, `warranty.status = "submitted"`）。
+- 隐私约束：所有 `/api/v1/public/*` 响应严禁返回明文 `buyer_email`、`admin_email`、`forward_template` 或 `upstream_order_code`。
 
 ## 5. 商家后台接口 (`/api/v1/admin/*`)
 
@@ -222,7 +223,7 @@
 {
   "code": "U20S-8K3M-9P2Q",
   "redeem_url": "https://redeem.example.com/r/U20S-8K3M-9P2Q",
-  "wangwang_message": "您好，感谢购买 Google AI Ultra 20x 共享车位！\n请点击专属提货链接填写接收 Gmail 并随时查看拉人进度：\nhttps://redeem.example.com/r/U20S-8K3M-9P2Q\n兑换码：U20S-8K3M-9P2Q\n（请务必仔细核对 Gmail 拼写，确认无误后再提交）",
+  "wangwang_message": "感谢下单 VEO3 Ultra x20 共享车位（1个月·0信用全保）！\n点链接填您的 Gmail 提货：https://redeem.example.com/r/U20S-8K3M-9P2Q\n兑换码：U20S-8K3M-9P2Q\n提交后一般 1~6 小时内发家庭组邀请（最晚 24 小时），随时能在链接里看进度。",
   "item": { "...AdminCodeSummary..." }
 }
 ```
@@ -255,6 +256,7 @@
 
 ### 5.5 订单与兑换码列表
 `GET /api/v1/admin/codes?status=&channel=&sku_key=&q=&page=1&page_size=20`
+- 搜索参数 `q` 模糊匹配：`code`、`external_order_id`、`buyer_email`、`upstream_order_code`、`remark`、`warranty_json`、`delivery_json`（确保新旧独享单均可通过买家主邮箱或商店套餐邮箱 `store_email` 搜索命中）。
 - `200 OK`：
 ```json
 {
@@ -269,7 +271,9 @@
       "external_order_id": "TB202611230001",
       "remark": "",
       "status": "waiting_fulfillment",
+      "buyer_email": "alice@gmail.com",
       "buyer_email_masked": "al***@gmail.com",
+      "store_email": null,
       "upstream_order_code": "ORD-12345",
       "upstream_status": "paid",
       "cost_usd": 13.47,
@@ -287,16 +291,19 @@
   "page_size": 20
 }
 ```
+- 独享单适配说明：
+  - `buyer_email` 优先取 `codes.buyer_email`，历史单兜底取 `warranty.admin_email`；`buyer_email_masked` 同步兜底脱敏展示。
+  - `store_email` 从 `delivery_json.account_text` 提取，独享单出货后展示商店套餐邮箱，共享车位或未出货订单为 `null`。
 
 ### 5.6 兑换码详情（含完整事件流、交付凭据与保修信息）
 `GET /api/v1/admin/codes/{code}`
 - 在 `AdminCodeSummary` 字段基础上增加：
   - `redeem_url`: string
   - `batch_id`: string | null
-  - `buyer_email`: string | null（仅详情页返回，便于商家核对/排查；日志严禁打印明文）
+  - `buyer_email`: string | null（沿用 `AdminCodeSummary` 的兜底解析逻辑，兼容历史独享单；日志严禁打印明文）
   - `idempotency_key`: string | null
   - `delivery`: 同公开结构或 null
-  - `warranty`: `{ "status", "admin_email", "submitted_at", "registered_at", "note", "has_screenshot", "screenshot_url", "forward_template" }` 或 null
+  - `warranty`: `{ "status", "admin_email", "submitted_at", "registered_at", "note", "has_screenshot", "screenshot_url", "forward_template" }` 或 null（只要含 `admin_email`，后端每次返回时都会动态按最新越南语模板生成 `forward_template`，兼容历史订单无需改库）
   - `audit_events`: `[{ "event_id", "from_status", "to_status", "reason", "created_at" }]`
 
 ### 5.7 获取保修确认截图（需鉴权）

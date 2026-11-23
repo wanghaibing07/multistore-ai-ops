@@ -28,7 +28,7 @@ class Settings:
     smtp_password: str = ""
     smtp_from: str = ""
     merchant_email: str = ""
-    poll_interval_seconds: int = 60
+    poll_interval_seconds: int = 1200
 
     @classmethod
     def from_env(cls) -> "Settings":

@@ -60,17 +60,29 @@ function randomSegment(length: number): string {
   return out;
 }
 
-function makeDemoSvgDataUrl(): string {
+function makeDemoSvgDataUrl(
+  adminEmail = "buyer.main@gmail.com",
+  storeEmail = "store-ultra@example.com"
+): string {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360">
     <rect width="640" height="360" fill="#f8fafc"/>
     <rect x="32" y="32" width="576" height="296" rx="16" fill="#ffffff" stroke="#cbd5e1" stroke-width="2"/>
     <text x="64" y="96" font-family="sans-serif" font-size="22" font-weight="700" fill="#0f172a">Google Family Invitation Sent (Demo Screenshot)</text>
-    <text x="64" y="142" font-family="monospace" font-size="16" fill="#334155">Admin: buyer.main@gmail.com</text>
-    <text x="64" y="176" font-family="monospace" font-size="16" fill="#059669">Invited Member: store.ultra.demo01@gmail.com</text>
+    <text x="64" y="142" font-family="monospace" font-size="16" fill="#334155">Admin: ${adminEmail}</text>
+    <text x="64" y="176" font-family="monospace" font-size="16" fill="#059669">Invited Member: ${storeEmail}</text>
     <rect x="64" y="216" width="220" height="44" rx="10" fill="#dcfce7"/>
     <text x="86" y="244" font-family="sans-serif" font-size="15" font-weight="600" fill="#166534">Status: Invitation Pending</text>
   </svg>`;
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function formatWarrantyForwardTemplate(orderCode: string, adminEmail: string): string {
+  return [
+    "Chào shop ạ, em gửi thông tin đăng ký bảo hành gói Family:",
+    `- Mã đơn: ${orderCode}`,
+    `- Gmail chủ nhóm: ${adminEmail}`,
+    "Em đã mời tài khoản shop vào nhóm và gửi kèm ảnh xác nhận, nhờ shop ghi nhận bảo hành giúp em ạ. Cảm ơn shop!",
+  ].join("\n");
 }
 
 const SKU_META: Record<SkuKey, AdminSkuStatus> = {
@@ -114,19 +126,19 @@ function buildOrigin(): string {
 function buildWangwangMessage(skuKey: SkuKey, code: string, redeemUrl: string): string {
   if (skuKey === "ultra_exclusive_admin") {
     return [
-      "您好，感谢购买 VEO3 Ultra x20 独享整组（管理员版·1个月全保）！",
-      `请点击下方专属链接立即领取商店套餐邮箱并按指引建组邀请：`,
+      "你好，感谢购买 Google AI Ultra 20x 独享整组（1个月全保）！",
+      "点下面链接先领商店套餐邮箱，再用你自己的主力 Gmail 建家庭组把商店邮箱拉进去：",
       redeemUrl,
       `兑换码：${code}`,
-      "完成邀请后请在同页面提交您的主力 Gmail 与确认截图以登记保修。",
+      "拉进组后回到这个页面，填你的主力 Gmail 并传一张邀请截图交保修。",
     ].join("\n");
   }
   return [
-    "您好，感谢购买 VEO3 Ultra x20 共享车位（1个月·0信用全保）！",
-    "请点击下方专属链接提交接收邀请的 Gmail 并随时查看拉人进度：",
+    "你好，感谢购买 Google AI Ultra 20x 共享车位（1个月·0信用全保）！",
+    "点下面链接填你的 Gmail 等拉人，一般 1~6 小时、最晚 24 小时，随时可回本页看进度：",
     redeemUrl,
     `兑换码：${code}`,
-    "提交前请务必仔细核对 Gmail 拼写，确认无误后再提交。",
+    "提交前看清 Gmail 拼写，提交后改不了。",
   ].join("\n");
 }
 
@@ -155,10 +167,11 @@ class DemoMockStore {
         channel: "taobao",
         goods_no: null,
         external_order_id: "TB202611230001",
-        remark: "淘宝测试单-未核销",
+        remark: "淘宝测试单，待提货",
         status: "unused",
-        buyer_email_masked: null,
         buyer_email: null,
+        buyer_email_masked: null,
+        store_email: null,
         upstream_order_code: null,
         upstream_status: null,
         cost_usd: null,
@@ -179,7 +192,7 @@ class DemoMockStore {
             event_id: 1,
             from_status: null,
             to_status: "unused",
-            reason: "商家淘宝手动发码",
+            reason: "商家在淘宝手动发了兑换码",
             created_at: nowIso(-25),
           },
         ],
@@ -201,10 +214,11 @@ class DemoMockStore {
         channel: "16688",
         goods_no: "G88001001",
         external_order_id: "16688-ORD-99102",
-        remark: "16688自动卡密单",
+        remark: "16688 自动发码订单",
         status: "waiting_fulfillment",
-        buyer_email_masked: "al***@gmail.com",
         buyer_email: "alice.demo@gmail.com",
+        buyer_email_masked: "al***@gmail.com",
+        store_email: null,
         upstream_order_code: "CNB-SLOT-88412",
         upstream_status: "paid",
         cost_usd: 13.47,
@@ -225,14 +239,14 @@ class DemoMockStore {
             event_id: 1,
             from_status: null,
             to_status: "unused",
-            reason: "批量生成 16688 码池",
+            reason: "批量生成 16688 兑换码",
             created_at: nowIso(-90),
           },
           {
             event_id: 2,
             from_status: "unused",
             to_status: "waiting_fulfillment",
-            reason: "买家提交 Gmail，已通过 16688 订单校验并提交上游排单",
+            reason: "买家填了 Gmail，16688 订单核对通过，已让上游排队拉人",
             created_at: nowIso(-78),
           },
         ],
@@ -256,8 +270,9 @@ class DemoMockStore {
         external_order_id: "TB202611220881",
         remark: "已完成样例",
         status: "completed",
-        buyer_email_masked: "bo***@gmail.com",
         buyer_email: "bob.ultra@gmail.com",
+        buyer_email_masked: "bo***@gmail.com",
+        store_email: null,
         upstream_order_code: "CNB-SLOT-88301",
         upstream_status: "completed",
         cost_usd: 13.47,
@@ -285,14 +300,14 @@ class DemoMockStore {
             event_id: 2,
             from_status: "unused",
             to_status: "waiting_fulfillment",
-            reason: "已提交上游拉人",
+            reason: "已通知上游开始排队拉人",
             created_at: nowIso(-240),
           },
           {
             event_id: 3,
             from_status: "waiting_fulfillment",
             to_status: "completed",
-            reason: "上游已完成拉人，已发邮件通知商家",
+            reason: "上游已发出家庭组邀请，并邮件通知商家",
             created_at: nowIso(-118),
           },
         ],
@@ -314,10 +329,11 @@ class DemoMockStore {
         channel: "taobao",
         goods_no: null,
         external_order_id: "TB202611230009",
-        remark: "独享整组待领取",
+        remark: "独享整组，待领商店邮箱",
         status: "unused",
-        buyer_email_masked: null,
         buyer_email: null,
+        buyer_email_masked: null,
+        store_email: null,
         upstream_order_code: null,
         upstream_status: null,
         cost_usd: null,
@@ -338,7 +354,7 @@ class DemoMockStore {
             event_id: 1,
             from_status: null,
             to_status: "unused",
-            reason: "商家淘宝手动发码",
+            reason: "商家在淘宝手动发了兑换码",
             created_at: nowIso(-18),
           },
         ],
@@ -351,6 +367,74 @@ class DemoMockStore {
       pollCount: 0,
     });
 
+    this.records.set("DEMO-EXCL-PENDING", {
+      detail: {
+        code: "DEMO-EXCL-PENDING",
+        sku_key: "ultra_exclusive_admin",
+        sku_title: this.skus.ultra_exclusive_admin.title,
+        product_type: "account",
+        channel: "16688",
+        goods_no: "G88001002",
+        external_order_id: "16688-ORD-99218",
+        remark: "独享整组，已发商店邮箱待交保修",
+        status: "delivered_pending_warranty",
+        buyer_email: null,
+        buyer_email_masked: null,
+        store_email: "store-ultra-pending@example.com",
+        upstream_order_code: "CNB-ACC-55210",
+        upstream_status: "completed",
+        cost_usd: 67.5,
+        warranty_status: "pending",
+        last_error_code: null,
+        last_error_message: null,
+        is_overdue_24h: false,
+        elapsed_minutes: 8,
+        created_at: nowIso(-35),
+        updated_at: nowIso(-8),
+        redeem_url: `${origin}/r/DEMO-EXCL-PENDING`,
+        batch_id: "B20261123040002",
+        idempotency_key: "idem_demo_excl_pending_001",
+        delivery: {
+          account_text: "store-ultra-pending@example.com",
+          credentials: [{ label: "商店套餐邮箱", value: "store-ultra-pending@example.com" }],
+          raw_lines: ["store-ultra-pending@example.com"],
+          delivered_at: nowIso(-8),
+        },
+        warranty: {
+          status: "pending",
+          admin_email: null,
+          submitted_at: null,
+          registered_at: null,
+          note: null,
+          has_screenshot: false,
+          screenshot_url: null,
+          forward_template: null,
+        },
+        audit_events: [
+          {
+            event_id: 1,
+            from_status: null,
+            to_status: "unused",
+            reason: "批量生成 16688 兑换码",
+            created_at: nowIso(-35),
+          },
+          {
+            event_id: 2,
+            from_status: "unused",
+            to_status: "delivered_pending_warranty",
+            reason: "已发出商店套餐邮箱，等买家建家庭组并交保修",
+            created_at: nowIso(-8),
+          },
+        ],
+      },
+      screenshotDataUrl: null,
+      buyerNotice: null,
+      submittedAt: nowIso(-8),
+      completedAt: null,
+      lastPolledAt: nowIso(-8),
+      pollCount: 0,
+    });
+
     this.records.set("DEMO-EXCL-WARRANTY", {
       detail: {
         code: "DEMO-EXCL-WARRANTY",
@@ -360,10 +444,11 @@ class DemoMockStore {
         channel: "taobao",
         goods_no: null,
         external_order_id: "TB202611230012",
-        remark: "独享整组已提交保修待报备",
+        remark: "独享整组，已交保修等商家报备",
         status: "completed",
-        buyer_email_masked: "bu***@gmail.com",
         buyer_email: "buyer.main@gmail.com",
+        buyer_email_masked: "bu***@gmail.com",
+        store_email: "store-ultra@example.com",
         upstream_order_code: "CNB-ACC-55190",
         upstream_status: "completed",
         cost_usd: 67.5,
@@ -378,9 +463,9 @@ class DemoMockStore {
         batch_id: null,
         idempotency_key: "idem_demo_excl_002",
         delivery: {
-          account_text: "store.ultra.demo01@gmail.com",
-          credentials: [{ label: "商店套餐邮箱", value: "store.ultra.demo01@gmail.com" }],
-          raw_lines: ["store.ultra.demo01@gmail.com"],
+          account_text: "store-ultra@example.com",
+          credentials: [{ label: "商店套餐邮箱", value: "store-ultra@example.com" }],
+          raw_lines: ["store-ultra@example.com"],
           delivered_at: nowIso(-22),
         },
         warranty: {
@@ -388,11 +473,10 @@ class DemoMockStore {
           admin_email: "buyer.main@gmail.com",
           submitted_at: nowIso(-10),
           registered_at: null,
-          note: "已按要求发送家庭组邀请",
+          note: "已经把商店邮箱拉进家庭组了",
           has_screenshot: true,
           screenshot_url: "/api/v1/admin/codes/DEMO-EXCL-WARRANTY/warranty-screenshot",
-          forward_template:
-            "Canboso Order: CNB-ACC-55190\nFamily Admin Gmail: buyer.main@gmail.com\nStore Account: store.ultra.demo01@gmail.com",
+          forward_template: formatWarrantyForwardTemplate("CNB-ACC-55190", "buyer.main@gmail.com"),
         },
         audit_events: [
           {
@@ -406,23 +490,105 @@ class DemoMockStore {
             event_id: 2,
             from_status: "unused",
             to_status: "delivered_pending_warranty",
-            reason: "已向 Canboso 秒发商店套餐邮箱",
+            reason: "已发出商店套餐邮箱，等买家交保修",
             created_at: nowIso(-22),
           },
           {
             event_id: 3,
             from_status: "delivered_pending_warranty",
             to_status: "completed",
-            reason: "买家已提交管理员主 Gmail 与邀请确认截图，已邮件通知商家",
+            reason: "买家提交了主力 Gmail 和邀请截图，已邮件通知商家",
             created_at: nowIso(-10),
           },
         ],
       },
-      screenshotDataUrl: makeDemoSvgDataUrl(),
+      screenshotDataUrl: makeDemoSvgDataUrl("buyer.main@gmail.com", "store-ultra@example.com"),
       buyerNotice: null,
       submittedAt: nowIso(-22),
       completedAt: nowIso(-10),
       lastPolledAt: nowIso(-22),
+      pollCount: 0,
+    });
+
+    this.records.set("DEMO-EXCL-DONE", {
+      detail: {
+        code: "DEMO-EXCL-DONE",
+        sku_key: "ultra_exclusive_admin",
+        sku_title: this.skus.ultra_exclusive_admin.title,
+        product_type: "account",
+        channel: "taobao",
+        goods_no: null,
+        external_order_id: "TB202611220918",
+        remark: "独享整组，已向官方报备完成",
+        status: "completed",
+        buyer_email: "buyer.done@gmail.com",
+        buyer_email_masked: "bu***@gmail.com",
+        store_email: "store-ultra-done@example.com",
+        upstream_order_code: "CNB-ACC-55120",
+        upstream_status: "completed",
+        cost_usd: 67.5,
+        warranty_status: "registered_upstream",
+        last_error_code: null,
+        last_error_message: null,
+        is_overdue_24h: false,
+        elapsed_minutes: 16,
+        created_at: nowIso(-180),
+        updated_at: nowIso(-60),
+        redeem_url: `${origin}/r/DEMO-EXCL-DONE`,
+        batch_id: null,
+        idempotency_key: "idem_demo_excl_done_003",
+        delivery: {
+          account_text: "store-ultra-done@example.com",
+          credentials: [{ label: "商店套餐邮箱", value: "store-ultra-done@example.com" }],
+          raw_lines: ["store-ultra-done@example.com"],
+          delivered_at: nowIso(-150),
+        },
+        warranty: {
+          status: "registered_upstream",
+          admin_email: "buyer.done@gmail.com",
+          submitted_at: nowIso(-134),
+          registered_at: nowIso(-60),
+          note: "已发给官方登记全保",
+          has_screenshot: true,
+          screenshot_url: "/api/v1/admin/codes/DEMO-EXCL-DONE/warranty-screenshot",
+          forward_template: formatWarrantyForwardTemplate("CNB-ACC-55120", "buyer.done@gmail.com"),
+        },
+        audit_events: [
+          {
+            event_id: 1,
+            from_status: null,
+            to_status: "unused",
+            reason: "商家发码",
+            created_at: nowIso(-180),
+          },
+          {
+            event_id: 2,
+            from_status: "unused",
+            to_status: "delivered_pending_warranty",
+            reason: "已发出商店套餐邮箱，等买家交保修",
+            created_at: nowIso(-150),
+          },
+          {
+            event_id: 3,
+            from_status: "delivered_pending_warranty",
+            to_status: "completed",
+            reason: "买家提交了主力 Gmail 和邀请截图",
+            created_at: nowIso(-134),
+          },
+          {
+            event_id: 4,
+            from_status: "completed",
+            to_status: "completed",
+            reason: "商家已向官方完成保修报备",
+            created_at: nowIso(-60),
+          },
+        ],
+      },
+      screenshotDataUrl: makeDemoSvgDataUrl("buyer.done@gmail.com", "store-ultra-done@example.com"),
+      buyerNotice: null,
+      submittedAt: nowIso(-150),
+      completedAt: nowIso(-134),
+      lastPolledAt: nowIso(-150),
       pollCount: 0,
     });
 
@@ -435,16 +601,17 @@ class DemoMockStore {
         channel: "16688",
         goods_no: "G88001001",
         external_order_id: "16688-ORD-99155",
-        remark: "模拟价格熔断暂停",
+        remark: "模拟进价超上限暂停",
         status: "needs_manual_review",
-        buyer_email_masked: "ch***@gmail.com",
         buyer_email: "charlie.demo@gmail.com",
+        buyer_email_masked: "ch***@gmail.com",
+        store_email: null,
         upstream_order_code: null,
         upstream_status: null,
         cost_usd: null,
         warranty_status: null,
-        last_error_code: "PRICE_CIRCUIT_BREAKER",
-        last_error_message: "上游实时价 $19.80 超过熔断上限 $16.00，已暂停自动扣款",
+        last_error_code: "PRICE_LIMIT_EXCEEDED",
+        last_error_message: "上游实时进价 $19.80 超过设定的上限 $16.00，已自动暂停下单",
         is_overdue_24h: false,
         elapsed_minutes: 15,
         created_at: nowIso(-30),
@@ -466,13 +633,13 @@ class DemoMockStore {
             event_id: 2,
             from_status: "unused",
             to_status: "needs_manual_review",
-            reason: "触发价格熔断（$19.80 > $16.00），已发送告警邮件",
+            reason: "进价超上限（$19.80 > $16.00），已暂停下单并邮件提醒商家",
             created_at: nowIso(-15),
           },
         ],
       },
       screenshotDataUrl: null,
-      buyerNotice: "您的申请已收到，目前正在由人工核对安排处理，请稍候刷新或联系店铺客服，无需重复提交。",
+      buyerNotice: "已经收到你的提货请求，正在人工核对安排处理。收藏好这个页面，处理完会自动更新，不用重复提交。",
       submittedAt: nowIso(-15),
       completedAt: null,
       lastPolledAt: null,
@@ -490,8 +657,9 @@ class DemoMockStore {
         external_order_id: "TB202611220330",
         remark: "买家申请退款已作废",
         status: "revoked",
-        buyer_email_masked: null,
         buyer_email: null,
+        buyer_email_masked: null,
+        store_email: null,
         upstream_order_code: null,
         upstream_status: null,
         cost_usd: null,
@@ -558,15 +726,15 @@ class DemoMockStore {
       fulfillment: {
         eta_text:
           d.product_type === "slot"
-            ? "预计 1~6 小时内发出家庭组邀请，最晚不超过 24 小时"
-            : "领取后秒发商店套餐邮箱，按指引建组邀请并登记保修",
+            ? "一般 1~6 小时内发家庭组邀请，最晚 24 小时"
+            : null,
         submitted_at: rec.submittedAt,
         completed_at: rec.completedAt,
         last_polled_at: rec.lastPolledAt,
         elapsed_minutes: d.elapsed_minutes,
       },
       buyer_notice: rec.buyerNotice,
-      support_hint: "如有疑问，请携带订单号与兑换码联系店铺客服处理。",
+      support_hint: "有问题请把订单号和兑换码发给客服。",
       created_at: d.created_at,
       updated_at: d.updated_at,
     };
@@ -583,7 +751,9 @@ class DemoMockStore {
       external_order_id: d.external_order_id,
       remark: d.remark,
       status: d.status,
+      buyer_email: d.buyer_email,
       buyer_email_masked: d.buyer_email_masked,
+      store_email: d.store_email,
       upstream_order_code: d.upstream_order_code,
       upstream_status: d.upstream_status,
       cost_usd: d.cost_usd,
@@ -599,14 +769,14 @@ class DemoMockStore {
 
   private requireToken(token: string): void {
     if (!token || token.trim().length < 4) {
-      throw new MockApiError(401, "UNAUTHORIZED", "管理员令牌无效（演示模式任意输入 4 位以上字符即可登录）");
+      throw new MockApiError(401, "UNAUTHORIZED", "登录口令不对（演练模式随便输 4 位以上字符就能进）");
     }
   }
 
   getPublicCode(code: string): PublicCodeResponse {
     const rec = this.records.get(code.toUpperCase());
     if (!rec) {
-      throw new MockApiError(404, "CODE_NOT_FOUND", "未找到该兑换码，请检查是否输入有误。");
+      throw new MockApiError(404, "CODE_NOT_FOUND", "没找到这个兑换码，核对一下有没有输错。");
     }
     return this.toPublic(rec);
   }
@@ -617,16 +787,16 @@ class DemoMockStore {
   ): PublicCodeResponse {
     const rec = this.records.get(code.toUpperCase());
     if (!rec) {
-      throw new MockApiError(404, "CODE_NOT_FOUND", "未找到该兑换码，请检查是否输入有误。");
+      throw new MockApiError(404, "CODE_NOT_FOUND", "没找到这个兑换码，核对一下有没有输错。");
     }
     if (!payload.preflight_confirmed) {
-      throw new MockApiError(422, "PREFLIGHT_REQUIRED", "请先勾选确认已完成前置自检。");
+      throw new MockApiError(422, "PREFLIGHT_REQUIRED", "请先勾选确认上面的提示再提交。");
     }
     if (rec.detail.status === "revoked") {
-      throw new MockApiError(409, "CODE_REVOKED", "该兑换码已失效或已作废。");
+      throw new MockApiError(409, "CODE_REVOKED", "这个兑换码已经作废了，不能再用。");
     }
     if (rec.detail.status !== "unused") {
-      throw new MockApiError(409, "CODE_ALREADY_REDEEMED", "该兑换码已提交，请直接查看当前进度。");
+      throw new MockApiError(409, "CODE_ALREADY_REDEEMED", "这个兑换码已经提交过了，直接看当前进度就行。");
     }
 
     const now = nowIso();
@@ -634,10 +804,11 @@ class DemoMockStore {
       const slotPayload = payload as RedeemSlotRequest;
       const emailCheck = validateGmailInput(slotPayload.buyer_email || "");
       if (!emailCheck.valid) {
-        throw new MockApiError(422, "INVALID_EMAIL", emailCheck.error || "邮箱格式不正确");
+        throw new MockApiError(422, "INVALID_EMAIL", emailCheck.error || "邮箱格式不对，核对一下再试。");
       }
-      if (emailCheck.normalized.toLowerCase() !== (slotPayload.buyer_email_confirm || "").trim().toLowerCase()) {
-        throw new MockApiError(422, "EMAIL_MISMATCH", "两次输入的 Gmail 邮箱不一致");
+      const confirmRaw = (slotPayload.buyer_email_confirm || "").trim();
+      if (confirmRaw && emailCheck.normalized.toLowerCase() !== confirmRaw.toLowerCase()) {
+        throw new MockApiError(422, "EMAIL_MISMATCH", "两次填的 Gmail 邮箱不一样。");
       }
       rec.detail.buyer_email = emailCheck.normalized;
       rec.detail.buyer_email_masked = maskEmail(emailCheck.normalized);
@@ -654,15 +825,16 @@ class DemoMockStore {
         event_id: rec.detail.audit_events.length + 1,
         from_status: "unused",
         to_status: "waiting_fulfillment",
-        reason: "演练模式：已模拟提交 Canboso 共享车位排单（0 扣款）",
+        reason: "演练模式：已模拟提交共享车位排队拉人（不扣钱）",
         created_at: now,
       });
       return this.toPublic(rec);
     }
 
-    const storeEmail = `store.ultra.${randomSegment(4).toLowerCase()}@gmail.com`;
+    const storeEmail = `store-ultra-${randomSegment(4).toLowerCase()}@example.com`;
     const upstreamOrder = `CNB-ACC-${randomSegment(6)}`;
     rec.detail.status = "delivered_pending_warranty";
+    rec.detail.store_email = storeEmail;
     rec.detail.upstream_order_code = upstreamOrder;
     rec.detail.upstream_status = "completed";
     rec.detail.cost_usd = this.skus.ultra_exclusive_admin.current_price_usd;
@@ -690,7 +862,7 @@ class DemoMockStore {
       event_id: rec.detail.audit_events.length + 1,
       from_status: "unused",
       to_status: "delivered_pending_warranty",
-      reason: "演练模式：已模拟秒发独享整组商店邮箱（0 扣款）",
+      reason: "演练模式：已模拟发出独享整组商店邮箱（不扣钱）",
       created_at: now,
     });
     return this.toPublic(rec);
@@ -699,7 +871,7 @@ class DemoMockStore {
   refreshPublicCode(code: string): PublicCodeResponse {
     const rec = this.records.get(code.toUpperCase());
     if (!rec) {
-      throw new MockApiError(404, "CODE_NOT_FOUND", "未找到该兑换码。");
+      throw new MockApiError(404, "CODE_NOT_FOUND", "没找到这个兑换码。");
     }
     if (rec.detail.status === "waiting_fulfillment") {
       rec.pollCount += 1;
@@ -713,7 +885,7 @@ class DemoMockStore {
           event_id: rec.detail.audit_events.length + 1,
           from_status: "waiting_fulfillment",
           to_status: "completed",
-          reason: "演练模式：轮询到上游拉人完成，已触发商家邮件通知",
+          reason: "演练模式：上游已拉人完成，已邮件通知商家",
           created_at: rec.lastPolledAt,
         });
       }
@@ -724,35 +896,37 @@ class DemoMockStore {
   async submitWarranty(code: string, formData: FormData): Promise<PublicCodeResponse> {
     const rec = this.records.get(code.toUpperCase());
     if (!rec) {
-      throw new MockApiError(404, "CODE_NOT_FOUND", "未找到该兑换码。");
+      throw new MockApiError(404, "CODE_NOT_FOUND", "没找到这个兑换码。");
     }
     if (rec.detail.product_type !== "account" || !rec.detail.delivery) {
-      throw new MockApiError(409, "INVALID_STATE", "当前订单不支持保修登记。");
+      throw new MockApiError(409, "INVALID_STATE", "这笔订单现在还不能交保修。");
     }
     if (rec.detail.warranty?.status === "registered_upstream") {
-      throw new MockApiError(409, "WARRANTY_LOCKED", "商家已完成官方报备，无法修改保修信息。");
+      throw new MockApiError(409, "WARRANTY_LOCKED", "商家已经向官方报备完成了，不能再改。");
     }
 
     const adminEmail = String(formData.get("admin_email") || "");
-    const adminEmailConfirm = String(formData.get("admin_email_confirm") || "");
+    const adminEmailConfirm = String(formData.get("admin_email_confirm") || "").trim();
     const note = String(formData.get("note") || "").trim();
     const file = formData.get("screenshot");
 
     const check = validateGmailInput(adminEmail);
     if (!check.valid) {
-      throw new MockApiError(422, "INVALID_EMAIL", check.error || "主 Gmail 格式不正确");
+      throw new MockApiError(422, "INVALID_EMAIL", check.error || "主力 Gmail 格式不对。");
     }
-    if (check.normalized.toLowerCase() !== adminEmailConfirm.trim().toLowerCase()) {
-      throw new MockApiError(422, "EMAIL_MISMATCH", "两次输入的主 Gmail 不一致");
+    if (adminEmailConfirm && check.normalized.toLowerCase() !== adminEmailConfirm.toLowerCase()) {
+      throw new MockApiError(422, "EMAIL_MISMATCH", "两次填的主力 Gmail 不一样。");
     }
     if (!(file instanceof File)) {
-      throw new MockApiError(422, "SCREENSHOT_REQUIRED", "请上传邀请确认截图");
+      throw new MockApiError(422, "SCREENSHOT_REQUIRED", "请先选一张家庭组邀请确认截图。");
     }
 
+    const storeEmailForSvg = rec.detail.store_email || rec.detail.delivery.account_text;
     const dataUrl = await new Promise<string>((resolve) => {
       const reader = new FileReader();
-      reader.onload = () => resolve(String(reader.result || makeDemoSvgDataUrl()));
-      reader.onerror = () => resolve(makeDemoSvgDataUrl());
+      reader.onload = () =>
+        resolve(String(reader.result || makeDemoSvgDataUrl(check.normalized, storeEmailForSvg)));
+      reader.onerror = () => resolve(makeDemoSvgDataUrl(check.normalized, storeEmailForSvg));
       reader.readAsDataURL(file);
     });
 
@@ -773,13 +947,16 @@ class DemoMockStore {
       note: note || null,
       has_screenshot: true,
       screenshot_url: `/api/v1/admin/codes/${rec.detail.code}/warranty-screenshot`,
-      forward_template: `Canboso Order: ${rec.detail.upstream_order_code}\nFamily Admin Gmail: ${check.normalized}\nStore Account: ${rec.detail.delivery.account_text}`,
+      forward_template: formatWarrantyForwardTemplate(
+        rec.detail.upstream_order_code || "",
+        check.normalized
+      ),
     };
     rec.detail.audit_events.push({
       event_id: rec.detail.audit_events.length + 1,
       from_status: prevStatus,
       to_status: "completed",
-      reason: "买家提交独享保修主 Gmail 与确认截图，已邮件通知商家",
+      reason: "买家提交了主力 Gmail 和邀请截图，已邮件通知商家",
       created_at: now,
     });
     return this.toPublic(rec);
@@ -873,8 +1050,9 @@ class DemoMockStore {
       external_order_id: req.external_order_id.trim() || null,
       remark: req.remark?.trim() || null,
       status: "unused",
-      buyer_email_masked: null,
       buyer_email: null,
+      buyer_email_masked: null,
+      store_email: null,
       upstream_order_code: null,
       upstream_status: null,
       cost_usd: null,
@@ -944,8 +1122,9 @@ class DemoMockStore {
           external_order_id: null,
           remark: req.batch_label?.trim() || null,
           status: "unused",
-          buyer_email_masked: null,
           buyer_email: null,
+          buyer_email_masked: null,
+          store_email: null,
           upstream_order_code: null,
           upstream_status: null,
           cost_usd: null,
@@ -1018,7 +1197,11 @@ class DemoMockStore {
             d.external_order_id || "",
             d.upstream_order_code || "",
             d.remark || "",
+            d.buyer_email || "",
             d.buyer_email_masked || "",
+            d.store_email || "",
+            d.warranty?.admin_email || "",
+            d.delivery?.account_text || "",
           ]
             .join(" ")
             .toLowerCase();
@@ -1043,7 +1226,7 @@ class DemoMockStore {
     this.requireToken(token);
     const rec = this.records.get(code.toUpperCase());
     if (!rec) {
-      throw new MockApiError(404, "CODE_NOT_FOUND", "未找到该兑换码");
+      throw new MockApiError(404, "CODE_NOT_FOUND", "没找到这个兑换码");
     }
     return { ...rec.detail };
   }
@@ -1052,7 +1235,7 @@ class DemoMockStore {
     this.requireToken(token);
     const rec = this.records.get(code.toUpperCase());
     if (!rec || !rec.screenshotDataUrl) {
-      throw new MockApiError(404, "SCREENSHOT_NOT_FOUND", "未找到保修截图");
+      throw new MockApiError(404, "SCREENSHOT_NOT_FOUND", "没找到这张保修截图");
     }
     return rec.screenshotDataUrl;
   }
@@ -1060,7 +1243,7 @@ class DemoMockStore {
   pollCode(token: string, code: string): AdminCodeDetail {
     this.requireToken(token);
     const rec = this.records.get(code.toUpperCase());
-    if (!rec) throw new MockApiError(404, "CODE_NOT_FOUND", "未找到该兑换码");
+    if (!rec) throw new MockApiError(404, "CODE_NOT_FOUND", "没找到这个兑换码");
     const now = nowIso();
     if (rec.detail.status === "waiting_fulfillment") {
       rec.detail.status = "completed";
@@ -1072,7 +1255,7 @@ class DemoMockStore {
         event_id: rec.detail.audit_events.length + 1,
         from_status: "waiting_fulfillment",
         to_status: "completed",
-        reason: "商家手动触发轮询：上游状态已变更为 completed",
+        reason: "商家手动查了进度：上游已经完成拉人",
         created_at: now,
       });
     }
@@ -1082,9 +1265,9 @@ class DemoMockStore {
   revokeCode(token: string, code: string, reason: string): AdminCodeDetail {
     this.requireToken(token);
     const rec = this.records.get(code.toUpperCase());
-    if (!rec) throw new MockApiError(404, "CODE_NOT_FOUND", "未找到该兑换码");
+    if (!rec) throw new MockApiError(404, "CODE_NOT_FOUND", "没找到这个兑换码");
     if (rec.detail.status === "completed") {
-      throw new MockApiError(409, "CANNOT_REVOKE_COMPLETED", "已完成订单不能作废");
+      throw new MockApiError(409, "CANNOT_REVOKE_COMPLETED", "已经完成的订单不能作废");
     }
     const now = nowIso();
     const prev = rec.detail.status;
@@ -1107,14 +1290,40 @@ class DemoMockStore {
   ): AdminCodeDetail {
     this.requireToken(token);
     const rec = this.records.get(code.toUpperCase());
-    if (!rec) throw new MockApiError(404, "CODE_NOT_FOUND", "未找到该兑换码");
+    if (!rec) throw new MockApiError(404, "CODE_NOT_FOUND", "没找到这个兑换码");
     if (rec.detail.status !== "needs_manual_review") {
-      throw new MockApiError(409, "INVALID_STATE", "仅需人工处理状态的订单可执行重试");
+      throw new MockApiError(409, "INVALID_STATE", "只有人工处理中的订单才能点重试");
     }
     const now = nowIso();
-    rec.detail.status = "waiting_fulfillment";
-    rec.detail.upstream_order_code = `CNB-RETRY-${randomSegment(5)}`;
-    rec.detail.upstream_status = "paid";
+    const isExclusive = rec.detail.product_type === "account";
+    if (isExclusive) {
+      const storeEmail = `store-ultra-${randomSegment(4).toLowerCase()}@example.com`;
+      rec.detail.status = "delivered_pending_warranty";
+      rec.detail.store_email = storeEmail;
+      rec.detail.upstream_order_code = `CNB-ACC-${randomSegment(6)}`;
+      rec.detail.upstream_status = "completed";
+      rec.detail.warranty_status = "pending";
+      rec.detail.delivery = {
+        account_text: storeEmail,
+        credentials: [{ label: "商店套餐邮箱", value: storeEmail }],
+        raw_lines: [storeEmail],
+        delivered_at: now,
+      };
+      rec.detail.warranty = {
+        status: "pending",
+        admin_email: null,
+        submitted_at: null,
+        registered_at: null,
+        note: null,
+        has_screenshot: false,
+        screenshot_url: null,
+        forward_template: null,
+      };
+    } else {
+      rec.detail.status = "waiting_fulfillment";
+      rec.detail.upstream_order_code = `CNB-RETRY-${randomSegment(5)}`;
+      rec.detail.upstream_status = "paid";
+    }
     rec.detail.cost_usd = this.skus[rec.detail.sku_key].current_price_usd;
     rec.detail.last_error_code = null;
     rec.detail.last_error_message = null;
@@ -1124,8 +1333,8 @@ class DemoMockStore {
     rec.detail.audit_events.push({
       event_id: rec.detail.audit_events.length + 1,
       from_status: "needs_manual_review",
-      to_status: "waiting_fulfillment",
-      reason: `演练模式重试成功${payload.override_price_limit ? "（放行本次熔断）" : ""}${
+      to_status: rec.detail.status,
+      reason: `演练模式重试成功${payload.override_price_limit ? "（本次跳过进价上限）" : ""}${
         payload.note ? `：${payload.note}` : ""
       }`,
       created_at: now,
@@ -1137,18 +1346,21 @@ class DemoMockStore {
     this.requireToken(token);
     const rec = this.records.get(code.toUpperCase());
     if (!rec || !rec.detail.warranty) {
-      throw new MockApiError(404, "WARRANTY_NOT_FOUND", "当前订单无保修记录");
+      throw new MockApiError(404, "WARRANTY_NOT_FOUND", "这笔订单还没有保修记录");
     }
     const now = nowIso();
     rec.detail.warranty.status = "registered_upstream";
     rec.detail.warranty.registered_at = now;
     rec.detail.warranty_status = "registered_upstream";
+    if (note.trim()) {
+      rec.detail.warranty.note = note.trim();
+    }
     rec.detail.updated_at = now;
     rec.detail.audit_events.push({
       event_id: rec.detail.audit_events.length + 1,
       from_status: rec.detail.status,
       to_status: rec.detail.status,
-      reason: note.trim() || "商家已标记向 Canboso 管理员完成保修报备",
+      reason: note.trim() || "商家已向官方完成保修报备",
       created_at: now,
     });
     return { ...rec.detail };
@@ -1157,7 +1369,7 @@ class DemoMockStore {
   updateSku(token: string, skuKey: SkuKey, payload: AdminUpdateSkuRequest): AdminSkuStatus {
     this.requireToken(token);
     const sku = this.skus[skuKey];
-    if (!sku) throw new MockApiError(404, "SKU_NOT_FOUND", "SKU 不存在");
+    if (!sku) throw new MockApiError(404, "SKU_NOT_FOUND", "没找到这个商品规格");
     if (typeof payload.max_cost_usd === "number" && payload.max_cost_usd > 0) {
       sku.max_cost_usd = payload.max_cost_usd;
     }
@@ -1172,7 +1384,7 @@ class DemoMockStore {
     this.requireToken(token);
     return {
       ok: true,
-      message: "演练模式：已模拟发送测试告警邮件至 merchant***@example.com",
+      message: "演练模式：已模拟发了一封测试提醒邮件到 merchant***@example.com",
     };
   }
 }

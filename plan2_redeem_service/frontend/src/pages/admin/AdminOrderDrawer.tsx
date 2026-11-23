@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   Image as ImageIcon,
   Loader2,
+  Maximize2,
   RefreshCw,
   RotateCcw,
   ShieldCheck,
@@ -21,15 +22,17 @@ import {
 } from "../../api/client";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { CopyButton } from "../../components/CopyButton";
-import { CodeStatusBadge, WarrantyStatusBadge } from "../../components/StatusBadge";
+import { OrderDisplayStatusBadge, WarrantyStatusBadge } from "../../components/StatusBadge";
 import { useToast } from "../../components/ToastProvider";
 import type { AdminCodeDetail } from "../../types/api";
 import {
+  formatAuditEvent,
   formatDateTime,
   formatElapsedMinutes,
   formatUsd,
   getChannelLabel,
   getSkuShortLabel,
+  getUpstreamStatusLabel,
 } from "../../utils/format";
 
 interface AdminOrderDrawerProps {
@@ -58,6 +61,7 @@ export function AdminOrderDrawer({
   const [screenshotUrl, setScreenshotUrl] = useState<string | null>(null);
   const [screenshotLoading, setScreenshotLoading] = useState(false);
   const [screenshotError, setScreenshotError] = useState<string | null>(null);
+  const [screenshotZoomOpen, setScreenshotZoomOpen] = useState(false);
 
   // Mutation states
   const [polling, setPolling] = useState(false);
@@ -94,6 +98,7 @@ export function AdminOrderDrawer({
   useEffect(() => {
     setDetail(null);
     setError(null);
+    setScreenshotZoomOpen(false);
     setOverridePriceLimit(false);
     setRetryNote("");
     setAckNote("");
@@ -107,6 +112,7 @@ export function AdminOrderDrawer({
     if (!code || !detail?.warranty?.has_screenshot) {
       setScreenshotUrl(null);
       setScreenshotError(null);
+      setScreenshotZoomOpen(false);
       return;
     }
     let cancelled = false;
@@ -149,13 +155,18 @@ export function AdminOrderDrawer({
   useEffect(() => {
     if (!code) return;
     const handleKeyDown = (event: globalThis.KeyboardEvent) => {
-      if (event.key === "Escape" && !retryConfirmOpen && !revokeConfirmOpen) {
+      if (event.key !== "Escape") return;
+      if (screenshotZoomOpen) {
+        setScreenshotZoomOpen(false);
+        return;
+      }
+      if (!retryConfirmOpen && !revokeConfirmOpen) {
         onClose();
       }
     };
     window.addEventListener("keydown", handleKeyDown);
     return () => window.removeEventListener("keydown", handleKeyDown);
-  }, [code, onClose, retryConfirmOpen, revokeConfirmOpen]);
+  }, [code, onClose, retryConfirmOpen, revokeConfirmOpen, screenshotZoomOpen]);
 
   if (!code) {
     return null;
@@ -167,13 +178,13 @@ export function AdminOrderDrawer({
       const updated = await pollAdminCode(token, code);
       setDetail(updated);
       onMutated();
-      pushToast("已同步最新上游状态", "success");
+      pushToast("已刷新上游最新进度", "success");
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 401) {
         onUnauthorized();
         return;
       }
-      pushToast(caught instanceof ApiError ? caught.message : "上游轮询失败", "error");
+      pushToast(caught instanceof ApiError ? caught.message : "查上游进度失败，请稍后重试", "error");
     } finally {
       setPolling(false);
     }
@@ -186,7 +197,7 @@ export function AdminOrderDrawer({
       setDetail(updated);
       setAckNote("");
       onMutated();
-      pushToast("已标记向 Canboso 完成保修报备", "success");
+      pushToast("已标记发给官方报备", "success");
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 401) {
         onUnauthorized();
@@ -210,13 +221,13 @@ export function AdminOrderDrawer({
       setOverridePriceLimit(false);
       setRetryNote("");
       onMutated();
-      pushToast("已触发人工重试", "success");
+      pushToast("已重新向上游发起下单", "success");
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 401) {
         onUnauthorized();
         return;
       }
-      pushToast(caught instanceof ApiError ? caught.message : "重试失败，请检查日志", "error");
+      pushToast(caught instanceof ApiError ? caught.message : "重新下单失败，请稍后排查", "error");
     } finally {
       setRetrying(false);
     }
@@ -245,12 +256,22 @@ export function AdminOrderDrawer({
     }
   };
 
-  const canPoll =
-    detail &&
-    (detail.status === "waiting_fulfillment" || Boolean(detail.upstream_order_code));
-  const canRetry = detail?.status === "needs_manual_review";
-  const canRevoke =
-    detail && detail.status !== "completed" && detail.status !== "revoked";
+  const isExclusive = detail?.sku_key === "ultra_exclusive_admin";
+  const exclusiveBuyerEmail =
+    detail?.warranty?.admin_email || detail?.buyer_email || detail?.buyer_email_masked || null;
+  const exclusiveBuyerCopyText = detail?.warranty?.admin_email || detail?.buyer_email || null;
+  const exclusiveStoreEmail = detail?.store_email || detail?.delivery?.account_text?.trim() || null;
+  const sharedBuyerEmail = detail?.buyer_email || detail?.buyer_email_masked || null;
+  const sharedBuyerCopyText = detail?.buyer_email || null;
+
+  const canPoll = Boolean(
+    detail && detail.status === "waiting_fulfillment" && detail.upstream_order_code
+  );
+  const canRetry = Boolean(detail && detail.status === "needs_manual_review");
+  const canRevoke = Boolean(
+    detail && detail.status !== "completed" && detail.status !== "revoked"
+  );
+  const hasActions = canPoll || canRetry || canRevoke;
 
   return (
     <>
@@ -270,11 +291,26 @@ export function AdminOrderDrawer({
           aria-labelledby={titleId}
         >
           <header className="drawer-header">
-            <div className="row" style={{ gap: 10, minWidth: 0 }}>
+            <div className="row" style={{ gap: 8, minWidth: 0, flexWrap: "wrap" }}>
               <h2 id={titleId} className="card-title mono" style={{ fontSize: 16 }}>
                 {code}
               </h2>
-              {detail && <CodeStatusBadge status={detail.status} />}
+              {detail && (
+                <>
+                  <span
+                    className={`sku-tag ${
+                      isExclusive ? "sku-tag-exclusive" : "sku-tag-shared"
+                    }`}
+                  >
+                    {getSkuShortLabel(detail.sku_key)}
+                  </span>
+                  <OrderDisplayStatusBadge
+                    skuKey={detail.sku_key}
+                    status={detail.status}
+                    warrantyStatus={detail.warranty_status}
+                  />
+                </>
+              )}
             </div>
             <button
               type="button"
@@ -309,8 +345,8 @@ export function AdminOrderDrawer({
                   <div className="callout callout-danger" role="alert">
                     <AlertTriangle size={18} className="callout-icon" aria-hidden="true" />
                     <div>
-                      <strong>最近异常（{detail.last_error_code || "ERROR"}）：</strong>
-                      {detail.last_error_message || "上游或风控拦截，请人工核查后处理"}
+                      <strong>异常提醒：</strong>
+                      {detail.last_error_message || "这笔订单遇到问题暂停了，请核对后再处理"}
                     </div>
                   </div>
                 )}
@@ -323,7 +359,15 @@ export function AdminOrderDrawer({
                   <div className="kv-grid">
                     <div className="kv-item">
                       <span className="kv-label">商品规格</span>
-                      <span className="kv-value">{getSkuShortLabel(detail.sku_key)}</span>
+                      <span className="kv-value">
+                        <span
+                          className={`sku-tag ${
+                            isExclusive ? "sku-tag-exclusive" : "sku-tag-shared"
+                          }`}
+                        >
+                          {getSkuShortLabel(detail.sku_key)}
+                        </span>
+                      </span>
                     </div>
                     <div className="kv-item">
                       <span className="kv-label">销售渠道</span>
@@ -340,12 +384,68 @@ export function AdminOrderDrawer({
                       <span className="kv-label">批次编号</span>
                       <span className="kv-value mono">{detail.batch_id || "-"}</span>
                     </div>
-                    <div className="kv-item">
-                      <span className="kv-label">买家邮箱</span>
-                      <span className="kv-value mono">
-                        {detail.buyer_email || detail.buyer_email_masked || "-"}
-                      </span>
-                    </div>
+                    {isExclusive ? (
+                      <>
+                        <div className="kv-item">
+                          <span className="kv-label">买家主 Gmail</span>
+                          <div className="row-between" style={{ gap: 6 }}>
+                            <span
+                              className={`kv-value ${exclusiveBuyerEmail ? "mono" : "muted"}`}
+                              style={exclusiveBuyerEmail ? undefined : { color: "var(--ink-3)" }}
+                            >
+                              {exclusiveBuyerEmail || "待买家提交"}
+                            </span>
+                            {exclusiveBuyerCopyText && (
+                              <CopyButton
+                                text={exclusiveBuyerCopyText}
+                                label="复制"
+                                toastMessage="已复制买家主 Gmail"
+                                variant="ghost"
+                              />
+                            )}
+                          </div>
+                        </div>
+                        <div className="kv-item">
+                          <span className="kv-label">商店套餐邮箱</span>
+                          <div className="row-between" style={{ gap: 6 }}>
+                            <span
+                              className={`kv-value ${exclusiveStoreEmail ? "mono" : "muted"}`}
+                              style={exclusiveStoreEmail ? undefined : { color: "var(--ink-3)" }}
+                            >
+                              {exclusiveStoreEmail || "还没出货"}
+                            </span>
+                            {exclusiveStoreEmail && (
+                              <CopyButton
+                                text={exclusiveStoreEmail}
+                                label="复制"
+                                toastMessage="已复制商店套餐邮箱"
+                                variant="ghost"
+                              />
+                            )}
+                          </div>
+                        </div>
+                      </>
+                    ) : (
+                      <div className="kv-item">
+                        <span className="kv-label">买家 Gmail</span>
+                        <div className="row-between" style={{ gap: 6 }}>
+                          <span
+                            className={`kv-value ${sharedBuyerEmail ? "mono" : "muted"}`}
+                            style={sharedBuyerEmail ? undefined : { color: "var(--ink-3)" }}
+                          >
+                            {sharedBuyerEmail || "还没提货"}
+                          </span>
+                          {sharedBuyerCopyText && (
+                            <CopyButton
+                              text={sharedBuyerCopyText}
+                              label="复制"
+                              toastMessage="已复制买家 Gmail"
+                              variant="ghost"
+                            />
+                          )}
+                        </div>
+                      </div>
+                    )}
                     <div className="kv-item">
                       <span className="kv-label">上游订单与成本</span>
                       <span className="kv-value mono">
@@ -355,12 +455,11 @@ export function AdminOrderDrawer({
                     <div className="kv-item">
                       <span className="kv-label">上游状态 / 耗时</span>
                       <span className="kv-value">
-                        {detail.upstream_status || "-"} · {formatElapsedMinutes(detail.elapsed_minutes)}
+                        {getUpstreamStatusLabel(detail.upstream_status)}
+                        {detail.elapsed_minutes !== null && detail.elapsed_minutes !== undefined
+                          ? ` · ${formatElapsedMinutes(detail.elapsed_minutes)}`
+                          : ""}
                       </span>
-                    </div>
-                    <div className="kv-item">
-                      <span className="kv-label">幂等键</span>
-                      <span className="kv-value mono">{detail.idempotency_key || "-"}</span>
                     </div>
                     <div className="kv-item">
                       <span className="kv-label">创建时间</span>
@@ -379,7 +478,43 @@ export function AdminOrderDrawer({
                   )}
                 </section>
 
-                {detail.delivery && (() => {
+                {isExclusive && exclusiveStoreEmail && (() => {
+                  const extraCredentials = Array.isArray(detail.delivery?.credentials)
+                    ? detail.delivery.credentials.filter(
+                        (item) => item.value && item.value.trim() !== exclusiveStoreEmail
+                      )
+                    : [];
+                  return (
+                    <section className="store-email-box stack-sm" aria-label="独享商店套餐邮箱">
+                      <div className="row-between" style={{ gap: 8 }}>
+                        <strong style={{ fontSize: 13.5 }}>
+                          商店套餐邮箱（给买家拉进家庭组用）
+                        </strong>
+                        <CopyButton
+                          text={exclusiveStoreEmail}
+                          label="复制商店邮箱"
+                          toastMessage="已复制商店套餐邮箱"
+                          variant="primary"
+                        />
+                      </div>
+                      <div className="credential-value">{exclusiveStoreEmail}</div>
+                      {extraCredentials.length > 0 && (
+                        <div className="stack-sm" style={{ paddingTop: 4 }}>
+                          {extraCredentials.map((credential) => (
+                            <div key={credential.label} className="row-between">
+                              <span className="credential-label">{credential.label}</span>
+                              <span className="credential-value" style={{ fontSize: 13 }}>
+                                {credential.value}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </section>
+                  );
+                })()}
+
+                {!isExclusive && detail.delivery && (() => {
                   const credentials = Array.isArray(detail.delivery.credentials)
                     ? detail.delivery.credentials
                     : [];
@@ -389,35 +524,35 @@ export function AdminOrderDrawer({
                       ? detail.delivery.account_text
                       : JSON.stringify(detail.delivery);
                   return (
-                  <section className="stack-sm" aria-label="交付凭据">
-                    <div className="row-between">
-                      <strong style={{ fontSize: 14 }}>已下发交付信息</strong>
-                      <CopyButton
-                        text={fallbackText}
-                        label="复制交付文本"
-                        variant="secondary"
-                      />
-                    </div>
-                    <div className="credential-box">
-                      {credentials.length > 0 ? (
-                        credentials.map((credential) => (
-                          <div key={credential.label} className="row-between">
-                            <span className="credential-label">{credential.label}</span>
-                            <span className="credential-value" style={{ fontSize: 13.5 }}>
-                              {credential.value}
-                            </span>
-                          </div>
-                        ))
-                      ) : (
-                        <div className="credential-value">{fallbackText}</div>
-                      )}
-                    </div>
-                  </section>
+                    <section className="stack-sm" aria-label="已发出货信息">
+                      <div className="row-between">
+                        <strong style={{ fontSize: 14 }}>已发出货信息</strong>
+                        <CopyButton
+                          text={fallbackText}
+                          label="复制出货内容"
+                          variant="secondary"
+                        />
+                      </div>
+                      <div className="credential-box">
+                        {credentials.length > 0 ? (
+                          credentials.map((credential) => (
+                            <div key={credential.label} className="row-between">
+                              <span className="credential-label">{credential.label}</span>
+                              <span className="credential-value" style={{ fontSize: 13.5 }}>
+                                {credential.value}
+                              </span>
+                            </div>
+                          ))
+                        ) : (
+                          <div className="credential-value">{fallbackText}</div>
+                        )}
+                      </div>
+                    </section>
                   );
                 })()}
 
                 {detail.warranty && (
-                  <section className="inset-panel stack-sm" aria-label="独享整组保修登记">
+                  <section className="inset-panel stack-sm" aria-label="保修登记与官方报备">
                     <div className="row-between">
                       <div className="row" style={{ gap: 8 }}>
                         <ShieldCheck size={16} style={{ color: "var(--accent)" }} aria-hidden="true" />
@@ -428,8 +563,10 @@ export function AdminOrderDrawer({
 
                     <div className="kv-grid">
                       <div className="kv-item">
-                        <span className="kv-label">买家管理员 Gmail</span>
-                        <span className="kv-value mono">{detail.warranty.admin_email || "-"}</span>
+                        <span className="kv-label">买家主 Gmail</span>
+                        <span className="kv-value mono">
+                          {detail.warranty.admin_email || "待买家提交"}
+                        </span>
                       </div>
                       <div className="kv-item">
                         <span className="kv-label">提交 / 报备时间</span>
@@ -440,18 +577,48 @@ export function AdminOrderDrawer({
                       </div>
                     </div>
 
-                    {detail.warranty.note && (
+                    {detail.warranty.status === "registered_upstream" ? (
+                      <div className="callout callout-success" role="status">
+                        <CheckCircle2 size={17} className="callout-icon" aria-hidden="true" />
+                        <div>
+                          <div>
+                            已于{" "}
+                            <strong className="mono">
+                              {formatDateTime(detail.warranty.registered_at)}
+                            </strong>{" "}
+                            完成官方报备
+                          </div>
+                          {detail.warranty.note && (
+                            <div style={{ marginTop: 4, fontSize: 12.5 }}>
+                              备注：{detail.warranty.note}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ) : detail.warranty.note ? (
                       <div style={{ fontSize: 13, color: "var(--ink-2)" }}>
                         <strong>买家备注：</strong>
                         {detail.warranty.note}
                       </div>
-                    )}
+                    ) : null}
 
                     {detail.warranty.has_screenshot && (
                       <div className="stack-sm">
-                        <div className="row" style={{ gap: 6, fontSize: 13, color: "var(--ink-3)" }}>
-                          <ImageIcon size={14} aria-hidden="true" />
-                          <span>买家邀请确认截图（需管理员鉴权加载）</span>
+                        <div className="row-between" style={{ fontSize: 13, color: "var(--ink-3)" }}>
+                          <span className="row" style={{ gap: 6 }}>
+                            <ImageIcon size={14} aria-hidden="true" />
+                            <span>买家家庭组邀请截图</span>
+                          </span>
+                          {screenshotUrl && (
+                            <button
+                              type="button"
+                              className="btn btn-ghost btn-sm"
+                              onClick={() => setScreenshotZoomOpen(true)}
+                            >
+                              <Maximize2 size={13} />
+                              <span>点击放大</span>
+                            </button>
+                          )}
                         </div>
                         {screenshotLoading ? (
                           <div className="skeleton" style={{ height: 140, width: "100%" }} />
@@ -460,12 +627,26 @@ export function AdminOrderDrawer({
                             {screenshotError}
                           </p>
                         ) : screenshotUrl ? (
-                          <img
-                            src={screenshotUrl}
-                            alt="买家上传的 Google 家庭组邀请确认截图"
-                            className="upload-preview-img"
-                            style={{ maxHeight: 240 }}
-                          />
+                          <button
+                            type="button"
+                            onClick={() => setScreenshotZoomOpen(true)}
+                            aria-label="放大查看买家家庭组邀请截图"
+                            style={{
+                              padding: 0,
+                              border: 0,
+                              background: "transparent",
+                              cursor: "zoom-in",
+                              width: "100%",
+                              textAlign: "left",
+                            }}
+                          >
+                            <img
+                              src={screenshotUrl}
+                              alt="买家上传的 Google 家庭组邀请确认截图"
+                              className="upload-preview-img"
+                              style={{ maxHeight: 240 }}
+                            />
+                          </button>
                         ) : null}
                       </div>
                     )}
@@ -473,11 +654,13 @@ export function AdminOrderDrawer({
                     {detail.warranty.forward_template && (
                       <div className="stack-sm">
                         <div className="row-between">
-                          <span style={{ fontSize: 13, fontWeight: 600 }}>Canboso 管理员报备模板</span>
+                          <span style={{ fontSize: 13, fontWeight: 600 }}>
+                            发给官方的越南语报备话术
+                          </span>
                           <CopyButton
                             text={detail.warranty.forward_template}
-                            label="一键复制报备文本"
-                            toastMessage="已复制保修报备文本，可直接发给 Canboso 客服"
+                            label="复制越南语话术"
+                            toastMessage="已复制越南语报备话术，可直接发给 Canboso 客服"
                             variant="primary"
                           />
                         </div>
@@ -504,12 +687,12 @@ export function AdminOrderDrawer({
                           {acking ? (
                             <>
                               <Loader2 size={15} className="spin" />
-                              <span>更新中...</span>
+                              <span>保存中...</span>
                             </>
                           ) : (
                             <>
                               <CheckCircle2 size={15} />
-                              <span>标记已向 Canboso 完成报备</span>
+                              <span>我已发给官方报备</span>
                             </>
                           )}
                         </button>
@@ -518,92 +701,107 @@ export function AdminOrderDrawer({
                   </section>
                 )}
 
-                <section className="stack-sm" aria-label="人工干预操作">
-                  <strong style={{ fontSize: 14 }}>人工履约操作</strong>
+                {hasActions && (
+                  <section className="stack-sm" aria-label="订单操作">
+                    <strong style={{ fontSize: 14 }}>订单操作</strong>
 
-                  <div className="row">
-                    {canPoll && (
-                      <button
-                        type="button"
-                        className={`btn btn-secondary ${polling ? "is-loading" : ""}`}
-                        disabled={polling}
-                        aria-busy={polling}
-                        onClick={() => void handlePoll()}
-                      >
-                        {polling ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}
-                        <span>立即轮询上游状态</span>
-                      </button>
+                    {(canPoll || canRevoke) && (
+                      <div className="row">
+                        {canPoll && (
+                          <button
+                            type="button"
+                            className={`btn btn-secondary ${polling ? "is-loading" : ""}`}
+                            disabled={polling}
+                            aria-busy={polling}
+                            onClick={() => void handlePoll()}
+                          >
+                            {polling ? (
+                              <Loader2 size={15} className="spin" />
+                            ) : (
+                              <RefreshCw size={15} />
+                            )}
+                            <span>立即查一次上游进度</span>
+                          </button>
+                        )}
+
+                        {canRevoke && (
+                          <button
+                            type="button"
+                            className="btn btn-danger"
+                            onClick={() => setRevokeConfirmOpen(true)}
+                          >
+                            <Ban size={15} />
+                            <span>作废这个兑换码</span>
+                          </button>
+                        )}
+                      </div>
                     )}
 
-                    {canRevoke && (
-                      <button
-                        type="button"
-                        className="btn btn-danger"
-                        onClick={() => setRevokeConfirmOpen(true)}
-                      >
-                        <Ban size={15} />
-                        <span>作废兑换码</span>
-                      </button>
-                    )}
-                  </div>
-
-                  {canRetry && (
-                    <div className="inset-panel stack-sm">
-                      <strong style={{ fontSize: 13.5 }}>人工重试上游下单</strong>
-                      <label className={`check-card ${overridePriceLimit ? "is-checked" : ""}`}>
+                    {canRetry && (
+                      <div className="inset-panel stack-sm">
+                        <strong style={{ fontSize: 13.5 }}>重新向上游下单</strong>
+                        <label className={`check-card ${overridePriceLimit ? "is-checked" : ""}`}>
+                          <input
+                            type="checkbox"
+                            checked={overridePriceLimit}
+                            onChange={(event) => setOverridePriceLimit(event.target.checked)}
+                          />
+                          <span className="check-card-body">
+                            <strong>按当前进价放行并重下</strong>
+                            <span>
+                              确认上游涨价仍能接受时再勾选；不勾会继续按单笔最高进价检查。
+                            </span>
+                          </span>
+                        </label>
                         <input
-                          type="checkbox"
-                          checked={overridePriceLimit}
-                          onChange={(event) => setOverridePriceLimit(event.target.checked)}
+                          type="text"
+                          className="input"
+                          placeholder="操作备注（可选，例如：已充余额重新下单）"
+                          value={retryNote}
+                          onChange={(event) => setRetryNote(event.target.value)}
                         />
-                        <span className="check-card-body">
-                          <strong>本次放行价格熔断上限（override_price_limit）</strong>
-                          <span>仅在确认上游涨价仍可接受时勾选，否则保持按当前上限风控校验。</span>
-                        </span>
-                      </label>
-                      <input
-                        type="text"
-                        className="input"
-                        placeholder="操作备注（可选，例如：已补余额重新下单）"
-                        value={retryNote}
-                        onChange={(event) => setRetryNote(event.target.value)}
-                      />
-                      <button
-                        type="button"
-                        className="btn btn-warm btn-block"
-                        onClick={() => setRetryConfirmOpen(true)}
-                      >
-                        <RotateCcw size={15} />
-                        <span>重试上游履约</span>
-                      </button>
-                    </div>
-                  )}
-                </section>
+                        <button
+                          type="button"
+                          className="btn btn-warm btn-block"
+                          onClick={() => setRetryConfirmOpen(true)}
+                        >
+                          <RotateCcw size={15} />
+                          <span>
+                            {overridePriceLimit ? "按当前进价放行并重下" : "重新向上游下单"}
+                          </span>
+                        </button>
+                      </div>
+                    )}
+                  </section>
+                )}
 
-                <section className="stack-sm" aria-label="状态流转审计日志">
-                  <strong style={{ fontSize: 14 }}>审计时间线</strong>
+                <section className="stack-sm" aria-label="订单动态">
+                  <strong style={{ fontSize: 14 }}>订单动态</strong>
                   {detail.audit_events.length === 0 ? (
-                    <p className="field-hint">暂无状态流转记录</p>
+                    <p className="field-hint">暂无订单动态</p>
                   ) : (
                     <ol className="timeline">
-                      {detail.audit_events.map((auditItem) => (
-                        <li key={auditItem.event_id} className="timeline-item">
-                          <span className="timeline-dot" aria-hidden="true" />
-                          <div className="stack-sm" style={{ gap: 2 }}>
-                            <div className="row-between">
-                              <strong style={{ fontSize: 13, color: "var(--ink-1)" }}>
-                                {auditItem.from_status
-                                  ? `${auditItem.from_status} -> ${auditItem.to_status}`
-                                  : auditItem.to_status}
-                              </strong>
-                              <span className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>
-                                {formatDateTime(auditItem.created_at)}
-                              </span>
+                      {detail.audit_events.map((auditItem) => {
+                        const ev = formatAuditEvent(auditItem);
+                        return (
+                          <li key={auditItem.event_id} className="timeline-item">
+                            <span className="timeline-dot" aria-hidden="true" />
+                            <div className="stack-sm" style={{ gap: 2 }}>
+                              <div className="row-between">
+                                <strong style={{ fontSize: 13, color: "var(--ink-1)" }}>
+                                  {ev.title}
+                                </strong>
+                                <span className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>
+                                  {formatDateTime(auditItem.created_at)}
+                                </span>
+                              </div>
+                              {ev.detail && ev.detail !== ev.title && (
+                                <span style={{ color: "var(--ink-2)" }}>{ev.detail}</span>
+                              )}
                             </div>
-                            <span style={{ color: "var(--ink-2)" }}>{auditItem.reason}</span>
-                          </div>
-                        </li>
-                      ))}
+                          </li>
+                        );
+                      })}
                     </ol>
                   )}
                 </section>
@@ -613,25 +811,77 @@ export function AdminOrderDrawer({
         </aside>
       </div>
 
+      {screenshotZoomOpen && screenshotUrl && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-label="放大查看保修截图"
+          onClick={() => setScreenshotZoomOpen(false)}
+          style={{
+            position: "fixed",
+            inset: 0,
+            zIndex: 120,
+            background: "rgba(15, 23, 42, 0.82)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            padding: 20,
+          }}
+        >
+          <div
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              position: "relative",
+              maxWidth: "92vw",
+              maxHeight: "90vh",
+              display: "flex",
+              flexDirection: "column",
+              gap: 10,
+              alignItems: "flex-end",
+            }}
+          >
+            <button
+              type="button"
+              className="btn btn-secondary btn-sm"
+              onClick={() => setScreenshotZoomOpen(false)}
+            >
+              <X size={15} />
+              <span>关闭大图</span>
+            </button>
+            <img
+              src={screenshotUrl}
+              alt="买家上传的 Google 家庭组邀请确认截图大图"
+              style={{
+                maxWidth: "92vw",
+                maxHeight: "calc(90vh - 48px)",
+                borderRadius: 12,
+                background: "#fff",
+                objectFit: "contain",
+              }}
+            />
+          </div>
+        </div>
+      )}
+
       <ConfirmDialog
         open={retryConfirmOpen}
-        title="确认重新触发上游履约"
-        confirmLabel="确认重试"
+        title="确认重新向上游下单"
+        confirmLabel={overridePriceLimit ? "确认放行并重下" : "确认重新下单"}
         busy={retrying}
         onConfirm={() => void handleRetryConfirm()}
         onClose={() => setRetryConfirmOpen(false)}
       >
         <p>
-          即将对兑换码 <strong className="mono">{code}</strong> 重新执行履约流程。
+          即将为兑换码 <strong className="mono">{code}</strong> 重新向上游发起下单。
           {overridePriceLimit
-            ? "当前已勾选放行价格熔断上限，若后端处于 LIVE 模式会按上游实时价格下单。"
-            : "系统会复用原有幂等键并继续校验价格熔断上限。"}
+            ? "你已勾选按当前进价放行，生产模式下会直接按上游现价下单。"
+            : "系统会自动防止重复扣款，并继续检查单笔最高进价限制。"}
         </p>
       </ConfirmDialog>
 
       <ConfirmDialog
         open={revokeConfirmOpen}
-        title="确认作废该兑换码"
+        title="确认作废这个兑换码"
         confirmLabel="确认作废"
         confirmVariant="danger"
         busy={revoking}
@@ -639,7 +889,7 @@ export function AdminOrderDrawer({
         onClose={() => setRevokeConfirmOpen(false)}
       >
         <p>
-          作废后买家将无法继续核销 <strong className="mono">{code}</strong>，通常用于买家退款或取消订单后防二次提货。
+          作废后买家就无法再用 <strong className="mono">{code}</strong> 提货，适合买家退款或取消订单后防止重复领取。
         </p>
         <div className="field-group">
           <label className="field-label" htmlFor="revoke-reason-input">

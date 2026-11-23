@@ -1,70 +1,83 @@
-/* finesse · register=product · A=cool-mineral+teal-clay · B=700/400 · C=two-tone-rail+workflow
- * D=css-tactile-feedback · E=mineral-paper-hairline · SOUL=5 SPECTACLE=2 DENSITY=7 */
+/* finesse · register=product · A=pearl-lilac+iris-sakura · B=700/400 · C=two-tone-rail+workflow
+ * D=css-tactile-feedback · E=pearl-veil-hairline · SOUL=6 SPECTACLE=2 DENSITY=7 */
 
 :root {
   color-scheme: light;
 
-  /* Substrate: Teal & Clay tinted mineral paper */
-  --page: #e9eeed;
-  --bg: #fcfefd;
-  --panel-2: #f1f5f4;
-  --panel-3: #e3ecea;
-  --border: rgba(15, 35, 34, 0.09);
-  --border-strong: rgba(15, 35, 34, 0.17);
+  /* Substrate: Pearl lilac mist & warm white sheets */
+  --page: #f2eff6;
+  --bg: #fcfbfd;
+  --bg-elevated: rgba(252, 251, 253, 0.94);
+  --bg-topbar: rgba(252, 251, 253, 0.88);
+  --panel-2: #f5f2f9;
+  --panel-3: #ebe5f3;
+  --border: rgba(34, 24, 52, 0.09);
+  --border-strong: rgba(34, 24, 52, 0.17);
+  --border-card-veil: rgba(92, 59, 138, 0.14);
 
   /* Ink ramp (verified >= 4.5:1 on --bg and --panel-2) */
-  --ink-1: #0f2322;
-  --ink-2: #344746;
-  --ink-3: #526665;
+  --ink-1: #1f172b;
+  --ink-2: #463a59;
+  --ink-3: #65587a;
 
-  /* Brand & partner accents */
-  --accent: #136463;
-  --accent-hover: #0e5251;
-  --accent-active: #0a4140;
-  --accent-soft: rgba(19, 100, 99, 0.1);
-  --accent-border: rgba(19, 100, 99, 0.26);
-  --on-accent: #f6fbfa;
-  --glow: rgba(19, 100, 99, 0.28);
+  /* Brand & partner accents (Iris Plum + Warm Sakura Rose) */
+  --accent: #5c3b8a;
+  --accent-hover: #4b2f73;
+  --accent-active: #3c245e;
+  --accent-soft: rgba(92, 59, 138, 0.1);
+  --accent-border: rgba(92, 59, 138, 0.25);
+  --on-accent: #faf8fd;
+  --glow: rgba(31, 23, 43, 0.22);
 
-  --accent-2: #b85634;
-  --accent-2-hover: #9d4527;
-  --accent-2-soft: rgba(184, 86, 52, 0.11);
-  --accent-2-border: rgba(184, 86, 52, 0.28);
+  --accent-2: #b54d6b;
+  --accent-2-hover: #9b3e59;
+  --accent-2-ink: #963854;
+  --accent-2-soft: rgba(181, 77, 107, 0.1);
+  --accent-2-border: rgba(181, 77, 107, 0.26);
 
-  /* Dark operational rail (Admin left sidebar) */
-  --rail: #0f1d1d;
-  --rail-2: #172b2b;
-  --rail-3: #213a3a;
-  --rail-border: rgba(235, 246, 245, 0.1);
-  --rail-ink: #b8cecd;
-  --rail-ink-strong: #edf5f4;
-  --rail-accent-soft: rgba(94, 211, 206, 0.14);
-  --rail-accent-ink: #7ee3de;
+  /* Dark plum operational rail (Admin left sidebar) */
+  --rail: #1b1427;
+  --rail-2: #251c35;
+  --rail-3: #312545;
+  --rail-border: rgba(242, 236, 250, 0.11);
+  --rail-ink: #c8bddb;
+  --rail-ink-strong: #f5f1fb;
+  --rail-accent-soft: rgba(209, 169, 235, 0.16);
+  --rail-accent-border: rgba(228, 196, 247, 0.28);
+  --rail-accent-ink: #e4c4f7;
+  --rail-danger-bg: rgba(181, 52, 60, 0.28);
+  --rail-danger-ink: #ffbdc3;
+  --rail-live-bg: rgba(181, 77, 107, 0.28);
+  --rail-live-ink: #ffc2d4;
 
   /* Semantic colors (separated from brand) */
-  --up: #1b6e4a;
-  --up-soft: rgba(27, 110, 74, 0.11);
-  --up-border: rgba(27, 110, 74, 0.26);
+  --up: #1d6f4e;
+  --up-soft: rgba(29, 111, 78, 0.11);
+  --up-border: rgba(29, 111, 78, 0.26);
 
-  --down: #b5342e;
-  --down-hover: #962823;
-  --down-soft: rgba(181, 52, 46, 0.1);
-  --down-border: rgba(181, 52, 46, 0.26);
+  --down: #b5343c;
+  --down-hover: #972830;
+  --down-soft: rgba(181, 52, 60, 0.1);
+  --down-border: rgba(181, 52, 60, 0.26);
 
-  --warn: #8a5306;
+  --warn: #8e550a;
   --warn-soft: rgba(186, 122, 18, 0.13);
   --warn-border: rgba(186, 122, 18, 0.32);
 
-  --info: #1f5a85;
-  --info-soft: rgba(31, 90, 133, 0.1);
-  --info-border: rgba(31, 90, 133, 0.25);
+  --info: #275b8d;
+  --info-soft: rgba(39, 91, 141, 0.1);
+  --info-border: rgba(39, 91, 141, 0.25);
 
-  /* Focus & elevation (tinted toward mineral ink) */
-  --focus-ring: #0f2322;
-  --focus-ring-dark: #7ee3de;
-  --shadow: 0 1px 2px rgba(15, 35, 34, 0.05), 0 4px 14px -6px rgba(15, 35, 34, 0.07);
-  --shadow-hover: 0 2px 6px rgba(15, 35, 34, 0.08), 0 10px 24px -10px rgba(15, 35, 34, 0.12);
-  --shadow-lg: 0 28px 70px -30px rgba(15, 35, 34, 0.34), 0 8px 20px -8px rgba(15, 35, 34, 0.14);
+  --toast-up-ink: #7ae5b9;
+  --toast-down-ink: #ffb3ba;
+
+  /* Focus & elevation (tinted toward deep plum ink, no neon glow) */
+  --focus-ring: #3c245e;
+  --focus-ring-dark: #e4c4f7;
+  --shadow: 0 1px 2px rgba(31, 23, 43, 0.05), 0 6px 18px -8px rgba(31, 23, 43, 0.08);
+  --shadow-hover: 0 2px 6px rgba(31, 23, 43, 0.08), 0 12px 26px -10px rgba(31, 23, 43, 0.13);
+  --shadow-card-veil: 0 2px 6px rgba(31, 23, 43, 0.06), 0 18px 40px -20px rgba(31, 23, 43, 0.18);
+  --shadow-lg: 0 28px 70px -30px rgba(31, 23, 43, 0.36), 0 8px 22px -8px rgba(31, 23, 43, 0.14);
 
   /* Radii & rhythm */
   --r-sm: 11px;
@@ -112,8 +125,15 @@ body {
   flex-direction: column;
 }
 
+.app-shell {
+  flex: 1 0 auto;
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
 ::selection {
-  background: rgba(19, 100, 99, 0.18);
+  background: rgba(92, 59, 138, 0.18);
   color: var(--ink-1);
 }
 
@@ -161,7 +181,7 @@ p {
 /* Scrollbars */
 * {
   scrollbar-width: thin;
-  scrollbar-color: rgba(15, 35, 34, 0.24) transparent;
+  scrollbar-color: rgba(31, 23, 43, 0.24) transparent;
 }
 
 .mono {
@@ -223,11 +243,14 @@ p {
 }
 
 .demo-banner-action {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
   background: var(--rail-2);
   color: var(--rail-ink-strong);
   border: 1px solid var(--rail-border);
   border-radius: var(--r-pill);
-  padding: 8px 14px;
+  padding: 0 16px;
   min-height: 44px;
   font-size: 12.5px;
   font-weight: 500;
@@ -374,21 +397,21 @@ p {
 .btn-primary {
   background: var(--accent);
   color: var(--on-accent);
-  border-color: rgba(10, 65, 64, 0.25);
-  box-shadow: 0 1px 2px rgba(15, 35, 34, 0.14), 0 8px 20px -12px var(--glow);
+  border-color: rgba(60, 36, 94, 0.28);
+  box-shadow: 0 1px 2px rgba(31, 23, 43, 0.14), 0 6px 16px -10px var(--glow);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .btn-primary:hover:not(:disabled):not([aria-disabled="true"]):not(.is-loading) {
     background: var(--accent-hover);
-    box-shadow: 0 2px 6px rgba(15, 35, 34, 0.18), 0 12px 24px -10px var(--glow);
+    box-shadow: 0 2px 6px rgba(31, 23, 43, 0.18), 0 10px 20px -10px var(--glow);
   }
 }
 
 .btn-primary:active:not(:disabled):not([aria-disabled="true"]):not(.is-loading) {
   background: var(--accent-active);
   transform: translateY(1px) scale(0.985);
-  box-shadow: 0 1px 2px rgba(15, 35, 34, 0.16);
+  box-shadow: 0 1px 2px rgba(31, 23, 43, 0.16);
 }
 
 /* Secondary */
@@ -396,14 +419,14 @@ p {
   background: var(--bg);
   color: var(--ink-1);
   border-color: var(--border-strong);
-  box-shadow: 0 1px 2px rgba(15, 35, 34, 0.04);
+  box-shadow: 0 1px 2px rgba(31, 23, 43, 0.04);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .btn-secondary:hover:not(:disabled):not([aria-disabled="true"]):not(.is-loading) {
     background: var(--panel-2);
-    border-color: rgba(15, 35, 34, 0.26);
-    box-shadow: 0 2px 6px rgba(15, 35, 34, 0.07);
+    border-color: rgba(34, 24, 52, 0.26);
+    box-shadow: 0 2px 6px rgba(31, 23, 43, 0.07);
   }
 }
 
@@ -421,28 +444,28 @@ p {
 
 @media (hover: hover) and (pointer: fine) {
   .btn-ghost:hover:not(:disabled):not([aria-disabled="true"]):not(.is-loading) {
-    background: rgba(15, 35, 34, 0.06);
+    background: rgba(34, 24, 52, 0.06);
     color: var(--ink-1);
   }
 }
 
 .btn-ghost:active:not(:disabled):not([aria-disabled="true"]):not(.is-loading) {
-  background: rgba(15, 35, 34, 0.1);
+  background: rgba(34, 24, 52, 0.1);
   transform: translateY(1px) scale(0.985);
 }
 
-/* Warm secondary CTA (Clay accent) */
+/* Warm secondary CTA (Sakura rose accent) */
 .btn-warm {
   background: var(--accent-2);
   color: var(--on-accent);
-  border-color: rgba(120, 44, 18, 0.25);
-  box-shadow: 0 1px 2px rgba(15, 35, 34, 0.14);
+  border-color: rgba(128, 45, 70, 0.28);
+  box-shadow: 0 1px 2px rgba(31, 23, 43, 0.14);
 }
 
 @media (hover: hover) and (pointer: fine) {
   .btn-warm:hover:not(:disabled):not([aria-disabled="true"]):not(.is-loading) {
     background: var(--accent-2-hover);
-    box-shadow: 0 2px 8px rgba(184, 86, 52, 0.28);
+    box-shadow: 0 2px 8px rgba(31, 23, 43, 0.18);
   }
 }
 
@@ -474,7 +497,7 @@ p {
 .btn-danger-solid {
   background: var(--down);
   color: var(--on-accent);
-  border-color: rgba(120, 22, 18, 0.25);
+  border-color: rgba(130, 28, 36, 0.26);
 }
 
 @media (hover: hover) and (pointer: fine) {
@@ -716,6 +739,84 @@ p {
 }
 
 /* =========================================================================
+   SKU & Dual-Email Tags (Shared Slot vs Exclusive Full Family)
+   ========================================================================= */
+.sku-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 9px;
+  border-radius: var(--r-pill);
+  font-size: 12px;
+  font-weight: 600;
+  line-height: 1.4;
+  white-space: nowrap;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+}
+
+.sku-tag-shared {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.sku-tag-exclusive {
+  background: var(--accent-2-soft);
+  color: var(--accent-2-ink);
+  border-color: var(--accent-2-border);
+}
+
+.email-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+
+.email-line {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  min-width: 0;
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink-2);
+}
+
+.email-line .mono {
+  word-break: break-all;
+  color: var(--ink-1);
+}
+
+.email-role-tag {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 1.45;
+  white-space: nowrap;
+  flex-shrink: 0;
+  border: 1px solid transparent;
+}
+
+.email-role-tag-buyer {
+  background: var(--accent-soft);
+  color: var(--accent);
+  border-color: var(--accent-border);
+}
+
+.email-role-tag-store {
+  background: var(--accent-2-soft);
+  color: var(--accent-2-ink);
+  border-color: var(--accent-2-border);
+}
+
+/* =========================================================================
    Form Controls
    ========================================================================= */
 .field-group {
@@ -778,8 +879,8 @@ p {
   right: 4px;
   top: 50%;
   transform: translateY(-50%);
-  width: 36px;
-  height: 36px;
+  width: 38px;
+  height: 38px;
   border: 0;
   border-radius: 8px;
   background: transparent;
@@ -828,7 +929,7 @@ p {
 
 .input-error {
   border-color: var(--down);
-  background: rgba(181, 52, 46, 0.03);
+  background: rgba(181, 52, 60, 0.035);
 }
 
 .input-success {
@@ -857,8 +958,8 @@ p {
 .suggestion-chip {
   display: inline-flex;
   align-items: center;
-  min-height: 32px;
-  padding: 2px 10px;
+  min-height: 36px;
+  padding: 4px 12px;
   border-radius: var(--r-pill);
   border: 1px solid var(--accent-border);
   background: var(--accent-soft);
@@ -923,12 +1024,26 @@ p {
 }
 
 /* =========================================================================
-   Buyer Surface (Mobile-first, Desktop-balanced)
+   Buyer Surface (Atmospheric Wallpaper + High-Clarity Pearl Sheets)
    ========================================================================= */
 .buyer-page {
   flex: 1 0 auto;
   width: 100%;
-  padding: 18px max(16px, env(safe-area-inset-right)) max(40px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  padding: 20px max(16px, env(safe-area-inset-right)) max(44px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background-color: var(--page);
+  background-image:
+    linear-gradient(
+      180deg,
+      rgba(247, 243, 252, 0.44) 0%,
+      rgba(245, 240, 251, 0.68) 32%,
+      rgba(242, 239, 246, 0.84) 70%,
+      rgba(242, 239, 246, 0.92) 100%
+    ),
+    url("../assets/wallpaper.jpg");
+  background-size: cover, cover;
+  background-position: center center, center 22%;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
 }
 
 .buyer-container {
@@ -941,12 +1056,23 @@ p {
   min-width: 0;
 }
 
+.buyer-page .card {
+  background: var(--bg-elevated);
+  border-color: var(--border-card-veil);
+  box-shadow: var(--shadow-card-veil);
+}
+
 .buyer-topbar {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  min-height: 48px;
+  min-height: 52px;
+  padding: 8px 14px;
+  border-radius: var(--r);
+  background: var(--bg-topbar);
+  border: 1px solid var(--border-card-veil);
+  box-shadow: 0 2px 12px -6px rgba(31, 23, 43, 0.1);
 }
 
 .brand-lockup {
@@ -966,12 +1092,13 @@ p {
   height: 34px;
   border-radius: 10px;
   background: var(--rail);
+  border: 1px solid var(--rail-accent-border);
   color: var(--rail-accent-ink);
   display: inline-flex;
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  box-shadow: 0 2px 6px rgba(15, 35, 34, 0.16);
+  box-shadow: 0 2px 6px rgba(31, 23, 43, 0.18);
 }
 
 /* Voucher header band inside Redeem card */
@@ -1169,7 +1296,7 @@ p {
 
 .sku-ledger-icon.account {
   background: var(--accent-2-soft);
-  color: var(--accent-2);
+  color: var(--accent-2-ink);
 }
 
 .sku-ledger-desc {
@@ -1214,6 +1341,92 @@ p {
   overflow-wrap: anywhere;
 }
 
+/* Exclusive Store Package Email Highlight Box */
+.store-email-box {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px 16px;
+  flex-wrap: wrap;
+  padding: 16px;
+  border-radius: var(--r);
+  border: 1px solid var(--accent-2-border);
+  background: linear-gradient(
+    180deg,
+    rgba(252, 246, 249, 0.96),
+    rgba(247, 238, 243, 0.94)
+  );
+  box-shadow: 0 2px 12px -6px rgba(181, 77, 107, 0.22);
+  min-width: 0;
+}
+
+.store-email-box.stack,
+.store-email-box.stack-sm {
+  flex-direction: column;
+  align-items: stretch;
+}
+
+.store-email-box > * {
+  min-width: 0;
+}
+
+.store-email-box .credential-label {
+  color: var(--accent-2-ink);
+  font-weight: 700;
+}
+
+.store-email-box .credential-value,
+.store-email-box .mono {
+  color: var(--ink-1);
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.store-email-box .btn {
+  flex-shrink: 0;
+}
+
+/* Exclusive 3-Step Reverse Family Setup Guide Card */
+.exclusive-steps-card {
+  background: var(--panel-2);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--r);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+.exclusive-steps-card h3,
+.exclusive-steps-card h4,
+.exclusive-steps-card .card-title {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink-1);
+}
+
+.exclusive-steps-card ol {
+  margin: 0;
+  padding-left: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 9px;
+  font-size: 13.5px;
+  color: var(--ink-2);
+  line-height: 1.6;
+}
+
+.exclusive-steps-card ol li::marker {
+  color: var(--accent-2-ink);
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.exclusive-steps-card strong {
+  color: var(--ink-1);
+}
+
 /* Key-value grid */
 .kv-grid {
   display: grid;
@@ -1222,6 +1435,9 @@ p {
 }
 
 .kv-item {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
   background: var(--panel-2);
   border: 1px solid var(--border);
   border-radius: var(--r-sm);
@@ -1232,14 +1448,15 @@ p {
 .kv-label {
   display: block;
   font-size: 12px;
+  line-height: 1.35;
   color: var(--ink-3);
-  margin-bottom: 3px;
 }
 
 .kv-value {
   display: block;
   font-size: 14px;
   font-weight: 600;
+  line-height: 1.45;
   color: var(--ink-1);
   overflow-wrap: anywhere;
 }
@@ -1340,8 +1557,8 @@ p {
   align-items: center;
   justify-content: center;
   gap: 6px;
-  min-height: 40px;
-  padding: 0 13px;
+  min-height: 44px;
+  padding: 0 14px;
   border-radius: var(--r-pill);
   border: 1px solid var(--border-strong);
   background: var(--bg);
@@ -1387,6 +1604,17 @@ p {
   color: var(--ink-3);
 }
 
+.buyer-page .footer-links {
+  width: fit-content;
+  max-width: 100%;
+  margin: 4px auto 0;
+  padding: 7px 16px;
+  border-radius: var(--r-pill);
+  background: var(--bg-topbar);
+  border: 1px solid var(--border-card-veil);
+  box-shadow: 0 2px 10px -4px rgba(31, 23, 43, 0.08);
+}
+
 /* Loading skeleton */
 .skeleton {
   background: linear-gradient(90deg, var(--panel-2) 25%, var(--panel-3) 50%, var(--panel-2) 75%);
@@ -1421,7 +1649,7 @@ dialog.native-dialog:modal {
 }
 
 dialog.native-dialog::backdrop {
-  background: rgba(10, 24, 24, 0.56);
+  background: rgba(27, 20, 39, 0.56);
   overflow: hidden;
   overscroll-behavior: contain;
 }
@@ -1464,10 +1692,17 @@ dialog.native-dialog::backdrop {
   display: grid;
   grid-template-columns: 248px minmax(0, 1fr);
   min-height: 100dvh;
+  background-color: var(--page);
 }
 
 .admin-rail {
-  background: var(--rail);
+  background-color: var(--rail);
+  background-image: radial-gradient(
+    140% 240px at 50% 0%,
+    rgba(181, 77, 107, 0.09) 0%,
+    rgba(92, 59, 138, 0.06) 46%,
+    transparent 78%
+  );
   color: var(--rail-ink);
   border-right: 1px solid var(--rail-border);
   padding: 20px 14px;
@@ -1484,9 +1719,30 @@ dialog.native-dialog::backdrop {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 6px 8px;
+  padding: 10px 11px;
+  border-radius: 13px;
+  border: 1px solid var(--rail-border);
+  background-color: var(--rail-2);
+  background-image:
+    linear-gradient(
+      135deg,
+      rgba(27, 20, 39, 0.88) 0%,
+      rgba(37, 28, 53, 0.82) 56%,
+      rgba(27, 20, 39, 0.92) 100%
+    ),
+    url("../assets/wallpaper.jpg");
+  background-size: cover, cover;
+  background-position: center center, center 24%;
   color: var(--rail-ink-strong);
   text-decoration: none;
+  transition: border-color 140ms ease-out;
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .admin-rail-brand:hover {
+    border-color: var(--rail-accent-border);
+    color: var(--rail-ink-strong);
+  }
 }
 
 .admin-mobile-actions {
@@ -1500,7 +1756,7 @@ dialog.native-dialog::backdrop {
   height: 34px;
   border-radius: 10px;
   background: var(--rail-accent-soft);
-  border: 1px solid rgba(126, 227, 222, 0.25);
+  border: 1px solid var(--rail-accent-border);
   color: var(--rail-accent-ink);
   display: inline-flex;
   align-items: center;
@@ -1560,7 +1816,7 @@ dialog.native-dialog::backdrop {
 
 .rail-nav-btn.is-active {
   background: var(--rail-accent-soft);
-  border-color: rgba(126, 227, 222, 0.24);
+  border-color: var(--rail-accent-border);
   color: var(--rail-ink-strong);
   font-weight: 600;
 }
@@ -1577,8 +1833,8 @@ dialog.native-dialog::backdrop {
   font-size: 12px;
   padding: 1px 7px;
   border-radius: var(--r-pill);
-  background: rgba(181, 52, 46, 0.25);
-  color: #ffb4ad;
+  background: var(--rail-danger-bg);
+  color: var(--rail-danger-ink);
 }
 
 .admin-rail-footer {
@@ -1612,13 +1868,13 @@ dialog.native-dialog::backdrop {
 }
 
 .rail-mode-tag.dry {
-  background: rgba(126, 227, 222, 0.16);
+  background: var(--rail-accent-soft);
   color: var(--rail-accent-ink);
 }
 
 .rail-mode-tag.live {
-  background: rgba(240, 128, 88, 0.22);
-  color: #ffb899;
+  background: var(--rail-live-bg);
+  color: var(--rail-live-ink);
 }
 
 .admin-workspace {
@@ -1689,7 +1945,7 @@ dialog.native-dialog::backdrop {
 
 .kpi-tile-alert {
   border-color: var(--down-border);
-  background: rgba(181, 52, 46, 0.04);
+  background: rgba(181, 52, 60, 0.045);
 }
 
 .kpi-tile-warn {
@@ -1868,7 +2124,7 @@ dialog.native-dialog::backdrop {
 .drawer-backdrop {
   position: fixed;
   inset: 0;
-  background: rgba(10, 24, 24, 0.5);
+  background: rgba(27, 20, 39, 0.52);
   z-index: var(--z-drawer);
   display: flex;
   justify-content: flex-end;
@@ -1937,18 +2193,58 @@ dialog.native-dialog::backdrop {
 }
 
 /* =========================================================================
-   Login Shell
+   Login Shell (Wallpaper Veil + Crisp Pearl Card)
    ========================================================================= */
 .login-shell {
   flex: 1 0 auto;
+  width: 100%;
   display: flex;
   align-items: center;
   justify-content: center;
-  padding: 24px 16px;
+  padding: 24px max(16px, env(safe-area-inset-right)) max(32px, env(safe-area-inset-bottom)) max(16px, env(safe-area-inset-left));
+  background-color: var(--page);
+  background-image:
+    linear-gradient(
+      180deg,
+      rgba(247, 243, 252, 0.46) 0%,
+      rgba(245, 240, 251, 0.70) 38%,
+      rgba(242, 239, 246, 0.86) 78%,
+      rgba(242, 239, 246, 0.93) 100%
+    ),
+    url("../assets/wallpaper.jpg");
+  background-size: cover, cover;
+  background-position: center center, center 22%;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
 }
 
 .login-card {
   width: min(440px, 100%);
+}
+
+.login-shell .card {
+  background: var(--bg-elevated);
+  border-color: var(--border-card-veil);
+  box-shadow: var(--shadow-card-veil);
+}
+
+.login-shell .btn-ghost {
+  background: var(--bg-topbar);
+  border-color: var(--border-card-veil);
+  color: var(--ink-1);
+  box-shadow: 0 1px 4px rgba(31, 23, 43, 0.08);
+}
+
+@media (hover: hover) and (pointer: fine) {
+  .login-shell .btn-ghost:hover:not(:disabled):not([aria-disabled="true"]):not(.is-loading) {
+    background: var(--bg);
+    border-color: var(--accent-border);
+    color: var(--accent);
+  }
+}
+
+.login-shell .badge-accent {
+  background: rgba(246, 240, 252, 0.94);
 }
 
 /* =========================================================================
@@ -1983,20 +2279,20 @@ dialog.native-dialog::backdrop {
 }
 
 .toast-success {
-  border-color: rgba(82, 209, 148, 0.35);
+  border-color: rgba(122, 229, 185, 0.35);
 }
 
 .toast-error {
-  border-color: rgba(244, 128, 121, 0.45);
+  border-color: rgba(255, 179, 186, 0.42);
 }
 
 .toast-icon-success {
-  color: #6ee7b7;
+  color: var(--toast-up-ink);
   flex: 0 0 auto;
 }
 
 .toast-icon-error {
-  color: #fca5a5;
+  color: var(--toast-down-ink);
   flex: 0 0 auto;
 }
 
@@ -2036,6 +2332,11 @@ dialog.native-dialog::backdrop {
     border-bottom: 1px solid var(--rail-border);
     padding: 12px max(14px, env(safe-area-inset-right)) 12px max(14px, env(safe-area-inset-left));
     gap: 10px;
+  }
+
+  .admin-rail-brand {
+    padding: 6px 10px;
+    border-radius: 11px;
   }
 
   .admin-rail-top-mobile {
@@ -2079,9 +2380,39 @@ dialog.native-dialog::backdrop {
   }
 }
 
+@media (max-width: 860px), (hover: none) and (pointer: coarse) {
+  .buyer-page,
+  .login-shell {
+    background-attachment: scroll;
+    background-position: center center, center 18%;
+  }
+}
+
 @media (max-width: 600px) {
   .card {
     padding: 18px 16px;
+  }
+
+  .buyer-topbar {
+    padding: 8px 12px;
+  }
+
+  .store-email-box {
+    padding: 14px;
+    gap: 10px;
+  }
+
+  .store-email-box > .btn {
+    width: 100%;
+  }
+
+  .exclusive-steps-card {
+    padding: 14px 15px;
+  }
+
+  .suggestion-chip {
+    min-height: 44px;
+    padding: 6px 14px;
   }
 
   .kv-grid,
@@ -2139,5 +2470,15 @@ dialog.native-dialog::backdrop {
   .skeleton {
     animation: none;
     background: var(--panel-2);
+  }
+
+  .badge-dot-pulse,
+  .spin,
+  .btn.is-error,
+  .drawer-panel,
+  .toast {
+    animation: none;
+    transform: none;
+    opacity: 1;
   }
 }

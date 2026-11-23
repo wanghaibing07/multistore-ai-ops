@@ -3,7 +3,7 @@ import { CheckCircle2, Loader2, Mail, Save, Sliders } from "lucide-react";
 import { ApiError, sendAdminTestEmail, updateAdminSku } from "../../api/client";
 import { useToast } from "../../components/ToastProvider";
 import type { AdminOverviewResponse, AdminSkuStatus, SkuKey } from "../../types/api";
-import { formatUsd } from "../../utils/format";
+import { formatUsd, getSkuShortLabel } from "../../utils/format";
 
 interface AdminSettingsPageProps {
   token: string;
@@ -54,7 +54,7 @@ export function AdminSettingsPage({
     const draft = drafts[skuKey];
     const parsedCost = Number(draft.maxCost);
     if (!Number.isFinite(parsedCost) || parsedCost <= 0) {
-      pushToast("单笔成本熔断上限必须是大于 0 的数字", "error");
+      pushToast("单笔最高进价必须是大于 0 的数字", "error");
       return;
     }
 
@@ -65,13 +65,13 @@ export function AdminSettingsPage({
         goods_no: draft.goodsNo.trim() || null,
       });
       await onUpdated();
-      pushToast("SKU 熔断与商品号配置已保存", "success");
+      pushToast("价格上限和 16688 商品编号已保存", "success");
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 401) {
         onUnauthorized();
         return;
       }
-      pushToast(caught instanceof ApiError ? caught.message : "保存配置失败", "error");
+      pushToast(caught instanceof ApiError ? caught.message : "保存设置失败", "error");
     } finally {
       setSavingSku(null);
     }
@@ -101,9 +101,9 @@ export function AdminSettingsPage({
     <div className="stack-lg">
       <header className="admin-header">
         <div>
-          <h1 className="admin-page-title">熔断上限与邮件告警设置</h1>
+          <h1 className="admin-page-title">价格与设置</h1>
           <p className="admin-page-sub">
-            当上游实时售价高于单笔成本熔断上限时，自动拦截扣款并转人工审核，避免上游突然涨价导致倒贴。
+            设置共享车位和独享整组的单笔最高进价，超过会自动暂停下单，防止上游突然涨价亏钱。
           </p>
         </div>
       </header>
@@ -112,6 +112,7 @@ export function AdminSettingsPage({
         {overview.skus.map((sku) => {
           const draft = drafts[sku.sku_key];
           const saving = savingSku === sku.sku_key;
+          const isExclusive = sku.sku_key === "ultra_exclusive_admin";
           return (
             <form
               key={sku.sku_key}
@@ -119,32 +120,43 @@ export function AdminSettingsPage({
               onSubmit={(event) => void handleSaveSku(event, sku.sku_key)}
             >
               <div className="row-between">
-                <div className="row" style={{ gap: 8 }}>
+                <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
                   <Sliders size={17} style={{ color: "var(--accent)" }} aria-hidden="true" />
+                  <span
+                    className={`sku-tag ${
+                      isExclusive ? "sku-tag-exclusive" : "sku-tag-shared"
+                    }`}
+                  >
+                    {getSkuShortLabel(sku.sku_key)}
+                  </span>
                   <h2 className="card-title" style={{ fontSize: 15.5 }}>
                     {sku.title}
                   </h2>
                 </div>
                 <span className={`badge ${sku.price_exceeded ? "badge-danger" : "badge-success"}`}>
-                  当前 {formatUsd(sku.current_price_usd)}
+                  {sku.price_exceeded
+                    ? `超价停单 · 现价 ${formatUsd(sku.current_price_usd)}`
+                    : `当前进价 ${formatUsd(sku.current_price_usd)}`}
                 </span>
               </div>
 
               <div className="kv-grid">
                 <div className="kv-item">
-                  <span className="kv-label">Canboso 商品 ID</span>
+                  <span className="kv-label">Canboso 商品编号</span>
                   <span className="kv-value mono">{sku.canboso_product_id}</span>
                 </div>
                 <div className="kv-item">
-                  <span className="kv-label">商品类型</span>
-                  <span className="kv-value mono">{sku.product_type}</span>
+                  <span className="kv-label">发货方式</span>
+                  <span className="kv-value">
+                    {isExclusive ? "秒发商店套餐邮箱" : "排队拉进家庭组"}
+                  </span>
                 </div>
               </div>
 
               <div className="field-group">
                 <label className="field-label" htmlFor={`cost-${sku.sku_key}`}>
-                  <span>单笔成本熔断上限（USD）</span>
-                  <span className="field-hint">超过此价格暂停自动扣款</span>
+                  <span>单笔最高进价（USD）</span>
+                  <span className="field-hint">超过自动暂停下单，防上游突然涨价亏钱</span>
                 </label>
                 <input
                   id={`cost-${sku.sku_key}`}
@@ -164,8 +176,8 @@ export function AdminSettingsPage({
 
               <div className="field-group">
                 <label className="field-label" htmlFor={`goods-${sku.sku_key}`}>
-                  <span>16688 商品编号（goods_no）</span>
-                  <span className="field-hint">可选，用于 16688 卡密核销防串货</span>
+                  <span>16688 商品编号</span>
+                  <span className="field-hint">可选，填了之后 16688 提货会自动核对防串货</span>
                 </label>
                 <input
                   id={`goods-${sku.sku_key}`}
@@ -196,7 +208,7 @@ export function AdminSettingsPage({
                 ) : (
                   <>
                     <Save size={15} />
-                    <span>保存此规格配置</span>
+                    <span>保存这项设置</span>
                   </>
                 )}
               </button>
@@ -205,14 +217,14 @@ export function AdminSettingsPage({
         })}
       </div>
 
-      <section className="card stack" aria-label="SMTP 告警邮件测试">
+      <section className="card stack" aria-label="异常提醒邮件测试">
         <div className="row-between">
           <div className="row">
             <Mail size={18} style={{ color: "var(--accent-2)" }} aria-hidden="true" />
             <div>
               <h2 className="card-title">商家邮件通知测试</h2>
               <p className="card-subtitle">
-                仅在余额不足、价格熔断、上游异常、超 24 小时未拉人或独享保修登记时发邮件提醒（6 小时内常规等待不打扰）。
+                只在余额偏低、超价停单、上游出错、超 24 小时没拉人，或者独享买家提交保修时发邮件提醒，平常不打扰。
               </p>
             </div>
           </div>

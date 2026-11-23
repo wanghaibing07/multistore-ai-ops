@@ -10,7 +10,7 @@ import type {
   Channel,
   SkuKey,
 } from "../../types/api";
-import { downloadTextFile } from "../../utils/format";
+import { downloadTextFile, getSkuShortLabel } from "../../utils/format";
 
 interface AdminIssuePageProps {
   token: string;
@@ -18,6 +18,13 @@ interface AdminIssuePageProps {
   onUnauthorized: () => void;
   onIssued: () => void;
   onOpenCode: (code: string) => void;
+}
+
+function getSkuIssueHint(skuKey: SkuKey): string {
+  if (skuKey === "ultra_exclusive_admin") {
+    return "独享整组：买家提货立刻拿到商店套餐邮箱，拉进自己的家庭组后再交主邮箱和截图登记保修。";
+  }
+  return "共享车位：买家提货时填自己的 Gmail，系统自动向上游下单排队拉人，每 20 分钟自动查一次进度。";
 }
 
 export function AdminIssuePage({
@@ -72,7 +79,7 @@ export function AdminIssuePage({
     event.preventDefault();
     const trimmedOrder = externalOrderId.trim();
     if (!trimmedOrder) {
-      setSingleError("请输入外部平台订单号（例如淘宝订单号），方便后续核对售后");
+      setSingleError("请填写淘宝或外部订单号，方便以后核对售后");
       return;
     }
 
@@ -107,7 +114,7 @@ export function AdminIssuePage({
     event.preventDefault();
     const parsedCount = Number(batchCount);
     if (!Number.isInteger(parsedCount) || parsedCount < 1 || parsedCount > 200) {
-      setBatchError("批量制码数量需为 1 到 200 之间的整数");
+      setBatchError("批量生成数量请填 1 到 200 之间的整数");
       return;
     }
 
@@ -147,9 +154,9 @@ export function AdminIssuePage({
     <div className="stack-lg">
       <header className="admin-header">
         <div>
-          <h1 className="admin-page-title">制码与发码</h1>
+          <h1 className="admin-page-title">发兑换码</h1>
           <p className="admin-page-sub">
-            淘宝出单可按单实时生成旺旺话术，16688 卡密池支持一次批量制码并导出文本上货。
+            支持共享车位和独享整组两种规格：淘宝出一单发一个码，16688 可以一次批量生成导出上货，不提前占压货款。
           </p>
         </div>
       </header>
@@ -159,8 +166,8 @@ export function AdminIssuePage({
           <div className="row">
             <Send size={18} style={{ color: "var(--accent)" }} aria-hidden="true" />
             <div>
-              <h2 className="card-title">单笔发码（淘宝 / 手动出单）</h2>
-              <p className="card-subtitle">生成 1 个一次性兑换码并自动拼装旺旺发送话术</p>
+              <h2 className="card-title">单笔发码（淘宝 / 手动发货）</h2>
+              <p className="card-subtitle">生成 1 个一次性兑换码，并自动生成可直接发给买家的旺旺话术</p>
             </div>
           </div>
 
@@ -168,6 +175,15 @@ export function AdminIssuePage({
             <div className="field-group">
               <label htmlFor={singleSkuId} className="field-label">
                 <span>商品规格</span>
+                <span
+                  className={`sku-tag ${
+                    singleSku === "ultra_exclusive_admin"
+                      ? "sku-tag-exclusive"
+                      : "sku-tag-shared"
+                  }`}
+                >
+                  {getSkuShortLabel(singleSku)}
+                </span>
               </label>
               <select
                 id={singleSkuId}
@@ -178,6 +194,7 @@ export function AdminIssuePage({
                 <option value="ultra_shared_slot">VEO3 Ultra x20 共享车位（1个月·0信用全保）</option>
                 <option value="ultra_exclusive_admin">VEO3 Ultra x20 独享整组·管理员版（1个月全保）</option>
               </select>
+              <span className="field-hint">{getSkuIssueHint(singleSku)}</span>
             </div>
 
             <div className="field-group">
@@ -190,14 +207,14 @@ export function AdminIssuePage({
                 value={singleChannel}
                 onChange={(event) => setSingleChannel(event.target.value as Channel)}
               >
-                <option value="taobao">淘宝（免 16688 反查）</option>
-                <option value="16688">16688（核销时实时校验平台订单）</option>
+                <option value="taobao">淘宝（直接发码，不查 16688 订单）</option>
+                <option value="16688">16688（买家提货前自动核对 16688 订单）</option>
               </select>
             </div>
 
             <div className="field-group">
               <label htmlFor={singleOrderId} className="field-label">
-                <span>外部订单号</span>
+                <span>平台订单号</span>
                 <span className="field-hint">必填</span>
               </label>
               <input
@@ -248,7 +265,7 @@ export function AdminIssuePage({
               ) : (
                 <>
                   <TicketPlus size={15} />
-                  <span>生成兑换码与发卡话术</span>
+                  <span>生成兑换码和旺旺话术</span>
                 </>
               )}
             </button>
@@ -275,16 +292,16 @@ export function AdminIssuePage({
                 </div>
                 <div className="row">
                   <CopyButton text={singleResult.redeem_url} label="复制提货链接" variant="secondary" />
-                  <CopyButton text={singleResult.code} label="仅复制码" variant="ghost" />
+                  <CopyButton text={singleResult.code} label="仅复制兑换码" variant="ghost" />
                 </div>
               </div>
 
               <div className="stack-sm">
                 <div className="row-between">
-                  <span className="field-label">旺旺发卡话术</span>
+                  <span className="field-label">旺旺发货话术</span>
                   <CopyButton
                     text={singleResult.wangwang_message}
-                    label="一键复制话术"
+                    label="复制旺旺话术"
                     toastMessage="已复制旺旺话术，可直接发给买家"
                     variant="primary"
                   />
@@ -299,8 +316,8 @@ export function AdminIssuePage({
           <div className="row">
             <Layers size={18} style={{ color: "var(--accent-2)" }} aria-hidden="true" />
             <div>
-              <h2 className="card-title">批量制码（16688 上货 / 预备卡池）</h2>
-              <p className="card-subtitle">一次最多生成 200 个零压货兑换码，支持一键导出 TXT</p>
+              <h2 className="card-title">批量制码（16688 上货 / 提前备码）</h2>
+              <p className="card-subtitle">一次最多生成 200 个兑换码，买家提货时才向上游下单，支持导出 TXT</p>
             </div>
           </div>
 
@@ -308,6 +325,15 @@ export function AdminIssuePage({
             <div className="field-group">
               <label htmlFor={batchSkuId} className="field-label">
                 <span>商品规格</span>
+                <span
+                  className={`sku-tag ${
+                    batchSku === "ultra_exclusive_admin"
+                      ? "sku-tag-exclusive"
+                      : "sku-tag-shared"
+                  }`}
+                >
+                  {getSkuShortLabel(batchSku)}
+                </span>
               </label>
               <select
                 id={batchSkuId}
@@ -318,11 +344,12 @@ export function AdminIssuePage({
                 <option value="ultra_shared_slot">VEO3 Ultra x20 共享车位（1个月·0信用全保）</option>
                 <option value="ultra_exclusive_admin">VEO3 Ultra x20 独享整组·管理员版（1个月全保）</option>
               </select>
+              <span className="field-hint">{getSkuIssueHint(batchSku)}</span>
             </div>
 
             <div className="field-group">
               <label htmlFor={batchChannelId} className="field-label">
-                <span>渠道归属</span>
+                <span>上架渠道</span>
               </label>
               <select
                 id={batchChannelId}
@@ -330,8 +357,8 @@ export function AdminIssuePage({
                 value={batchChannel}
                 onChange={(event) => setBatchChannel(event.target.value as Channel)}
               >
-                <option value="16688">16688 卡密池</option>
-                <option value="taobao">淘宝预备码池</option>
+                <option value="16688">16688 自动发卡上货</option>
+                <option value="taobao">淘宝提前备码</option>
               </select>
             </div>
 
@@ -356,8 +383,8 @@ export function AdminIssuePage({
             {batchChannel === "16688" && (
               <div className="field-group">
                 <label htmlFor={batchGoodsId} className="field-label">
-                  <span>16688 商品编号（goods_no）</span>
-                  <span className="field-hint">用于核销前归属校验</span>
+                  <span>16688 商品编号</span>
+                  <span className="field-hint">提货前自动核对，防止不同规格串货</span>
                 </label>
                 <input
                   id={batchGoodsId}

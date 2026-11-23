@@ -41,9 +41,12 @@ class CanbosoClient:
         if r.status_code >= 400:
             raise UpstreamError(r.status_code, "upstream rejected request", retry_after)
         try:
-            return r.json()
+            data = r.json()
         except ValueError as e:
             raise UpstreamError(502, "invalid upstream response") from e
+        if isinstance(data, dict) and data.get("success") is False:
+            raise UpstreamError(502, str(data.get("message") or "upstream rejected request"), retry_after)
+        return data
 
     def list_products(self) -> dict[str, Any]:
         return self._request("GET", "/api/v2/telegram-buyer/products", params={"key": self.api_secret})

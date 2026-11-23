@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 import secrets
 import uuid
@@ -12,6 +13,9 @@ from typing import Any, Callable, Optional
 from .config import Settings
 from .db import Ledger, now_iso
 from .gateways import UpstreamError, UpstreamTimeout
+
+
+logger = logging.getLogger(__name__)
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._%+-]*@(gmail\.com|googlemail\.com)$", re.IGNORECASE)
 SKUS = {
@@ -25,6 +29,15 @@ def mask_email(value: Optional[str]) -> Optional[str]:
         return None
     local, domain = value.split("@", 1)
     return f"{local[:2] if len(local) > 1 else local[:1]}***@{domain}"
+
+
+def format_warranty_forward_template(order_code: str, admin_email: str) -> str:
+    return (
+        "Chào shop ạ, em gửi thông tin đăng ký bảo hành gói Family:\n"
+        f"- Mã đơn: {order_code or ''}\n"
+        f"- Gmail chủ nhóm: {admin_email}\n"
+        "Em đã mời tài khoản shop vào nhóm và gửi kèm ảnh xác nhận, nhờ shop ghi nhận bảo hành giúp em ạ. Cảm ơn shop!"
+    )
 
 
 class Mailer:
@@ -41,23 +54,36 @@ class Mailer:
         if not self.settings.smtp_host:
             raise RuntimeError("SMTP is not configured")
         import smtplib
+        import ssl
+        from_addr = self.settings.smtp_from or self.settings.smtp_username
         msg = EmailMessage()
-        msg["From"] = self.settings.smtp_from or self.settings.smtp_username
+        msg["From"] = from_addr
         msg["To"] = self.settings.merchant_email
         msg["Subject"] = subject
-        msg.set_content(body)
+        msg.set_content(body, subtype="plain", charset="utf-8")
         if attachment:
             filename, data, content_type = attachment
             maintype, subtype = content_type.split("/", 1)
             msg.add_attachment(data, maintype=maintype, subtype=subtype, filename=filename)
+        context = ssl.create_default_context()
+        if self.settings.smtp_port == 465:
+            with smtplib.SMTP_SSL(self.settings.smtp_host, self.settings.smtp_port, timeout=20, context=context) as smtp:
+                if self.settings.smtp_username:
+                    smtp.login(self.settings.smtp_username, self.settings.smtp_password)
+                smtp.send_message(msg, from_addr=from_addr, to_addrs=[self.settings.merchant_email])
+            return
         with smtplib.SMTP(self.settings.smtp_host, self.settings.smtp_port, timeout=20) as smtp:
-            smtp.starttls()
+            smtp.ehlo()
+            smtp.starttls(context=context)
+            smtp.ehlo()
             if self.settings.smtp_username:
                 smtp.login(self.settings.smtp_username, self.settings.smtp_password)
-            smtp.send_message(msg)
+            smtp.send_message(msg, from_addr=from_addr, to_addrs=[self.settings.merchant_email])
 
 
 class Service:
+    POLL_FAILURE_THRESHOLD = 3
+
     def __init__(self, ledger: Ledger, settings: Settings, canboso: Any, channel: Any, mailer: Mailer):
         self.ledger, self.settings, self.canboso, self.channel, self.mailer = ledger, settings, canboso, channel, mailer
         ledger.seed_skus(SKUS)
@@ -114,7 +140,7 @@ class Service:
             normalized = (buyer_email or "").strip().lower()
             if not EMAIL_RE.match(normalized):
                 return {}, "INVALID_EMAIL"
-            if normalized != (confirm or "").strip().lower():
+            if confirm is not None and confirm.strip() != "" and normalized != confirm.strip().lower():
                 return {}, "EMAIL_MISMATCH"
             payload["customer_email"] = normalized
         state, claimed = self.ledger.claim_for_purchase(code, payload, normalized, mask_email(normalized))
@@ -188,7 +214,7 @@ class Service:
             delivery = self._safe_delivery(result.get("delivery") or {})
             updates.update({"status": "delivered_pending_warranty", "delivery_json": json.dumps(delivery, ensure_ascii=False), "completed_at": None})
             self.ledger.transition(code, "delivered_pending_warranty", "exclusive_delivered", updates, ("purchasing",))
-            self.mailer.send("独享整组出货成功", f"兑换码 {code} 已出货，订单号 {order.get('orderCode') or 'unknown'}。")
+            self._safe_send("独享整组出货成功", f"兑换码 {code} 已出货，订单号 {order.get('orderCode') or 'unknown'}。")
         else:
             self.ledger.transition(code, "waiting_fulfillment", "shared_order_accepted", updates, ("purchasing",))
         return self.public_row(self.ledger.get_code(code))
@@ -222,25 +248,56 @@ class Service:
         try:
             response = self.canboso.get_order(row["upstream_order_code"])
         except (UpstreamTimeout, UpstreamError):
-            self.ledger.transition(code, "needs_manual_review", "upstream_error", {"last_error_code": "UPSTREAM_ERROR", "last_error_message": "upstream error"}, ("waiting_fulfillment",))
-            self.alert(code, "UPSTREAM_ERROR")
-            return self.public_row(self.ledger.get_code(code))
+            return self._handle_poll_failure(code)
         except Exception:
-            self.ledger.transition(code, "needs_manual_review", "upstream_error", {"last_error_code": "UPSTREAM_ERROR", "last_error_message": "upstream error"}, ("waiting_fulfillment",))
-            self.alert(code, "UPSTREAM_ERROR")
-            return self.public_row(self.ledger.get_code(code))
+            return self._handle_poll_failure(code)
         item = (response.get("orders") or [{}])[0]
         status = str(item.get("status") or "").lower()
         updates = {"upstream_status": status, "last_polled_at": now_iso()}
         if status in {"completed", "delivered"} or item.get("deliveredAt"):
             updates.update({"completed_at": now_iso(), "delivery_json": None})
             self.ledger.transition(code, "completed", "shared_fulfillment_completed", updates, ("waiting_fulfillment",))
-            self.mailer.send("共享车位拉人完成", f"兑换码 {code} 已完成，订单号 {row.get('upstream_order_code') or 'unknown'}。")
+            self._safe_send("共享车位拉人完成", f"兑换码 {code} 已完成，订单号 {row.get('upstream_order_code') or 'unknown'}。")
         else:
             self.ledger.transition(code, "waiting_fulfillment", "shared_poll", updates, ("waiting_fulfillment",))
         return self.public_row(self.ledger.get_code(code))
 
-    def warranty(self, code: str, admin_email: str, confirm: str, note: str, content: bytes, content_type: str) -> tuple[dict[str, Any], Optional[str]]:
+    def _handle_poll_failure(self, code: str) -> dict[str, Any]:
+        failures = self._consecutive_poll_failures(code) + 1
+        if failures < self.POLL_FAILURE_THRESHOLD:
+            self.ledger.transition(
+                code,
+                "waiting_fulfillment",
+                "poll_upstream_error",
+                {
+                    "last_error_code": "UPSTREAM_ERROR",
+                    "last_error_message": "upstream error",
+                    "last_polled_at": now_iso(),
+                },
+                ("waiting_fulfillment",),
+            )
+            logger.warning("shared fulfillment poll failed consecutive_failures=%s", failures)
+        else:
+            self.ledger.transition(
+                code,
+                "needs_manual_review",
+                "upstream_error",
+                {"last_error_code": "UPSTREAM_ERROR", "last_error_message": "upstream error", "last_polled_at": now_iso()},
+                ("waiting_fulfillment",),
+            )
+            self.alert(code, "UPSTREAM_ERROR")
+        return self.public_row(self.ledger.get_code(code))
+
+    def _consecutive_poll_failures(self, code: str) -> int:
+        count = 0
+        for event in reversed(self.ledger.audit(code)):
+            if event["reason"] == "poll_upstream_error":
+                count += 1
+                continue
+            break
+        return count
+
+    def warranty(self, code: str, admin_email: str, confirm: Optional[str], note: str, content: bytes, content_type: str) -> tuple[dict[str, Any], Optional[str]]:
         row = self.ledger.get_code(code)
         if not row:
             return {}, "CODE_NOT_FOUND"
@@ -254,7 +311,7 @@ class Service:
         email = admin_email.strip().lower()
         if not EMAIL_RE.match(email):
             return {}, "INVALID_EMAIL"
-        if email != confirm.strip().lower():
+        if confirm is not None and confirm.strip() != "" and email != confirm.strip().lower():
             return {}, "EMAIL_MISMATCH"
         if content_type not in {"image/jpeg", "image/png", "image/webp"}:
             return {}, "INVALID_SCREENSHOT_TYPE"
@@ -265,8 +322,31 @@ class Service:
         path = Path(self.settings.storage_dir) / (uuid.uuid4().hex + "." + content_type.split("/")[1])
         old_path = row.get("screenshot_path")
         path.write_bytes(content)
-        submitted = {"status": "submitted", "admin_email": email, "submitted_at": now_iso(), "registered_at": None, "note": note, "has_screenshot": True, "screenshot_path": str(path), "forward_template": f"Canboso 管理员报备\n订单号：{row.get('upstream_order_code') or ''}\n主 Gmail：{email}"}
-        changed = self.ledger.transition(code, "completed", "warranty_submitted", {"warranty_json": json.dumps(submitted, ensure_ascii=False), "screenshot_path": str(path), "screenshot_content_type": content_type, "screenshot_size": len(content), "completed_at": now_iso()}, ("delivered_pending_warranty", "completed"))
+        submitted = {
+            "status": "submitted",
+            "admin_email": email,
+            "submitted_at": now_iso(),
+            "registered_at": None,
+            "note": note,
+            "has_screenshot": True,
+            "screenshot_path": str(path),
+            "forward_template": format_warranty_forward_template(row.get("upstream_order_code") or "", email),
+        }
+        changed = self.ledger.transition(
+            code,
+            "completed",
+            "warranty_submitted",
+            {
+                "buyer_email": email,
+                "buyer_email_masked": mask_email(email),
+                "warranty_json": json.dumps(submitted, ensure_ascii=False),
+                "screenshot_path": str(path),
+                "screenshot_content_type": content_type,
+                "screenshot_size": len(content),
+                "completed_at": now_iso(),
+            },
+            ("delivered_pending_warranty", "completed"),
+        )
         if not changed:
             path.unlink(missing_ok=True)
             current = self.ledger.get_code(code)
@@ -277,7 +357,7 @@ class Service:
             old = Path(old_path)
             if old.is_file():
                 old.unlink()
-        self.mailer.send("独享整组买家提交保修登记", submitted["forward_template"], (path.name, content, content_type))
+        self._safe_send("独享整组买家提交保修登记", submitted["forward_template"], (path.name, content, content_type))
         return self.public_row(self.ledger.get_code(code)), None
 
     def warranty_ack(self, code: str, note: str) -> dict[str, Any]:
@@ -291,7 +371,15 @@ class Service:
 
     def alert(self, code: str, reason: str) -> None:
         if self.ledger.claim_notification(f"alert:{code}:{reason}"):
-            self.mailer.send("Plan 2 异常报警", f"兑换码 {code} 需要人工处理。事件：{reason}。")
+            self._safe_send("Plan 2 异常报警", f"兑换码 {code} 需要人工处理。事件：{reason}。")
+
+    def _safe_send(self, subject: str, body: str, attachment: Optional[tuple[str, bytes, str]] = None) -> bool:
+        try:
+            self.mailer.send(subject, body, attachment)
+            return True
+        except Exception as exc:
+            logger.warning("merchant email send failed subject=%s error=%s", subject, type(exc).__name__)
+            return False
 
     def _new_code(self, sku_key: str) -> str:
         prefix = "U20S" if sku_key == "ultra_shared_slot" else "U20E"
@@ -300,8 +388,20 @@ class Service:
     def _safe_delivery(self, raw: dict[str, Any]) -> dict[str, Any]:
         accounts = raw.get("accounts") or []
         first = accounts[0] if accounts else {}
-        email = first.get("user") or first.get("email") or ""
-        return {"account_text": email, "credentials": [{"label": "商店套餐邮箱", "value": email}], "raw_lines": [email], "delivered_at": now_iso()}
+        if isinstance(first, str):
+            email = first.strip()
+        elif isinstance(first, dict):
+            email = str(first.get("user") or first.get("email") or first.get("otherInfo") or "").strip()
+        else:
+            email = ""
+        if not email and isinstance(raw, dict):
+            email = str(raw.get("account") or raw.get("email") or raw.get("text") or "").strip()
+        return {
+            "account_text": email,
+            "credentials": [{"label": "商店套餐邮箱", "value": email}] if email else [],
+            "raw_lines": [email] if email else [],
+            "delivered_at": now_iso(),
+        }
 
     def _code_row(self, code: str) -> dict[str, Any]:
         return self.ledger.get_code(code)
@@ -328,21 +428,62 @@ class Service:
                 elapsed = max(0, int((datetime.now(timezone.utc).astimezone() - datetime.fromisoformat(row["submitted_at"])).total_seconds() // 60))
             except ValueError:
                 pass
-        notice = "订单正在人工处理中，请联系店铺客服。" if row["status"] == "needs_manual_review" else None
-        return {"code": row["code"], "sku_key": row["sku_key"], "sku_title": sku["title"], "product_type": sku["product_type"], "channel": row["channel"], "status": row["status"], "buyer_email_masked": row.get("buyer_email_masked"), "delivery": delivery, "warranty": warranty, "fulfillment": {"eta_text": "预计 1~6 小时内发出家庭组邀请，最晚不超过 24 小时" if sku["product_type"] == "slot" else None, "submitted_at": row.get("submitted_at"), "completed_at": row.get("completed_at"), "last_polled_at": row.get("last_polled_at"), "elapsed_minutes": elapsed}, "buyer_notice": notice, "support_hint": "如有疑问，请携带订单号与兑换码联系店铺客服处理。", "created_at": row["created_at"], "updated_at": row["updated_at"]}
+        notice = "订单正在人工处理，请带兑换码联系客服。" if row["status"] == "needs_manual_review" else None
+        masked_email = row.get("buyer_email_masked") or (warranty.get("admin_email_masked") if warranty else None)
+        return {"code": row["code"], "sku_key": row["sku_key"], "sku_title": sku["title"], "product_type": sku["product_type"], "channel": row["channel"], "status": row["status"], "buyer_email_masked": masked_email, "delivery": delivery, "warranty": warranty, "fulfillment": {"eta_text": "一般 1~6 小时内发家庭组邀请，最晚 24 小时" if sku["product_type"] == "slot" else None, "submitted_at": row.get("submitted_at"), "completed_at": row.get("completed_at"), "last_polled_at": row.get("last_polled_at"), "elapsed_minutes": elapsed}, "buyer_notice": notice, "support_hint": "有问题请把订单号和兑换码发给客服。", "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
     def admin_summary(self, row: dict[str, Any]) -> dict[str, Any]:
         sku = self.ledger.get_sku(row["sku_key"])
         elapsed = self.public_row(row)["fulfillment"]["elapsed_minutes"]
-        return {"code": row["code"], "sku_key": row["sku_key"], "sku_title": sku["title"], "product_type": sku["product_type"], "channel": row["channel"], "goods_no": row.get("goods_no"), "external_order_id": row.get("external_order_id"), "remark": row.get("remark") or "", "status": row["status"], "buyer_email_masked": row.get("buyer_email_masked"), "upstream_order_code": row.get("upstream_order_code"), "upstream_status": row.get("upstream_status"), "cost_usd": row.get("cost_usd"), "warranty_status": (json.loads(row["warranty_json"]).get("status") if row.get("warranty_json") else None), "last_error_code": row.get("last_error_code"), "last_error_message": row.get("last_error_message"), "is_overdue_24h": bool(elapsed is not None and elapsed > 24 * 60 and row["status"] == "waiting_fulfillment"), "elapsed_minutes": elapsed, "created_at": row["created_at"], "updated_at": row["updated_at"]}
+        warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else None
+        delivery = json.loads(row["delivery_json"]) if row.get("delivery_json") else None
+        resolved_email = row.get("buyer_email") or (warranty.get("admin_email") if isinstance(warranty, dict) else None) or None
+        store_email = (delivery.get("account_text") if isinstance(delivery, dict) else None) or None
+        return {
+            "code": row["code"],
+            "sku_key": row["sku_key"],
+            "sku_title": sku["title"],
+            "product_type": sku["product_type"],
+            "channel": row["channel"],
+            "goods_no": row.get("goods_no"),
+            "external_order_id": row.get("external_order_id"),
+            "remark": row.get("remark") or "",
+            "status": row["status"],
+            "buyer_email": resolved_email,
+            "buyer_email_masked": row.get("buyer_email_masked") or mask_email(resolved_email),
+            "store_email": store_email,
+            "upstream_order_code": row.get("upstream_order_code"),
+            "upstream_status": row.get("upstream_status"),
+            "cost_usd": row.get("cost_usd"),
+            "warranty_status": warranty.get("status") if isinstance(warranty, dict) else None,
+            "last_error_code": row.get("last_error_code"),
+            "last_error_message": row.get("last_error_message"),
+            "is_overdue_24h": bool(elapsed is not None and elapsed > 24 * 60 and row["status"] == "waiting_fulfillment"),
+            "elapsed_minutes": elapsed,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
 
     def admin_detail(self, row: dict[str, Any]) -> dict[str, Any]:
         result = self.admin_summary(row)
         warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else None
         if warranty:
+            if warranty.get("admin_email"):
+                warranty["forward_template"] = format_warranty_forward_template(
+                    row.get("upstream_order_code") or "",
+                    warranty["admin_email"],
+                )
             warranty["screenshot_url"] = f"/api/v1/admin/codes/{row['code']}/warranty-screenshot" if row.get("screenshot_path") else None
             warranty.pop("screenshot_path", None)
-        result.update({"redeem_url": f"{self.settings.public_base_url}/r/{row['code']}", "batch_id": row.get("batch_id"), "buyer_email": row.get("buyer_email"), "idempotency_key": row.get("idempotency_key"), "delivery": json.loads(row["delivery_json"]) if row.get("delivery_json") else None, "warranty": warranty, "audit_events": self.ledger.audit(row["code"])})
+        result.update({
+            "redeem_url": f"{self.settings.public_base_url}/r/{row['code']}",
+            "batch_id": row.get("batch_id"),
+            "buyer_email": result["buyer_email"],
+            "idempotency_key": row.get("idempotency_key"),
+            "delivery": json.loads(row["delivery_json"]) if row.get("delivery_json") else None,
+            "warranty": warranty,
+            "audit_events": self.ledger.audit(row["code"]),
+        })
         return result
 
     def overview(self) -> dict[str, Any]:
@@ -355,7 +496,7 @@ class Service:
         counts = {status: self._count("status=?", (status,)) for status in ("unused", "waiting_fulfillment", "delivered_pending_warranty", "completed", "needs_manual_review", "revoked")}
         counts.update({"total": self._count(), "overdue_24h": self._count("status='waiting_fulfillment' AND submitted_at < ?", ((datetime.now(timezone.utc).astimezone() - timedelta(hours=24)).isoformat(),))})
         if balance_usd < self.settings.canboso_low_balance_threshold_usd and self.ledger.claim_notification("low-balance"):
-            self.mailer.send("Canboso 低余额报警", f"Canboso 余额低于配置阈值，请及时处理。当前余额为 ${balance_usd:.2f}。")
+            self._safe_send("Canboso 低余额报警", f"Canboso 余额低于配置阈值，请及时处理。当前余额为 ${balance_usd:.2f}。")
         return {"execution_mode": self.settings.execution_mode, "public_base_url": self.settings.public_base_url, "canboso": {"balance_usd": balance_usd, "low_balance_threshold_usd": self.settings.canboso_low_balance_threshold_usd, "is_low_balance": balance_usd < self.settings.canboso_low_balance_threshold_usd, "checked_at": now_iso(), "error": None}, "skus": skus, "counts": counts}
 
     def sku_status(self, sku_key: str, catalog: Optional[dict[str, Any]] = None) -> dict[str, Any]:

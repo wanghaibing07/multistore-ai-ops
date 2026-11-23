@@ -35,20 +35,20 @@ export interface GmailValidationResult {
 export function validateGmailInput(raw: string): GmailValidationResult {
   const trimmed = raw.trim();
   if (!trimmed) {
-    return { valid: false, normalized: "", error: "请输入 Gmail 邮箱地址" };
+    return { valid: false, normalized: "", error: "请先填一下你的 Gmail 邮箱" };
   }
   if (/\s/.test(trimmed)) {
     return {
       valid: false,
       normalized: trimmed.replace(/\s+/g, ""),
-      error: "邮箱中不能包含空格，请检查后再输入",
+      error: "邮箱里不能有空格，删掉空格再试",
     };
   }
   if (/[^\x20-\x7E]/.test(trimmed)) {
     return {
       valid: false,
       normalized: trimmed,
-      error: "邮箱包含中文或全角字符，请切换英文输入法重新输入",
+      error: "邮箱里有中文或全角符号，切回英文输入法重填一下",
     };
   }
 
@@ -57,7 +57,7 @@ export function validateGmailInput(raw: string): GmailValidationResult {
     return {
       valid: false,
       normalized: trimmed,
-      error: "邮箱格式不正确，示例：yourname@gmail.com",
+      error: "邮箱格式不对，应该像 yourname@gmail.com 这样",
     };
   }
 
@@ -69,14 +69,14 @@ export function validateGmailInput(raw: string): GmailValidationResult {
     return {
       valid: false,
       normalized,
-      error: "邮箱用户名不能包含连续两个英文句点（..）",
+      error: "邮箱前面不能连着写两个点（..）",
     };
   }
   if (!LOCAL_PART_PATTERN.test(localPart)) {
     return {
       valid: false,
       normalized,
-      error: "邮箱用户名格式不正确，请核对字母、数字与符号",
+      error: "邮箱名字母或符号不太对，核对一下再提交",
     };
   }
 
@@ -84,7 +84,7 @@ export function validateGmailInput(raw: string): GmailValidationResult {
     return {
       valid: false,
       normalized,
-      error: `邮箱后缀「@${domainPart}」疑似拼写错误`,
+      error: `后缀 @${domainPart} 好像拼错了`,
       suggestion: `${localPart}@gmail.com`,
     };
   }
@@ -93,7 +93,7 @@ export function validateGmailInput(raw: string): GmailValidationResult {
     return {
       valid: false,
       normalized,
-      error: "Google 家庭组仅支持 @gmail.com 邮箱，请勿填写 QQ / 163 / Outlook 等其他邮箱",
+      error: "只能填 @gmail.com 邮箱，QQ、163、Outlook 那些收不到家庭组邀请",
     };
   }
 
@@ -142,13 +142,13 @@ export function validateWarrantyScreenshot(file: File | null): FileValidationRes
     return { valid: false, error: "请上传邀请确认截图" };
   }
   if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
-    return { valid: false, error: "仅支持 JPG、PNG 或 WebP 格式的图片截图" };
+    return { valid: false, error: "只支持 JPG、PNG 或 WebP 图片" };
   }
   if (file.size <= 0) {
-    return { valid: false, error: "图片文件为空，请重新选择" };
+    return { valid: false, error: "这张图片是空的，换一张重新选" };
   }
   if (file.size > MAX_WARRANTY_FILE_BYTES) {
-    return { valid: false, error: "图片大小不能超过 5MB，请压缩后重新上传" };
+    return { valid: false, error: "图片太大了，请传 5MB 以内的截图" };
   }
   return { valid: true };
 }

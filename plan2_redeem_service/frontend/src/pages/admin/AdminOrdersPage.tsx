@@ -10,8 +10,8 @@ import {
   Search,
 } from "lucide-react";
 import { ApiError, listAdminCodes } from "../../api/client";
-import { CodeStatusBadge, WarrantyStatusBadge } from "../../components/StatusBadge";
-import type { AdminCodeListResponse, CodeStatus } from "../../types/api";
+import { OrderDisplayStatusBadge } from "../../components/StatusBadge";
+import type { AdminCodeListResponse, AdminCodeSummary, CodeStatus } from "../../types/api";
 import {
   formatDateTime,
   formatUsd,
@@ -30,15 +30,74 @@ interface AdminOrdersPageProps {
 
 const STATUS_TABS: Array<{ value: CodeStatus | ""; label: string }> = [
   { value: "", label: "全部" },
-  { value: "unused", label: "待核销" },
-  { value: "waiting_fulfillment", label: "排单拉人中" },
-  { value: "delivered_pending_warranty", label: "待登记保修" },
+  { value: "unused", label: "待提货" },
+  { value: "waiting_fulfillment", label: "排队拉人中" },
+  { value: "delivered_pending_warranty", label: "待交保修" },
   { value: "completed", label: "已完成" },
   { value: "needs_manual_review", label: "需人工处理" },
   { value: "revoked", label: "已作废" },
 ];
 
 const PAGE_SIZE = 20;
+
+function renderSkuTag(skuKey: AdminCodeSummary["sku_key"]) {
+  const isExclusive = skuKey === "ultra_exclusive_admin";
+  return (
+    <span className={`sku-tag ${isExclusive ? "sku-tag-exclusive" : "sku-tag-shared"}`}>
+      {getSkuShortLabel(skuKey)}
+    </span>
+  );
+}
+
+function renderOrderEmails(item: AdminCodeSummary) {
+  const buyerEmail = item.buyer_email || item.buyer_email_masked;
+  const storeEmail = item.store_email;
+
+  if (item.sku_key === "ultra_exclusive_admin") {
+    if (!buyerEmail && !storeEmail) {
+      return (
+        <span className="muted" style={{ color: "var(--ink-3)", fontSize: 12.5 }}>
+          还没提货
+        </span>
+      );
+    }
+
+    return (
+      <div className="email-stack">
+        <div className="email-line">
+          <span className="email-role-tag email-role-tag-buyer">主邮</span>
+          {buyerEmail ? (
+            <span className="mono">{buyerEmail}</span>
+          ) : (
+            <span className="muted" style={{ color: "var(--ink-3)" }}>
+              待买家提交
+            </span>
+          )}
+        </div>
+        {storeEmail && (
+          <div className="email-line">
+            <span className="email-role-tag email-role-tag-store">商店</span>
+            <span className="mono">{storeEmail}</span>
+          </div>
+        )}
+      </div>
+    );
+  }
+
+  if (!buyerEmail) {
+    return (
+      <span className="muted" style={{ color: "var(--ink-3)", fontSize: 12.5 }}>
+        还没提货
+      </span>
+    );
+  }
+
+  return (
+    <span className="mono" style={{ fontSize: 12.5 }}>
+      {buyerEmail}
+    </span>
+  );
+}
 
 export function AdminOrdersPage({
   token,
@@ -111,9 +170,9 @@ export function AdminOrdersPage({
     <div className="stack-lg">
       <header className="admin-header">
         <div>
-          <h1 className="admin-page-title">订单与保修明细</h1>
+          <h1 className="admin-page-title">订单和保修</h1>
           <p className="admin-page-sub">
-            点击任意订单可打开详情抽屉，查看保修截图、转发模板、上游轮询、重试与作废操作。
+            点开任意订单可查看买家与商店邮箱、保修截图、越南语报备话术，以及查进度、重下或作废。
           </p>
         </div>
         <div className="row">
@@ -155,7 +214,7 @@ export function AdminOrdersPage({
             <input
               type="search"
               className="input"
-              placeholder="搜兑换码 / 淘宝单号 / 上游单号 / 邮箱 / 备注"
+              placeholder="搜兑换码 / 淘宝单号 / 上游单号 / 买家或商店邮箱 / 备注"
               aria-label="搜索订单关键词"
               enterKeyHint="search"
               value={searchDraft}
@@ -246,7 +305,7 @@ export function AdminOrdersPage({
                   <th>兑换码 / 外部单号</th>
                   <th>规格与渠道</th>
                   <th>当前状态</th>
-                  <th>买家邮箱 / 保修</th>
+                  <th>买家 / 商店邮箱</th>
                   <th>上游单号与成本</th>
                   <th>更新时间</th>
                 </tr>
@@ -276,8 +335,8 @@ export function AdminOrdersPage({
                       </div>
                     </td>
                     <td>
-                      <div className="stack-sm" style={{ gap: 4 }}>
-                        <span>{getSkuShortLabel(item.sku_key)}</span>
+                      <div className="stack-sm" style={{ gap: 4, alignItems: "flex-start" }}>
+                        {renderSkuTag(item.sku_key)}
                         <span style={{ fontSize: 12, color: "var(--ink-3)" }}>
                           {getChannelLabel(item.channel)}
                           {item.goods_no ? ` · ${item.goods_no}` : ""}
@@ -286,7 +345,11 @@ export function AdminOrdersPage({
                     </td>
                     <td>
                       <div className="stack-sm" style={{ gap: 4, alignItems: "flex-start" }}>
-                        <CodeStatusBadge status={item.status} />
+                        <OrderDisplayStatusBadge
+                          skuKey={item.sku_key}
+                          status={item.status}
+                          warrantyStatus={item.warranty_status}
+                        />
                         {item.is_overdue_24h && (
                           <span className="badge badge-danger">
                             <Clock size={12} aria-hidden="true" />
@@ -295,16 +358,7 @@ export function AdminOrdersPage({
                         )}
                       </div>
                     </td>
-                    <td>
-                      <div className="stack-sm" style={{ gap: 4, alignItems: "flex-start" }}>
-                        <span className="mono" style={{ fontSize: 12.5 }}>
-                          {item.buyer_email_masked || "-"}
-                        </span>
-                        {item.sku_key === "ultra_exclusive_admin" && item.warranty_status && (
-                          <WarrantyStatusBadge status={item.warranty_status} />
-                        )}
-                      </div>
-                    </td>
+                    <td>{renderOrderEmails(item)}</td>
                     <td>
                       <div className="stack-sm" style={{ gap: 3 }}>
                         <span className="mono" style={{ fontSize: 12.5 }}>
@@ -338,28 +392,34 @@ export function AdminOrdersPage({
                   <strong className="mono" style={{ fontSize: 14, color: "var(--ink-1)" }}>
                     {item.code}
                   </strong>
-                  <CodeStatusBadge status={item.status} />
+                  <OrderDisplayStatusBadge
+                    skuKey={item.sku_key}
+                    status={item.status}
+                    warrantyStatus={item.warranty_status}
+                  />
                 </div>
 
                 <div className="row-between" style={{ fontSize: 12.5, color: "var(--ink-3)" }}>
-                  <span>
-                    {getSkuShortLabel(item.sku_key)} · {getChannelLabel(item.channel)}
+                  <span className="row" style={{ gap: 6 }}>
+                    {renderSkuTag(item.sku_key)}
+                    <span>{getChannelLabel(item.channel)}</span>
                   </span>
                   <span className="mono">{formatUsd(item.cost_usd)}</span>
                 </div>
 
-                {(item.buyer_email_masked || item.external_order_id) && (
-                  <div style={{ fontSize: 12.5, color: "var(--ink-2)" }}>
-                    {item.buyer_email_masked ? `邮箱：${item.buyer_email_masked}` : `外部单号：${item.external_order_id}`}
+                <div style={{ fontSize: 12.5, color: "var(--ink-2)", textAlign: "left" }}>
+                  {renderOrderEmails(item)}
+                </div>
+
+                {item.external_order_id && (
+                  <div style={{ fontSize: 12, color: "var(--ink-3)", textAlign: "left" }}>
+                    外部单号：{item.external_order_id}
                   </div>
                 )}
 
                 <div className="row-between" style={{ fontSize: 12, color: "var(--ink-3)" }}>
                   <div className="row" style={{ gap: 6 }}>
                     {item.is_overdue_24h && <span className="badge badge-danger">超 24 小时</span>}
-                    {item.sku_key === "ultra_exclusive_admin" && item.warranty_status && (
-                      <WarrantyStatusBadge status={item.warranty_status} />
-                    )}
                   </div>
                   <span className="mono">{formatDateTime(item.updated_at)}</span>
                 </div>

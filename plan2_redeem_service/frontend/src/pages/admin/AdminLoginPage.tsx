@@ -22,11 +22,11 @@ export function AdminLoginPage({ onAuthenticated }: AdminLoginPageProps) {
     event.preventDefault();
     const trimmed = token.trim();
     if (!trimmed) {
-      setError("请输入管理员令牌（ADMIN_TOKEN）");
+      setError("请输入管理口令");
       return;
     }
     if (demo && trimmed.length < 4) {
-      setError("演练模式下请输入至少 4 位任意字符作为口令");
+      setError("演练模式下至少输入 4 位字符");
       return;
     }
 
@@ -37,9 +37,9 @@ export function AdminLoginPage({ onAuthenticated }: AdminLoginPageProps) {
       onAuthenticated(trimmed, overview);
     } catch (caught) {
       if (caught instanceof ApiError) {
-        setError(caught.message || "管理员令牌校验失败");
+        setError(caught.message || "管理口令不对，请重试");
       } else {
-        setError("无法连接后台服务，请确认后端已启动或改用演练模式");
+        setError("连不上后台服务，请确认服务已启动或改用演练模式");
       }
     } finally {
       setSubmitting(false);
@@ -69,8 +69,8 @@ export function AdminLoginPage({ onAuthenticated }: AdminLoginPageProps) {
               <ShieldCheck size={18} />
             </span>
             <div>
-              <h1 className="card-title">商家履约工作台登录</h1>
-              <p className="card-subtitle">使用后端配置的 Bearer 管理员口令进入控制台</p>
+              <h1 className="card-title">商家后台登录</h1>
+              <p className="card-subtitle">输入管理口令进入 Ultra 20x 自助提货后台</p>
             </div>
           </div>
 
@@ -78,22 +78,22 @@ export function AdminLoginPage({ onAuthenticated }: AdminLoginPageProps) {
             <div className="callout callout-info">
               <KeyRound size={17} className="callout-icon" aria-hidden="true" />
               <div>
-                演练模式已启用：输入任意 4 位以上字符（例如 <strong>demo-admin</strong>）即可进入后台体验完整发码、保修和熔断流程。
+                演练模式已开启：输入任意 4 位以上字符（例如 <strong>demo-admin</strong>）就能进后台体验发码、查单、保修和价格保护流程。
               </div>
             </div>
           )}
 
           <div className="field-group">
             <label htmlFor={inputId} className="field-label">
-              <span>管理员口令（ADMIN_TOKEN）</span>
-              <span className="field-hint">仅保存于当前标签页 sessionStorage</span>
+              <span>管理口令</span>
+              <span className="field-hint">仅在当前浏览器标签页有效</span>
             </label>
             <div className="input-wrap">
               <input
                 id={inputId}
                 type={showToken ? "text" : "password"}
                 className={`input input-with-action ${error ? "input-error" : ""}`}
-                placeholder={demo ? "例如：demo-admin" : "请输入后端 .env 中配置的管理员口令"}
+                placeholder={demo ? "例如：demo-admin" : "请输入后台配置的管理口令"}
                 autoComplete="current-password"
                 enterKeyHint="go"
                 value={token}
@@ -135,12 +135,12 @@ export function AdminLoginPage({ onAuthenticated }: AdminLoginPageProps) {
                 <span>正在验证口令...</span>
               </>
             ) : (
-              <span>进入商家工作台</span>
+              <span>进入商家后台</span>
             )}
           </button>
 
           <p className="field-hint">
-            关闭浏览器标签页后登录状态会自动失效，避免在公用设备上残留管理员凭据。
+            关掉这个标签页会自动退出登录，避免在公用电脑上残留权限。
           </p>
         </form>
       </div>

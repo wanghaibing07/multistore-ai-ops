@@ -6,14 +6,15 @@ import hmac
 import json
 from datetime import datetime, timedelta, timezone
 
+import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
 from backend.config import Settings
 from backend.db import now_iso
-from backend.gateways import DryRunCanboso
+from backend.gateways import DryRunCanboso, UpstreamError, UpstreamTimeout
 from backend.gateways import CanbosoClient, Channel16688Client
-from backend.service import Mailer
+from backend.service import Mailer, format_warranty_forward_template
 
 
 ADMIN = {"Authorization": "Bearer test-admin"}
@@ -27,6 +28,15 @@ def issue(c, sku="ultra_shared_slot", channel="taobao", **extra):
     response = c.post("/api/v1/admin/codes/issue", headers=ADMIN, json={"sku_key": sku, "channel": channel, **extra})
     assert response.status_code == 201, response.text
     return response.json()["code"]
+
+
+def test_poll_interval_defaults_to_twenty_minutes_and_supports_env_override(monkeypatch):
+    monkeypatch.delenv("PLAN2_CONFIG_FILE", raising=False)
+    monkeypatch.delenv("PLAN2_POLL_INTERVAL_SECONDS", raising=False)
+    assert Settings.from_env().poll_interval_seconds == 1200
+
+    monkeypatch.setenv("PLAN2_POLL_INTERVAL_SECONDS", "45")
+    assert Settings.from_env().poll_interval_seconds == 45
 
 
 def test_health_auth_and_batch_issue(components):
@@ -144,6 +154,58 @@ def test_over_24h_alert_and_no_6h_alert(components):
     app.state.service.poll(code)
     assert app.state.ledger.get_code(code)["status"] == "needs_manual_review"
     assert any("异常" in mail["subject"] for mail in mailer.sent)
+
+
+def test_poll_transient_upstream_failures_wait_then_manual_review(components):
+    app, _, canboso, _, mailer = components
+    with client(app) as c:
+        code = issue(c)
+        redeemed = c.post(f"/api/v1/public/codes/{code}/redeem", json={"buyer_email": "a@gmail.com", "buyer_email_confirm": "a@gmail.com", "preflight_confirmed": True})
+        assert redeemed.json()["status"] == "waiting_fulfillment"
+
+        original_get_order = canboso.get_order
+        remaining_failures = 3
+
+        def flaky_get_order(order_code):
+            nonlocal remaining_failures
+            if remaining_failures:
+                remaining_failures -= 1
+                raise UpstreamTimeout("temporary network failure")
+            return original_get_order(order_code)
+
+        canboso.get_order = flaky_get_order
+        for _ in range(2):
+            result = app.state.service.poll(code)
+            assert result["status"] == "waiting_fulfillment"
+        assert not any("异常" in mail["subject"] for mail in mailer.sent)
+
+        result = app.state.service.poll(code)
+        assert result["status"] == "needs_manual_review"
+        assert sum("异常" in mail["subject"] for mail in mailer.sent) == 1
+
+
+def test_successful_poll_resets_transient_failure_count(components):
+    app, _, canboso, _, _ = components
+    with client(app) as c:
+        code = issue(c)
+        c.post(f"/api/v1/public/codes/{code}/redeem", json={"buyer_email": "a@gmail.com", "buyer_email_confirm": "a@gmail.com", "preflight_confirmed": True})
+        original_get_order = canboso.get_order
+        remaining_failures = 2
+
+        def flaky_get_order(order_code):
+            nonlocal remaining_failures
+            if remaining_failures:
+                remaining_failures -= 1
+                raise UpstreamTimeout("temporary network failure")
+            return original_get_order(order_code)
+
+        canboso.get_order = flaky_get_order
+        assert app.state.service.poll(code)["status"] == "waiting_fulfillment"
+        assert app.state.service.poll(code)["status"] == "waiting_fulfillment"
+        assert app.state.service.poll(code)["status"] == "waiting_fulfillment"
+
+        remaining_failures = 1
+        assert app.state.service.poll(code)["status"] == "waiting_fulfillment"
 
 
 def test_exclusive_delivery_warranty_and_screenshot_auth(components):
@@ -339,4 +401,288 @@ def test_16688_client_keeps_order_and_stock_methods_on_class():
         ("openApi/stockSecretBatch/add", {"goods_no": "G1", "content": "C1", "split_type": 2, "remove_repeat": 1}),
         ("openApi/stockSecret/invalidate", {"goods_no": "G1", "ids": [7]}),
     ]
+
+
+def test_mailer_uses_smtp_ssl_on_port_465(monkeypatch):
+    calls = []
+
+    class FakeSMTPSSL:
+        def __init__(self, host, port, timeout=None, context=None):
+            calls.append(("init", host, port, timeout, context is not None))
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def login(self, user, password):
+            calls.append(("login", user, len(password)))
+
+        def send_message(self, msg, from_addr=None, to_addrs=None):
+            calls.append(("send", from_addr, to_addrs, msg["Subject"]))
+
+    import smtplib
+
+    monkeypatch.setattr(smtplib, "SMTP_SSL", FakeSMTPSSL)
+    settings = Settings(
+        execution_mode="live",
+        smtp_host="smtp.qq.com",
+        smtp_port=465,
+        smtp_username="sender@qq.com",
+        smtp_password="secret-password",
+        smtp_from="sender@qq.com",
+        merchant_email="merchant@qq.com",
+    )
+    Mailer(settings).send("主题", "正文")
+    assert calls == [
+        ("init", "smtp.qq.com", 465, 20, True),
+        ("login", "sender@qq.com", 15),
+        ("send", "sender@qq.com", ["merchant@qq.com"], "主题"),
+    ]
+
+
+def test_smtp_failure_does_not_break_purchase_warranty_or_overview(components, monkeypatch):
+    app, _, canboso, _, mailer = components
+    canboso.balance = 70.0
+
+    def broken_send(*args, **kwargs):
+        raise OSError("smtp blocked")
+
+    monkeypatch.setattr(mailer, "send", broken_send)
+    with client(app) as c:
+        ov = c.get("/api/v1/admin/overview", headers=ADMIN)
+        assert ov.status_code == 200 and ov.json()["canboso"]["is_low_balance"] is True
+
+        code = issue(c, sku_key="ultra_exclusive_admin")
+        red = c.post(f"/api/v1/public/codes/{code}/redeem", json={"preflight_confirmed": True})
+        assert red.status_code == 200 and red.json()["status"] == "delivered_pending_warranty"
+        assert red.json()["delivery"]["account_text"] == "store-ultra@example.com"
+
+        war = c.post(
+            f"/api/v1/public/codes/{code}/warranty",
+            data={"admin_email": "owner@gmail.com", "admin_email_confirm": "owner@gmail.com", "note": "ok"},
+            files={"screenshot": ("proof.png", b"\x89PNG\r\n\x1a\nfake", "image/png")},
+        )
+        assert war.status_code == 200 and war.json()["status"] == "completed"
+
+        test_mail = c.post("/api/v1/admin/notifications/test-email", headers=ADMIN)
+        assert test_mail.status_code == 503 and test_mail.json()["error_code"] == "SMTP_ERROR"
+
+
+def test_canboso_client_rejects_http_200_success_false(monkeypatch):
+    class Response:
+        status_code = 200
+        headers = {}
+
+        def json(self):
+            return {"success": False, "message": "Thieu key API"}
+
+    monkeypatch.setattr("httpx.request", lambda *args, **kwargs: Response())
+    with pytest.raises(UpstreamError):
+        CanbosoClient("https://canboso.com", "bad").get_balance()
+
+
+def test_single_email_redeem_and_optional_confirm_backward_compat(components):
+    app, _, _, _, _ = components
+    with client(app) as c:
+        code_omit = issue(c)
+        resp_omit = c.post(
+            f"/api/v1/public/codes/{code_omit}/redeem",
+            json={"buyer_email": "SingleUser@gmail.com", "preflight_confirmed": True},
+        )
+        assert resp_omit.status_code == 200
+        body_omit = resp_omit.json()
+        assert body_omit["status"] == "waiting_fulfillment"
+        assert body_omit["buyer_email_masked"] == "si***@gmail.com"
+        assert "buyer_email" not in body_omit
+        assert "upstream_order_code" not in body_omit
+        assert "singleuser@gmail.com" not in resp_omit.text.lower()
+
+        code_blank = issue(c)
+        resp_blank = c.post(
+            f"/api/v1/public/codes/{code_blank}/redeem",
+            json={"buyer_email": "blank.confirm@gmail.com", "buyer_email_confirm": "   ", "preflight_confirmed": True},
+        )
+        assert resp_blank.status_code == 200
+        assert resp_blank.json()["status"] == "waiting_fulfillment"
+
+        code_mismatch = issue(c)
+        resp_mismatch = c.post(
+            f"/api/v1/public/codes/{code_mismatch}/redeem",
+            json={"buyer_email": "one@gmail.com", "buyer_email_confirm": "two@gmail.com", "preflight_confirmed": True},
+        )
+        assert resp_mismatch.status_code == 422
+        assert resp_mismatch.json()["error_code"] == "EMAIL_MISMATCH"
+
+
+def test_single_email_warranty_optional_confirm_and_privacy(components):
+    app, _, _, _, _ = components
+    with client(app) as c:
+        code = issue(c, sku="ultra_exclusive_admin")
+        delivered = c.post(f"/api/v1/public/codes/{code}/redeem", json={"preflight_confirmed": True})
+        assert delivered.status_code == 200
+        upstream_order = app.state.ledger.get_code(code)["upstream_order_code"]
+
+        mismatch = c.post(
+            f"/api/v1/public/codes/{code}/warranty",
+            data={"admin_email": "owner@gmail.com", "admin_email_confirm": "wrong@gmail.com"},
+            files={"screenshot": ("invite.png", b"png-bytes", "image/png")},
+        )
+        assert mismatch.status_code == 422
+        assert mismatch.json()["error_code"] == "EMAIL_MISMATCH"
+
+        submitted = c.post(
+            f"/api/v1/public/codes/{code}/warranty",
+            data={"admin_email": "OwnerOne@gmail.com", "note": "已邀请"},
+            files={"screenshot": ("invite.png", b"png-bytes", "image/png")},
+        )
+        assert submitted.status_code == 200
+        pub = submitted.json()
+        assert pub["status"] == "completed"
+        assert pub["buyer_email_masked"] == "ow***@gmail.com"
+        assert pub["warranty"]["admin_email_masked"] == "ow***@gmail.com"
+        assert "buyer_email" not in pub
+        assert "admin_email" not in pub["warranty"]
+        assert "forward_template" not in pub["warranty"]
+        assert "upstream_order_code" not in pub
+        assert "ownerone@gmail.com" not in submitted.text.lower()
+        assert upstream_order not in submitted.text
+
+        row = app.state.ledger.get_code(code)
+        assert row["buyer_email"] == "ownerone@gmail.com"
+        assert row["buyer_email_masked"] == "ow***@gmail.com"
+
+        updated = c.post(
+            f"/api/v1/public/codes/{code}/warranty",
+            data={"admin_email": "owner.two@gmail.com", "admin_email_confirm": "", "note": "更新邮箱"},
+            files={"screenshot": ("invite2.png", b"png-bytes-2", "image/png")},
+        )
+        assert updated.status_code == 200
+        row_after = app.state.ledger.get_code(code)
+        assert row_after["buyer_email"] == "owner.two@gmail.com"
+        assert row_after["buyer_email_masked"] == "ow***@gmail.com"
+
+        fetched_pub = c.get(f"/api/v1/public/codes/{code}")
+        assert fetched_pub.status_code == 200
+        assert "buyer_email" not in fetched_pub.json()
+        assert "owner.two@gmail.com" not in fetched_pub.text.lower()
+        assert "forward_template" not in fetched_pub.text
+        assert upstream_order not in fetched_pub.text
+
+
+def test_vietnamese_forward_template_and_legacy_exclusive_compat_and_search(components):
+    app, _, _, _, mailer = components
+    with client(app) as c:
+        new_code = issue(c, sku="ultra_exclusive_admin")
+        c.post(f"/api/v1/public/codes/{new_code}/redeem", json={"preflight_confirmed": True})
+        new_order = app.state.ledger.get_code(new_code)["upstream_order_code"]
+        war = c.post(
+            f"/api/v1/public/codes/{new_code}/warranty",
+            data={"admin_email": "new.owner@gmail.com", "note": "已建组"},
+            files={"screenshot": ("invite.png", b"png-bytes", "image/png")},
+        )
+        assert war.status_code == 200
+        expected_new = format_warranty_forward_template(new_order, "new.owner@gmail.com")
+        assert expected_new == (
+            "Chào shop ạ, em gửi thông tin đăng ký bảo hành gói Family:\n"
+            f"- Mã đơn: {new_order}\n"
+            "- Gmail chủ nhóm: new.owner@gmail.com\n"
+            "Em đã mời tài khoản shop vào nhóm và gửi kèm ảnh xác nhận, nhờ shop ghi nhận bảo hành giúp em ạ. Cảm ơn shop!"
+        )
+        new_detail = c.get(f"/api/v1/admin/codes/{new_code}", headers=ADMIN).json()
+        assert new_detail["warranty"]["forward_template"] == expected_new
+        assert new_detail["buyer_email"] == "new.owner@gmail.com"
+        assert new_detail["buyer_email_masked"] == "ne***@gmail.com"
+        assert new_detail["store_email"] == "store-ultra@example.com"
+        assert any(mail["body"] == expected_new for mail in mailer.sent)
+
+        legacy_code = issue(c, sku="ultra_exclusive_admin")
+        legacy_warranty = {
+            "status": "submitted",
+            "admin_email": "legacy.owner@gmail.com",
+            "submitted_at": now_iso(),
+            "registered_at": None,
+            "note": "历史单",
+            "has_screenshot": False,
+            "forward_template": "Canboso 管理员报备\n订单号：ORD-LEGACY-92HH\n主 Gmail：legacy.owner@gmail.com",
+        }
+        legacy_delivery = {
+            "account_text": "store-legacy@gmail.com",
+            "credentials": [{"label": "商店套餐邮箱", "value": "store-legacy@gmail.com"}],
+            "raw_lines": ["store-legacy@gmail.com"],
+            "delivered_at": now_iso(),
+        }
+        with app.state.ledger.transaction(immediate=True) as conn:
+            conn.execute(
+                """UPDATE codes
+                   SET status='completed', buyer_email=NULL, buyer_email_masked=NULL,
+                       upstream_order_code=?, delivery_json=?, warranty_json=?
+                   WHERE code=?""",
+                (
+                    "ORD-LEGACY-92HH",
+                    json.dumps(legacy_delivery, ensure_ascii=False),
+                    json.dumps(legacy_warranty, ensure_ascii=False),
+                    legacy_code,
+                ),
+            )
+
+        legacy_detail = c.get(f"/api/v1/admin/codes/{legacy_code}", headers=ADMIN).json()
+        expected_legacy = format_warranty_forward_template("ORD-LEGACY-92HH", "legacy.owner@gmail.com")
+        assert legacy_detail["warranty"]["forward_template"] == expected_legacy
+        assert "Canboso 管理员报备" not in legacy_detail["warranty"]["forward_template"]
+        assert legacy_detail["buyer_email"] == "legacy.owner@gmail.com"
+        assert legacy_detail["buyer_email_masked"] == "le***@gmail.com"
+        assert legacy_detail["store_email"] == "store-legacy@gmail.com"
+
+        legacy_pub = c.get(f"/api/v1/public/codes/{legacy_code}")
+        assert legacy_pub.status_code == 200
+        assert "buyer_email" not in legacy_pub.json()
+        assert "legacy.owner@gmail.com" not in legacy_pub.text.lower()
+        assert "forward_template" not in legacy_pub.text
+        assert "ORD-LEGACY-92HH" not in legacy_pub.text
+
+        slot_code = issue(c, sku="ultra_shared_slot")
+        c.post(
+            f"/api/v1/public/codes/{slot_code}/redeem",
+            json={"buyer_email": "slot.buyer@gmail.com", "preflight_confirmed": True},
+        )
+
+        listed = c.get("/api/v1/admin/codes", headers=ADMIN).json()
+        by_code = {item["code"]: item for item in listed["items"]}
+        assert by_code[new_code]["buyer_email"] == "new.owner@gmail.com"
+        assert by_code[new_code]["buyer_email_masked"] == "ne***@gmail.com"
+        assert by_code[new_code]["store_email"] == "store-ultra@example.com"
+        assert by_code[legacy_code]["buyer_email"] == "legacy.owner@gmail.com"
+        assert by_code[legacy_code]["buyer_email_masked"] == "le***@gmail.com"
+        assert by_code[legacy_code]["store_email"] == "store-legacy@gmail.com"
+        assert by_code[slot_code]["buyer_email"] == "slot.buyer@gmail.com"
+        assert by_code[slot_code]["buyer_email_masked"] == "sl***@gmail.com"
+        assert by_code[slot_code]["store_email"] is None
+
+        search_new = c.get("/api/v1/admin/codes", headers=ADMIN, params={"q": "new.owner@gmail.com"}).json()
+        assert [item["code"] for item in search_new["items"]] == [new_code]
+
+        search_legacy = c.get("/api/v1/admin/codes", headers=ADMIN, params={"q": "legacy.owner@gmail.com"}).json()
+        assert [item["code"] for item in search_legacy["items"]] == [legacy_code]
+
+        search_store_email = c.get("/api/v1/admin/codes", headers=ADMIN, params={"q": "store-legacy@gmail.com"}).json()
+        assert [item["code"] for item in search_store_email["items"]] == [legacy_code]
+
+        search_new_store_email = c.get("/api/v1/admin/codes", headers=ADMIN, params={"q": "store-ultra@example.com"}).json()
+        assert [item["code"] for item in search_new_store_email["items"]] == [new_code]
+
+
+def test_issue_wangwang_message_contains_link_and_code_for_both_skus(components):
+    app, _, _, _, _ = components
+    with client(app) as c:
+        slot_resp = c.post("/api/v1/admin/codes/issue", headers=ADMIN, json={"sku_key": "ultra_shared_slot", "channel": "taobao"}).json()
+        assert slot_resp["code"] in slot_resp["wangwang_message"]
+        assert slot_resp["redeem_url"] in slot_resp["wangwang_message"]
+        assert "Gmail" in slot_resp["wangwang_message"]
+
+        excl_resp = c.post("/api/v1/admin/codes/issue", headers=ADMIN, json={"sku_key": "ultra_exclusive_admin", "channel": "taobao"}).json()
+        assert excl_resp["code"] in excl_resp["wangwang_message"]
+        assert excl_resp["redeem_url"] in excl_resp["wangwang_message"]
+        assert "保修" in excl_resp["wangwang_message"]
 

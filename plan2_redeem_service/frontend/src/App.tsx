@@ -17,26 +17,20 @@ function NotFoundPage() {
             </span>
             <span>VEO3 Ultra x20 自助提货</span>
           </Link>
-          <Link to="/admin" className="btn btn-ghost btn-sm">
-            商家后台
-          </Link>
         </header>
 
         <main className="card stack">
           <div className="row">
             <Compass size={22} style={{ color: "var(--accent)" }} aria-hidden="true" />
-            <h1 className="card-title">页面不存在</h1>
+            <h1 className="card-title">找不到这个页面</h1>
           </div>
           <p className="card-subtitle">
-            当前访问路径没有对应的提货或管理页面，请检查链接是否完整，或返回首页重新输入兑换码。
+            链接可能不完整或输错了，回首页重新输兑换码试试。
           </p>
           <div className="row">
             <Link to="/" className="btn btn-primary">
               <ArrowLeft size={16} />
-              <span>返回自助提货首页</span>
-            </Link>
-            <Link to="/admin" className="btn btn-secondary">
-              <span>进入商家后台</span>
+              <span>回首页输兑换码</span>
             </Link>
           </div>
         </main>
@@ -78,10 +72,10 @@ export function App() {
           <div className="demo-banner-inner">
             <span className="demo-banner-text">
               <span className="demo-pill-dot" aria-hidden="true" />
-              <span>当前处于本地演练模式（Mock 数据），所有操作仅保存在当前浏览器内存，不会调用真实接口。</span>
+              <span>正在用本地演练数据，不会真的下单或扣钱。</span>
             </span>
             <button type="button" className="demo-banner-action" onClick={handleExitDemo}>
-              退出演练模式
+              退出演练
             </button>
           </div>
         </div>

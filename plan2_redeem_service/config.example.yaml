@@ -16,5 +16,5 @@ smtp_username: merchant@example.com
 smtp_password: replace-me
 smtp_from: merchant@example.com
 merchant_email: merchant@example.com
-poll_interval_seconds: 60
+poll_interval_seconds: 1200
 
