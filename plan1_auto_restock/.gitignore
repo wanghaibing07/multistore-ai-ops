@@ -1,0 +1,11 @@
+.env
+config.local.yaml
+.local_data/
+*.db
+*.db-journal
+*.db-wal
+*.db-shm
+__pycache__/
+*.pyc
+.pytest_cache/
+exports/

@@ -1,0 +1,103 @@
+# 方案 1：16688 自营卡密秒发 + Canboso 低水位自动补库配置模板
+# 复制为 config.local.yaml 后填入实际商品映射；密钥只放环境变量或 .env 中
+
+runtime:
+  # 默认开启演练模式：只查库存/价格/订单/投诉并打印补库与调价计划，绝不花钱也不改店铺
+  dry_run: true
+  # 守护进程轮询间隔（秒），保守建议 >= 60 秒避免触发上游限流
+  poll_interval_seconds: 60
+  # 主账本 SQLite（不含任何明文卡密/密码）
+  ledger_db_path: ".local_data/ledger.db"
+  # 独立卡密保险库 SQLite（存放 Canboso 返回的原始卡密，严禁同步到普通账本）
+  secrets_vault_db_path: ".local_data/secrets_vault.db"
+  # 告警 Webhook 环境变量名（可选）
+  alert_webhook_env: "ALERT_WEBHOOK_URL"
+  # 邮件告警（如 QQ 邮箱 SMTP SSL 465，授权码放 .env）
+  alert_email:
+    enabled: false
+    smtp_host: "smtp.qq.com"
+    smtp_port: 465
+    use_ssl: true
+    username_env: "ALERT_EMAIL_USER"
+    password_env: "ALERT_EMAIL_PASSWORD"
+    to_addr_env: "ALERT_EMAIL_TO"
+    min_level: "WARNING"
+    cooldown_seconds: 1800
+    subject_prefix: "[16688补库告警]"
+    timeout_seconds: 15.0
+    # 16688 官方会直接发投诉通知，默认不再重复发邮件（仍记录本地账本）
+    exclude_event_types:
+      - "COMPLAINT_16688"
+
+safety:
+  # 单日全部 SKU 累计最大采购预算（美元），超限立即熔断停止补库
+  daily_budget_usd: 20.0
+  # 单次补库请求硬上限（防误配一次买空钱包）
+  max_qty_per_purchase: 2
+  # Canboso 钱包余额低于此值（美元）发出预警并停止新购
+  min_wallet_balance_usd: 2.0
+  # 同一个 SKU 两次真实补库之间的最小冷却时间（秒）
+  restock_cooldown_seconds: 180
+  # Canboso 幂等重放最大尝试次数（仅用于网络超时恢复，复用原 Idempotency-Key）
+  max_idempotent_replay_attempts: 3
+  # 上游价格较基线涨幅超过该比例时触发熔断下架并告警（例如 0.35 = 35%）
+  max_upstream_price_spike_ratio: 0.35
+
+platform_16688:
+  gateway: "https://www.16688.com.cn/openApi"
+  app_id_env: "PLATFORM_16688_APP_ID"
+  secret_env: "PLATFORM_16688_SECRET"
+  timeout_seconds: 15.0
+
+canboso:
+  base_url: "https://canboso.com"
+  timeout_seconds: 20.0
+  # 商品目录本地缓存时间（秒），/products 单次 ~500KB 且限流 30/min，务必缓存
+  catalog_cache_ttl_seconds: 180
+  # 美元兑人民币参考汇率（用于成本换算和 16688 人民币定价）
+  usd_cny_rate: 7.30
+  # 多 Key = 多供货商
+  suppliers:
+    primary:
+      api_key_env: "CANBOSO_KEY_PRIMARY"
+      label: "Canboso主号"
+    secondary:
+      api_key_env: "CANBOSO_KEY_SECONDARY"
+      label: "Canboso副号"
+
+# 商品映射：仅允许映射 Canboso productType=account 的成品号
+skus:
+  - sku_id: "gemini-plus-link-6m"
+    enabled: false
+    # 16688 自营卡密商品编号（先在 16688 建好自营卡密商品，或用 bootstrap-goods 命令创建）
+    goods_no_16688: "G_REPLACE_ME"
+    # 更新价格时 /openApi/goods/create 需要完整基础字段，留空则自动从 goods/detail 继承
+    goods_category_no: "C365194"
+    canboso_supplier: "primary"
+    canboso_product_id: "6afb3952cf8ca0be16dde556"
+    # 安全库存水位：16688 可售 < min_stock 时触发补库，补到 target_stock
+    min_stock: 1
+    target_stock: 2
+    max_qty_per_run: 1
+    # 16688 卡密导入配置：split_type=1 单行一张，2 空行分块
+    split_type: 1
+    card_delimiter: "----"
+    remove_repeat: true
+    # 定价与风控策略
+    pricing:
+      # 期望毛利率（例如 0.30 表示成本上浮 30%）与固定加价（人民币元）取较高者，且不低于 min_margin_cny
+      markup_ratio: 0.30
+      fixed_markup_cny: 3.0
+      min_margin_cny: 2.0
+      min_sell_price_cny: 5.0
+      round_to: 0.1
+      # 允许自动同步调价（调 /openApi/goods/create 更新售价）
+      auto_sync_price: false
+      # 上游价格变化触发调价的最小人民币差额
+      price_sync_threshold_cny: 1.0
+      # 价格暴涨熔断的基线参考成本（美元，留空则用首次同步记录的成本）
+      baseline_cost_usd: 1.49
+    # 上游断货且 16688 库存归零时自动调 /openApi/goods/changeStatus 下架
+    auto_off_shelf_when_oos: true
+    # 上游恢复有货后是否自动补库并重新上架
+    auto_on_shelf_when_restocked: false

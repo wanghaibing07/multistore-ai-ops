@@ -1,0 +1,22 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "plan1-auto-restock"
+version = "0.1.0"
+description = "16688 self-operated card goods + Canboso low-stock auto-restock daemon"
+requires-python = ">=3.11"
+dependencies = [
+    "httpx>=0.27",
+    "PyYAML>=6.0",
+]
+
+[project.scripts]
+plan1-restock = "plan1_auto_restock.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["plan1_auto_restock*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
