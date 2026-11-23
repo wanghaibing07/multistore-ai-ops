@@ -1,0 +1,93 @@
+#!/usr/bin/env sh
+set -eu
+
+staged_files="$(git -c core.quotepath=false diff --cached --name-only --diff-filter=ACMR)"
+if [ -z "$staged_files" ]; then
+  exit 0
+fi
+
+errors=0
+has_frontend_src=0
+has_frontend_dist=0
+
+report_error() {
+  printf '[pre-commit] BLOCKED: %s\n' "$1" >&2
+  errors=$((errors + 1))
+}
+
+while IFS= read -r file; do
+  [ -z "$file" ] && continue
+
+  case "$file" in
+    plan2_redeem_service/frontend/src/*|plan2_redeem_service/frontend/public/*|plan2_redeem_service/frontend/index.html)
+      has_frontend_src=1
+      ;;
+    plan2_redeem_service/frontend/dist/*)
+      has_frontend_dist=1
+      ;;
+  esac
+
+  # 1. Block forbidden secret/runtime/data paths
+  case "$file" in
+    .env.example|*/.env.example)
+      ;;
+    .env|*/.env|.env.*|*/.env.*)
+      report_error "禁止提交环境变量文件: $file"
+      continue
+      ;;
+    *.local.yaml|*.local.yml)
+      report_error "禁止提交本地私有配置文件: $file"
+      continue
+      ;;
+    *.db|*.db-wal|*.db-shm|*.db-journal|*.sqlite|*.sqlite3)
+      report_error "禁止提交数据库文件: $file"
+      continue
+      ;;
+    *.pem|*.key|*.p12|*.pfx)
+      report_error "禁止提交私钥或证书文件: $file"
+      continue
+      ;;
+    private/*|*/private/*|.local_data/*|*/.local_data/*|exports/*|*/exports/*|data/*|*/data/*|history/*|work/*)
+      report_error "禁止提交本地运行数据或草稿目录文件: $file"
+      continue
+      ;;
+  esac
+
+  # 2. Skip self, lockfiles, generated frontend dist, and binary files for text scans
+  case "$file" in
+    .githooks/pre-commit|uv.lock|package-lock.json|*/package-lock.json|plan2_redeem_service/frontend/dist/*)
+      continue
+      ;;
+  esac
+
+  numstat="$(git -c core.quotepath=false diff --cached --numstat -- "$file")"
+  case "$numstat" in
+    "-	-	"*)
+      continue
+      ;;
+  esac
+
+  added_lines="$(git -c core.quotepath=false diff --cached -U0 -- "$file" | awk '/^\+\+\+ (b\/|\/dev\/null)/{next} /^\+/{print substr($0, 2)}')"
+  [ -z "$added_lines" ] && continue
+
+  if printf '%s\n' "$added_lines" | grep -Eq '^(<<<<<<< |=======$|>>>>>>> )'; then
+    report_error "检测到未解决的合并冲突标记: $file"
+  fi
+
+  if printf '%s\n' "$added_lines" | grep -Eq 'tgb_[0-9a-fA-F]{20,}|sk-[A-Za-z0-9_-]{20,}|AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{20,}|-----BEGIN ([A-Z0-9 ]+ )?PRIVATE KEY-----|PLATFORM_16688_SECRET[[:space:]]*[:=][[:space:]]*["'\''`]?[0-9a-fA-F]{32,}'; then
+    report_error "检测到疑似真实密钥或私钥明文: $file"
+  fi
+done <<EOF
+$staged_files
+EOF
+
+if [ "$has_frontend_src" -eq 1 ] && [ "$has_frontend_dist" -eq 0 ]; then
+  printf '[pre-commit] WARNING: 检测到 plan2_redeem_service/frontend 源码改动但未暂存 frontend/dist/；如涉及线上静态资源变更，请确认已运行 npm run build。\n' >&2
+fi
+
+if [ "$errors" -gt 0 ]; then
+  printf '[pre-commit] 提交已被拦截（共 %d 项违规），请清理后再提交。\n' "$errors" >&2
+  exit 1
+fi
+
+exit 0

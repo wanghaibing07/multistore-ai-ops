@@ -10,6 +10,7 @@ permissions:
 
 jobs:
   test:
+    name: Root Ledger & AI Ops
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -34,3 +35,95 @@ jobs:
 
       - name: Check migrations
         run: uv run alembic check
+
+  plan1-test:
+    name: Plan 1 Auto-Restock
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plan1_auto_restock
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e . pytest
+
+      - name: Run plan1 tests
+        run: pytest -q
+
+  plan2-backend-test:
+    name: Plan 2 Redeem Backend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plan2_redeem_service
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[test]"
+
+      - name: Run plan2 backend tests
+        run: pytest -q
+
+  plan2-frontend-check:
+    name: Plan 2 Redeem Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: plan2_redeem_service/frontend
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: plan2_redeem_service/frontend/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Build production bundle
+        run: npm run build
+
+  git-hygiene:
+    name: Repo Hygiene & Secret Guard
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate pre-commit hook syntax
+        run: sh -n .githooks/pre-commit
+
+      - name: Verify no forbidden files are tracked
+        run: |
+          set -eu
+          bad="$(git -c core.quotepath=false ls-files | grep -E '(^|/)(\.env(\.[^.]+)?|[^/]+\.local\.ya?ml|[^/]+\.(db|db-wal|db-shm|db-journal|sqlite|sqlite3|pem|key|p12|pfx))$|(^|/)(private|\.local_data|exports|data)/|^(history|work)/' | grep -Ev '(^|/)\.env\.example$' || true)"
+          if [ -n "$bad" ]; then
+            echo "Tracked forbidden files detected:" >&2
+            echo "$bad" >&2
+            exit 1
+          fi

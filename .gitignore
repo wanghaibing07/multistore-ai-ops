@@ -1,16 +1,51 @@
+# Python virtual environments, caches, and packaging artifacts
 .venv/
-.env
+venv/
 __pycache__/
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
 *.py[cod]
+*.egg-info/
+.coverage
+htmlcov/
+
+# Node and TypeScript caches (keep plan2_redeem_service/frontend/dist tracked)
+node_modules/
+*.tsbuildinfo
+
+# Secrets, certificates, and local overrides
+.env
+.env.*
+!.env.example
+!**/.env.example
+*.local.yaml
+*.local.yml
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Runtime databases, logs, exports, and private data
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
 *.sqlite*
 data/
+.local_data/
 private/
 evidence/
 outputs/
+exports/
+*.log
 *.csv
 *.xlsx
 !tests/fixtures/*.csv
 
+# Local scratch workspaces and OS metadata
+/history/
+/work/
 .finesse/
+.DS_Store
+Thumbs.db
