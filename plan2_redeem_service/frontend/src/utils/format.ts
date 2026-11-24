@@ -151,14 +151,18 @@ function translateAuditReason(rawReason: string): { title?: string; detail: stri
     case "INSUFFICIENT_BALANCE":
       return { title: "上游余额不够", detail: "Canboso 账户余额不足，请充值后再点重试" };
     case "OUT_OF_STOCK":
+    case "UPSTREAM_OUT_OF_STOCK":
       return { title: "上游暂时没货", detail: "Canboso 当前断货，已转人工等补货" };
     case "upstream_timeout":
+    case "UPSTREAM_TIMEOUT":
       return { title: "上游响应超时", detail: "下单时没收到回执，请先去上游核实别重复扣款" };
     case "upstream_error":
+    case "UPSTREAM_ERROR":
       return { title: "上游接口报错", detail: "调上游接口出错，已转人工核查" };
     case "poll_upstream_error":
       return { title: "查进度暂时失败", detail: "本次查上游出错，稍后会自动再查" };
     case "fulfillment_over_24h":
+    case "FULFILLMENT_TIMEOUT":
       return { title: "超 24 小时未完成", detail: "排队超 24 小时还没拉人，已转人工跟进" };
     case "admin_retry":
       return { title: "商家手动重试", detail: "重新向上游发起下单" };
@@ -181,6 +185,28 @@ export function formatAuditEvent(event: AuditEventItem): { title: string; detail
     return { title: toLabel || "状态更新", detail: translated.detail };
   }
   return { title: `${fromLabel} → ${toLabel}`, detail: translated.detail };
+}
+
+export function formatOrderErrorMessage(
+  errorCode: string | null | undefined,
+  errorMessage: string | null | undefined
+): string {
+  const message = (errorMessage || "").trim();
+  const code = (errorCode || "").trim();
+  if (message) {
+    const translated = translateAuditReason(message);
+    if (translated.title) {
+      return translated.detail;
+    }
+    return message;
+  }
+  if (code) {
+    const translated = translateAuditReason(code);
+    if (translated.title) {
+      return translated.detail;
+    }
+  }
+  return "这笔订单遇到问题暂停了，请核对后再处理";
 }
 
 export function getChannelLabel(channel: Channel): string {

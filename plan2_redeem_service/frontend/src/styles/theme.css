@@ -2251,36 +2251,42 @@ dialog.native-dialog::backdrop {
   align-items: center;
   gap: 10px;
   padding: 12px 15px;
-  border-radius: var(--r-sm);
-  background: var(--rail);
-  color: var(--rail-ink-strong);
-  border: 1px solid var(--rail-border);
-  box-shadow: var(--shadow-lg);
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.86);
+  backdrop-filter: blur(18px) saturate(165%);
+  -webkit-backdrop-filter: blur(18px) saturate(165%);
+  color: #1e182b;
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  box-shadow:
+    0 12px 30px rgba(96, 68, 138, 0.14),
+    inset 0 1px 0 rgba(255, 255, 255, 0.94);
   font-size: 13.5px;
   font-weight: 500;
   animation: toast-rise 180ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 .toast-success {
-  border-color: rgba(122, 229, 185, 0.35);
+  border-color: rgba(16, 185, 129, 0.42);
+  background: rgba(244, 254, 249, 0.9);
 }
 
 .toast-error {
-  border-color: rgba(255, 179, 186, 0.42);
+  border-color: rgba(225, 29, 72, 0.38);
+  background: rgba(255, 244, 247, 0.92);
 }
 
 .toast-icon-success {
-  color: var(--toast-up-ink);
+  color: #047857;
   flex: 0 0 auto;
 }
 
 .toast-icon-error {
-  color: var(--toast-down-ink);
+  color: #be123c;
   flex: 0 0 auto;
 }
 
 .toast-icon-info {
-  color: var(--rail-accent-ink);
+  color: #7e22ce;
   flex: 0 0 auto;
 }
 

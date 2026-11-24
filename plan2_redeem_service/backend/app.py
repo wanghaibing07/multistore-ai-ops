@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import logging
 from pathlib import Path
 from typing import Any, Optional
 
@@ -13,6 +14,9 @@ from .db import Ledger
 from .gateways import CanbosoClient, Channel16688Client, DryRun16688, DryRunCanboso
 from .models import BatchRequest, IssueRequest, RedeemRequest, RetryRequest, RevokeRequest, SkuPatchRequest, WarrantyAckRequest
 from .service import Mailer, SKUS, Service
+
+
+logger = logging.getLogger(__name__)
 
 
 def error(code: str, message: str, status: int) -> JSONResponse:
@@ -27,7 +31,17 @@ def create_app(settings: Optional[Settings] = None, canboso: Any = None, channel
     settings = settings or Settings.from_env()
     settings.prepare()
     ledger = Ledger(settings.db_path)
-    canboso = canboso or (DryRunCanboso() if settings.execution_mode == "dry_run" else CanbosoClient(settings.canboso_base_url, settings.canboso_api_secret, settings.canboso_timeout_seconds))
+    canboso = canboso or (
+        DryRunCanboso()
+        if settings.execution_mode == "dry_run"
+        else CanbosoClient(
+            settings.canboso_base_url,
+            settings.canboso_api_secret,
+            settings.canboso_timeout_seconds,
+            settings.canboso_products_cache_ttl_seconds,
+            settings.canboso_get_retries,
+        )
+    )
     channel = channel or (DryRun16688() if settings.execution_mode == "dry_run" else Channel16688Client(settings.channel16688_base_url, settings.channel16688_api_key, settings.channel16688_api_secret, settings.canboso_timeout_seconds))
     mailer = mailer or Mailer(settings)
     service = Service(ledger, settings, canboso, channel, mailer)
@@ -39,7 +53,8 @@ def create_app(settings: Optional[Settings] = None, canboso: Any = None, channel
             for row in rows:
                 try:
                     await asyncio.to_thread(service.poll, row["code"])
-                except Exception:
+                except Exception as exc:
+                    logger.warning("background poll failed code=%s error=%s", row["code"], type(exc).__name__)
                     service.alert(row["code"], "UPSTREAM_ERROR")
 
     @asynccontextmanager
@@ -141,12 +156,17 @@ def create_app(settings: Optional[Settings] = None, canboso: Any = None, channel
     def overview(svc: Service = Depends(get_service)) -> Any:
         try:
             return svc.overview()
-        except Exception:
+        except Exception as exc:
+            logger.warning("admin overview failed error_type=%s detail=%s", type(exc).__name__, exc)
             return error("UPSTREAM_ERROR", "上游暂时连不上，请稍后再试", 503)
 
     @app.post("/api/v1/admin/upstream/refresh", dependencies=[Depends(require_admin)])
     def refresh(svc: Service = Depends(get_service)) -> Any:
-        return overview(svc)
+        try:
+            return svc.overview(force_refresh=True)
+        except Exception as exc:
+            logger.warning("admin upstream refresh failed error_type=%s detail=%s", type(exc).__name__, exc)
+            return error("UPSTREAM_ERROR", "上游暂时连不上，请稍后再试", 503)
 
     @app.post("/api/v1/admin/codes/issue", status_code=201, dependencies=[Depends(require_admin)])
     def issue(body: IssueRequest, svc: Service = Depends(get_service)) -> Any:
@@ -271,7 +291,8 @@ def create_app(settings: Optional[Settings] = None, canboso: Any = None, channel
             c.execute("UPDATE sku_settings SET max_cost_usd=?, goods_no=? WHERE sku_key=?", (body.max_cost_usd, goods_no, sku_key))
         try:
             return svc.sku_status(sku_key)
-        except Exception:
+        except Exception as exc:
+            logger.warning("admin patch_sku status lookup failed sku=%s error_type=%s detail=%s", sku_key, type(exc).__name__, exc)
             return error("UPSTREAM_ERROR", "上游暂时连不上，请稍后再试", 503)
 
     @app.post("/api/v1/admin/notifications/test-email", dependencies=[Depends(require_admin)])

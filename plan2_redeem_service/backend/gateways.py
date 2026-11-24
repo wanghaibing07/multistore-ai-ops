@@ -3,11 +3,39 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
+import re
 import secrets
+import threading
 import time
 from typing import Any, Optional
 
 import httpx
+
+
+logger = logging.getLogger(__name__)
+TRANSIENT_HTTP_STATUSES = {500, 502, 503, 504}
+_KEY_PARAM_RE = re.compile(r"(key=)[^&\s\"']+", re.IGNORECASE)
+
+
+def _sanitize_error_text(text: str, secret: str = "") -> str:
+    cleaned = (text or "").strip()
+    if secret:
+        cleaned = cleaned.replace(secret, "[REDACTED]")
+    cleaned = _KEY_PARAM_RE.sub(r"\1[REDACTED]", cleaned)
+    cleaned = " ".join(cleaned.split())
+    return cleaned[:200]
+
+
+def _extract_response_error_detail(response: Any, secret: str = "") -> str:
+    detail = ""
+    try:
+        payload = response.json()
+        if isinstance(payload, dict):
+            detail = str(payload.get("message") or payload.get("error") or "")
+    except Exception:
+        detail = str(getattr(response, "text", "") or "")
+    return _sanitize_error_text(detail, secret)
 
 
 class UpstreamTimeout(Exception):
@@ -21,35 +49,87 @@ class UpstreamError(Exception):
 
 
 class CanbosoClient:
-    def __init__(self, base_url: str, api_secret: str, timeout: float = 15):
+    def __init__(
+        self,
+        base_url: str,
+        api_secret: str,
+        timeout: float = 25.0,
+        products_cache_ttl_seconds: float = 60.0,
+        max_get_retries: int = 2,
+    ):
         self.base_url, self.api_secret, self.timeout = base_url.rstrip("/"), api_secret, timeout
+        self.products_cache_ttl_seconds = max(0.0, float(products_cache_ttl_seconds))
+        self.max_get_retries = max(0, int(max_get_retries))
+        self._products_cache: Optional[tuple[float, dict[str, Any]]] = None
+        self._products_lock = threading.Lock()
 
     def _request(self, method: str, path: str, _retry_429: bool = True, **kwargs: Any) -> dict[str, Any]:
         headers = dict(kwargs.pop("headers", {}))
-        try:
-            r = httpx.request(method, self.base_url + path, headers=headers, timeout=self.timeout, **kwargs)
-        except httpx.TimeoutException as e:
-            raise UpstreamTimeout(str(e)) from e
-        except httpx.HTTPError as e:
-            raise UpstreamError(503, "upstream network error") from e
-        retry = r.headers.get("Retry-After")
-        retry_after = int(retry) if retry and retry.isdigit() else None
-        if r.status_code == 429 and _retry_429:
-            import time as _time
-            _time.sleep(min(max(retry_after or 1, 1), 60))
-            return self._request(method, path, _retry_429=False, headers=headers, **kwargs)
-        if r.status_code >= 400:
-            raise UpstreamError(r.status_code, "upstream rejected request", retry_after)
-        try:
-            data = r.json()
-        except ValueError as e:
-            raise UpstreamError(502, "invalid upstream response") from e
-        if isinstance(data, dict) and data.get("success") is False:
-            raise UpstreamError(502, str(data.get("message") or "upstream rejected request"), retry_after)
-        return data
+        is_get = method.upper() == "GET"
+        max_attempts = 1 + (self.max_get_retries if is_get else 0)
+        for attempt in range(max_attempts):
+            try:
+                r = httpx.request(method, self.base_url + path, headers=headers, timeout=self.timeout, **kwargs)
+            except httpx.TimeoutException as e:
+                if attempt + 1 < max_attempts:
+                    backoff = 0.5 * (attempt + 1)
+                    logger.warning("canboso %s %s timed out (attempt %s/%s), retrying in %.1fs", method, path, attempt + 1, max_attempts, backoff)
+                    time.sleep(backoff)
+                    continue
+                raise UpstreamTimeout(f"{method} {path} timed out after {self.timeout:g}s") from e
+            except httpx.HTTPError as e:
+                if attempt + 1 < max_attempts:
+                    backoff = 0.5 * (attempt + 1)
+                    logger.warning("canboso %s %s network error %s (attempt %s/%s), retrying in %.1fs", method, path, type(e).__name__, attempt + 1, max_attempts, backoff)
+                    time.sleep(backoff)
+                    continue
+                raise UpstreamError(503, f"upstream network error ({type(e).__name__})") from e
+            retry = r.headers.get("Retry-After")
+            retry_after = int(retry) if retry and retry.isdigit() else None
+            if r.status_code == 429 and _retry_429:
+                time.sleep(min(max(retry_after or 1, 1), 60))
+                return self._request(method, path, _retry_429=False, headers=headers, **kwargs)
+            if r.status_code in TRANSIENT_HTTP_STATUSES and attempt + 1 < max_attempts:
+                backoff = 0.5 * (attempt + 1)
+                logger.warning("canboso %s %s returned HTTP %s (attempt %s/%s), retrying in %.1fs", method, path, r.status_code, attempt + 1, max_attempts, backoff)
+                time.sleep(backoff)
+                continue
+            if r.status_code >= 400:
+                detail = _extract_response_error_detail(r, self.api_secret)
+                message = f"upstream HTTP {r.status_code}: {detail}" if detail else f"upstream HTTP {r.status_code}"
+                raise UpstreamError(r.status_code, message, retry_after)
+            try:
+                data = r.json()
+            except ValueError as e:
+                if attempt + 1 < max_attempts:
+                    backoff = 0.5 * (attempt + 1)
+                    logger.warning("canboso %s %s returned invalid JSON (attempt %s/%s), retrying in %.1fs", method, path, attempt + 1, max_attempts, backoff)
+                    time.sleep(backoff)
+                    continue
+                raise UpstreamError(502, "invalid upstream response") from e
+            if isinstance(data, dict) and data.get("success") is False:
+                detail = _sanitize_error_text(str(data.get("message") or data.get("error") or "upstream rejected request"), self.api_secret)
+                raise UpstreamError(502, detail or "upstream rejected request", retry_after)
+            return data
+        raise UpstreamError(503, "upstream request exhausted retries")
 
-    def list_products(self) -> dict[str, Any]:
-        return self._request("GET", "/api/v2/telegram-buyer/products", params={"key": self.api_secret})
+    def invalidate_products_cache(self) -> None:
+        with self._products_lock:
+            self._products_cache = None
+
+    def list_products(self, force_refresh: bool = False) -> dict[str, Any]:
+        if self.products_cache_ttl_seconds > 0 and not force_refresh:
+            now = time.monotonic()
+            with self._products_lock:
+                if self._products_cache is not None:
+                    cached_at, cached_data = self._products_cache
+                    if now - cached_at < self.products_cache_ttl_seconds:
+                        return cached_data
+        data = self._request("GET", "/api/v2/telegram-buyer/products", params={"key": self.api_secret})
+        if self.products_cache_ttl_seconds > 0:
+            with self._products_lock:
+                self._products_cache = (time.monotonic(), data)
+        return data
 
     def get_balance(self) -> dict[str, Any]:
         return self._request("GET", "/api/v2/telegram-buyer/balance", params={"key": self.api_secret})
@@ -154,7 +234,7 @@ class DryRunCanboso:
         self.orders: dict[str, dict[str, Any]] = {}
         self.charge_count = 0
 
-    def list_products(self) -> dict[str, Any]:
+    def list_products(self, force_refresh: bool = False) -> dict[str, Any]:
         return {"walletCurrency": "USD", "products": list(self.products.values())}
 
     def get_balance(self) -> dict[str, Any]:

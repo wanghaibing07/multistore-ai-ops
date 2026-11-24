@@ -29,6 +29,7 @@ import {
   formatAuditEvent,
   formatDateTime,
   formatElapsedMinutes,
+  formatOrderErrorMessage,
   formatUsd,
   getChannelLabel,
   getSkuShortLabel,
@@ -346,7 +347,7 @@ export function AdminOrderDrawer({
                     <AlertTriangle size={18} className="callout-icon" aria-hidden="true" />
                     <div>
                       <strong>异常提醒：</strong>
-                      {detail.last_error_message || "这笔订单遇到问题暂停了，请核对后再处理"}
+                      {formatOrderErrorMessage(detail.last_error_code, detail.last_error_message)}
                     </div>
                   </div>
                 )}

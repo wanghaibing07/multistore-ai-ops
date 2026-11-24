@@ -223,7 +223,7 @@
 {
   "code": "U20S-8K3M-9P2Q",
   "redeem_url": "https://redeem.example.com/r/U20S-8K3M-9P2Q",
-  "wangwang_message": "感谢下单 VEO3 Ultra x20 共享车位（1个月·0信用全保）！\n点链接填您的 Gmail 提货：https://redeem.example.com/r/U20S-8K3M-9P2Q\n兑换码：U20S-8K3M-9P2Q\n提交后一般 1~6 小时内发家庭组邀请（最晚 24 小时），随时能在链接里看进度。",
+  "wangwang_message": "感谢下单 Google Ultra x20 共享车位！\n点链接填您的 Gmail 提货：https://redeem.example.com/r/U20S-8K3M-9P2Q\n兑换码：U20S-8K3M-9P2Q\n提交后一般 1~6 小时内发家庭组邀请（最晚 24 小时），随时能在链接里看进度。",
   "item": { "...AdminCodeSummary..." }
 }
 ```

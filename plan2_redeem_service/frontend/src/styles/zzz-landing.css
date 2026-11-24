@@ -1,6 +1,6 @@
 /* =========================================================================
-   Buyer Wallpaper & Frosted-Glass Single-Screen Home
-   Palette: Castorice Obsidian (#0B0A10 / #14121D) + Orchid Neon (#D96BFF / #F2A7FF)
+   Buyer Wallpaper & Morning-Glow Frosted Glass Home + Redeem Detail Surface
+   Sunlit Castorice Meadow + Soft Lavender Veil + WebGL Hair Breeze Canvas
    ========================================================================= */
 
 .buyer-wallpaper {
@@ -8,8 +8,15 @@
   inset: 0;
   z-index: 0;
   overflow: hidden;
-  background: #0b0a10;
+  background: #f4eef9;
   pointer-events: none;
+}
+
+.buyer-wallpaper-media-stage {
+  position: absolute;
+  inset: 0;
+  filter: brightness(1.06) contrast(0.96) saturate(1.04);
+  transform: translateZ(0);
 }
 
 .buyer-wallpaper-video,
@@ -22,54 +29,103 @@
   object-position: 62% 24%;
   transform: translateZ(0);
   will-change: transform;
+  transition: opacity 260ms ease-out;
+}
+
+.buyer-wallpaper-video.is-webgl-source,
+.buyer-wallpaper-poster.is-webgl-source {
+  opacity: 0;
+}
+
+.buyer-wallpaper-webgl {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  opacity: 0;
+  transition: opacity 320ms ease-out;
+}
+
+.buyer-wallpaper-webgl.is-ready {
+  opacity: 1;
+}
+
+.buyer-wallpaper-particles {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  display: block;
+  pointer-events: none;
+  z-index: 2;
+}
+
+/* Soft warm-white / pale-lavender sunlit bloom at top & right without glare */
+.buyer-wallpaper-glow {
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  background:
+    radial-gradient(
+      62% 52% at 80% 10%,
+      rgba(255, 250, 244, 0.17) 0%,
+      rgba(243, 232, 255, 0.09) 46%,
+      rgba(255, 255, 255, 0) 76%
+    ),
+    linear-gradient(
+      180deg,
+      rgba(255, 252, 248, 0.12) 0%,
+      rgba(248, 240, 255, 0.03) 24%,
+      rgba(255, 255, 255, 0) 52%
+    );
 }
 
 .buyer-wallpaper-scrim {
   position: absolute;
   inset: 0;
+  z-index: 4;
 }
 
+/* Gentle localized edge feather behind left redeem card only — leaves Castorice & meadow sunlit */
 .buyer-wallpaper--hero .buyer-wallpaper-scrim {
   background:
+    radial-gradient(
+      42% 62% at 22% 54%,
+      rgba(251, 246, 255, 0.26) 0%,
+      rgba(242, 232, 255, 0.11) 48%,
+      rgba(255, 255, 255, 0) 80%
+    ),
     linear-gradient(
       90deg,
-      rgba(10, 8, 18, 0.72) 0%,
-      rgba(10, 8, 18, 0.48) 38%,
-      rgba(10, 8, 18, 0.16) 66%,
-      rgba(10, 8, 18, 0.28) 100%
-    ),
-    radial-gradient(
-      circle at 18% 54%,
-      rgba(217, 107, 255, 0.14) 0%,
-      rgba(11, 10, 16, 0) 56%
-    ),
-    linear-gradient(
-      180deg,
-      rgba(10, 8, 18, 0.36) 0%,
-      rgba(10, 8, 18, 0.06) 28%,
-      rgba(10, 8, 18, 0.14) 76%,
-      rgba(10, 8, 18, 0.56) 100%
+      rgba(248, 243, 254, 0.18) 0%,
+      rgba(248, 243, 254, 0.06) 32%,
+      rgba(255, 255, 255, 0) 52%
     );
+}
+
+.buyer-wallpaper--detail .buyer-wallpaper-media-stage {
+  filter: brightness(1.06) contrast(0.95) saturate(1.02) blur(3px);
+  transform: scale(1.02);
 }
 
 .buyer-wallpaper--detail .buyer-wallpaper-video,
 .buyer-wallpaper--detail .buyer-wallpaper-poster {
   object-position: 56% 22%;
-  filter: saturate(0.92) brightness(0.76);
 }
 
 .buyer-wallpaper--detail .buyer-wallpaper-scrim {
   background:
     linear-gradient(
       180deg,
-      rgba(10, 8, 18, 0.58) 0%,
-      rgba(10, 8, 18, 0.68) 52%,
-      rgba(10, 8, 18, 0.78) 100%
+      rgba(252, 249, 255, 0.44) 0%,
+      rgba(246, 240, 255, 0.34) 48%,
+      rgba(250, 246, 255, 0.48) 100%
     ),
     radial-gradient(
-      circle at 72% 18%,
-      rgba(217, 107, 255, 0.14) 0%,
-      rgba(11, 10, 16, 0) 54%
+      58% 48% at 76% 14%,
+      rgba(255, 249, 252, 0.28) 0%,
+      rgba(255, 255, 255, 0) 64%
     );
 }
 
@@ -84,6 +140,7 @@
   display: flex;
   flex-direction: column;
   overflow-x: clip;
+  color-scheme: light;
 }
 
 .zzz-shell {
@@ -98,7 +155,7 @@
   flex-direction: column;
 }
 
-/* Minimal Top-Left Glass Brand Pill */
+/* Minimal Top-Left Morning Frosted Brand Pill */
 .zzz-topbar {
   display: flex;
   align-items: center;
@@ -111,26 +168,42 @@
   align-items: center;
   gap: 11px;
   padding: 7px 16px 7px 9px;
-  border-radius: 14px;
+  border-radius: 15px;
   text-decoration: none;
-  color: #f4f2fa;
-  background: linear-gradient(145deg, rgba(22, 18, 36, 0.58) 0%, rgba(12, 10, 22, 0.48) 100%);
-  border: 1px solid rgba(242, 167, 255, 0.24);
+  color: #1e182b;
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.68) 0%,
+    rgba(247, 240, 255, 0.56) 100%
+  );
+  border: 1px solid rgba(255, 255, 255, 0.80);
   box-shadow:
-    0 14px 32px -16px rgba(4, 3, 10, 0.72),
-    inset 0 1px 0 rgba(255, 255, 255, 0.16);
+    0 12px 28px -12px rgba(84, 56, 132, 0.22),
+    inset 0 1px 0 rgba(255, 255, 255, 0.90);
   backdrop-filter: blur(20px) saturate(150%);
   -webkit-backdrop-filter: blur(20px) saturate(150%);
-  transition: border-color 160ms var(--ease-mech), transform 160ms var(--ease-mech);
+  transition:
+    background-color 160ms var(--ease-mech),
+    border-color 160ms var(--ease-mech),
+    box-shadow 160ms var(--ease-mech),
+    transform 160ms var(--ease-mech);
 }
 
 .zzz-brand:hover {
-  border-color: rgba(242, 167, 255, 0.44);
+  background: linear-gradient(
+    135deg,
+    rgba(255, 255, 255, 0.80) 0%,
+    rgba(249, 243, 255, 0.72) 100%
+  );
+  border-color: rgba(255, 255, 255, 0.96);
+  box-shadow:
+    0 14px 32px -12px rgba(108, 66, 168, 0.26),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96);
   transform: translateY(-1px);
 }
 
 .zzz-brand:focus-visible {
-  outline: 2px solid var(--accent-2);
+  outline: 2px solid #a855f7;
   outline-offset: 2px;
 }
 
@@ -139,7 +212,7 @@
   height: 34px;
   object-fit: contain;
   flex: 0 0 auto;
-  filter: drop-shadow(0 2px 10px rgba(217, 107, 255, 0.42));
+  filter: drop-shadow(0 3px 8px rgba(147, 51, 234, 0.28));
 }
 
 .zzz-brand-copy {
@@ -154,13 +227,14 @@
   font-weight: 700;
   line-height: 1.15;
   letter-spacing: -0.01em;
-  color: #f4f2fa;
+  color: #1e182b;
 }
 
 .zzz-brand-sub {
   font-size: 11.5px;
+  font-weight: 600;
   line-height: 1.2;
-  color: rgba(242, 167, 255, 0.88);
+  color: #7c3aed;
 }
 
 /* Hero Main Stage */
@@ -174,30 +248,31 @@
 
 .zzz-hero-stack {
   width: 100%;
-  max-width: 520px;
+  max-width: 500px;
   display: flex;
   flex-direction: column;
   gap: 14px;
 }
 
-/* Frosted Glass Redeem Card */
+/* Airy Morning-Light Frosted Glass Redeem Card */
 .zzz-glass-card {
   position: relative;
   padding: 30px 28px 24px;
-  border-radius: 20px;
+  border-radius: 22px;
   background: linear-gradient(
-    155deg,
-    rgba(24, 19, 38, 0.62) 0%,
-    rgba(13, 11, 23, 0.56) 100%
+    150deg,
+    rgba(255, 255, 255, 0.68) 0%,
+    rgba(249, 243, 255, 0.58) 54%,
+    rgba(246, 239, 255, 0.64) 100%
   );
-  border: 1px solid rgba(242, 167, 255, 0.24);
+  border: 1px solid rgba(255, 255, 255, 0.82);
   box-shadow:
-    0 28px 64px -24px rgba(4, 3, 10, 0.82),
-    0 0 38px -16px rgba(217, 107, 255, 0.28),
-    inset 0 1px 0 rgba(255, 255, 255, 0.18),
-    inset 0 -1px 0 rgba(217, 107, 255, 0.10);
-  backdrop-filter: blur(24px) saturate(155%);
-  -webkit-backdrop-filter: blur(24px) saturate(155%);
+    0 24px 56px -22px rgba(78, 52, 122, 0.24),
+    0 6px 20px -8px rgba(78, 52, 122, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.94),
+    inset 0 0 28px rgba(255, 255, 255, 0.28);
+  backdrop-filter: blur(20px) saturate(150%);
+  -webkit-backdrop-filter: blur(20px) saturate(150%);
   display: flex;
   flex-direction: column;
   gap: 20px;
@@ -212,9 +287,9 @@
   height: 1px;
   background: linear-gradient(
     90deg,
-    rgba(242, 167, 255, 0) 0%,
-    rgba(242, 167, 255, 0.55) 50%,
-    rgba(242, 167, 255, 0) 100%
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.95) 50%,
+    rgba(255, 255, 255, 0) 100%
   );
   pointer-events: none;
 }
@@ -227,27 +302,31 @@
 
 .zzz-hero-title {
   margin: 0;
-  font-size: clamp(28px, 3.1vw, 38px);
+  font-size: clamp(28px, 3vw, 37px);
   font-weight: 800;
   line-height: 1.12;
-  letter-spacing: -0.025em;
-  color: #ffffff;
-  text-shadow: 0 6px 24px rgba(10, 8, 18, 0.45);
+  letter-spacing: -0.028em;
+  color: #1e182b;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.65);
 }
 
 .zzz-hero-subhead {
   margin: 0;
-  font-size: clamp(17px, 1.7vw, 20px);
+  font-size: clamp(17px, 1.65vw, 19.5px);
   font-weight: 700;
   line-height: 1.35;
-  color: #f2a7ff;
+  color: #8b35e8;
+  background: linear-gradient(96deg, #7e22ce 0%, #c026d3 54%, #db2777 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  -webkit-text-fill-color: transparent;
 }
 
 .zzz-hero-lead {
   margin: 2px 0 0;
   font-size: 14.5px;
   line-height: 1.65;
-  color: #ddd6ec;
+  color: #4b4161;
 }
 
 /* Redeem Form */
@@ -263,11 +342,11 @@
   gap: 7px;
   font-size: 13.5px;
   font-weight: 600;
-  color: #f4f2fa;
+  color: #2c233f;
 }
 
 .zzz-field-label svg {
-  color: #f2a7ff;
+  color: #9333ea;
   flex: 0 0 auto;
 }
 
@@ -281,35 +360,41 @@
   width: 100%;
   min-height: 48px;
   padding: 0 15px;
-  border-radius: 12px;
+  border-radius: 13px;
   font-size: 14.5px;
-  color: #f4f2fa;
-  background: rgba(9, 7, 17, 0.62);
-  border: 1px solid rgba(242, 167, 255, 0.24);
-  box-shadow: inset 0 2px 8px rgba(4, 3, 10, 0.45);
-  transition: border-color 150ms var(--ease-mech), box-shadow 150ms var(--ease-mech), background-color 150ms var(--ease-mech);
+  color: #1e182b;
+  background: rgba(255, 255, 255, 0.84);
+  border: 1px solid rgba(154, 114, 214, 0.28);
+  box-shadow:
+    inset 0 1px 2px rgba(84, 56, 132, 0.06),
+    0 1px 0 rgba(255, 255, 255, 0.72);
+  transition:
+    border-color 150ms var(--ease-mech),
+    box-shadow 150ms var(--ease-mech),
+    background-color 150ms var(--ease-mech);
 }
 
 .zzz-input::placeholder {
-  color: rgba(206, 196, 226, 0.56);
+  color: #7c7194;
 }
 
 .zzz-input:hover {
-  border-color: rgba(242, 167, 255, 0.38);
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(168, 85, 247, 0.44);
 }
 
 .zzz-input:focus {
   outline: none;
-  background: rgba(11, 9, 20, 0.78);
-  border-color: #d96bff;
+  background: rgba(255, 255, 255, 0.97);
+  border-color: #a855f7;
   box-shadow:
-    0 0 0 3px rgba(217, 107, 255, 0.22),
-    inset 0 2px 8px rgba(4, 3, 10, 0.45);
+    0 0 0 3.5px rgba(168, 85, 247, 0.20),
+    inset 0 1px 2px rgba(84, 56, 132, 0.05);
 }
 
 .zzz-input.is-error {
-  border-color: rgba(255, 110, 148, 0.8);
-  box-shadow: 0 0 0 3px rgba(255, 110, 148, 0.18);
+  border-color: rgba(225, 29, 72, 0.72);
+  box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.14);
 }
 
 .zzz-submit-btn {
@@ -320,23 +405,32 @@
   width: 100%;
   min-height: 48px;
   padding: 0 20px;
-  border: none;
-  border-radius: 12px;
-  clip-path: polygon(10px 0, 100% 0, 100% calc(100% - 10px), calc(100% - 10px) 100%, 0 100%, 0 10px);
-  background: linear-gradient(105deg, #e796ff 0%, #d45eff 55%, #f4b6ff 100%);
-  color: #130b1d;
+  border: 1px solid rgba(255, 255, 255, 0.34);
+  border-radius: 13px;
+  background: linear-gradient(108deg, #a855f7 0%, #c946df 48%, #ec4899 100%);
+  color: #ffffff;
   font-size: 15.5px;
   font-weight: 700;
-  letter-spacing: 0.01em;
+  letter-spacing: 0.015em;
   cursor: pointer;
-  box-shadow: 0 14px 30px -12px rgba(217, 107, 255, 0.65);
-  transition: transform 150ms var(--ease-mech), filter 150ms var(--ease-mech), box-shadow 150ms var(--ease-mech);
+  text-shadow: 0 1px 2px rgba(88, 28, 135, 0.24);
+  box-shadow:
+    0 12px 26px -10px rgba(168, 85, 247, 0.58),
+    0 4px 12px -4px rgba(236, 72, 153, 0.30),
+    inset 0 1px 0 rgba(255, 255, 255, 0.42);
+  transition:
+    transform 150ms var(--ease-mech),
+    filter 150ms var(--ease-mech),
+    box-shadow 150ms var(--ease-mech);
 }
 
 .zzz-submit-btn:hover {
   transform: translateY(-1px);
-  filter: brightness(1.06);
-  box-shadow: 0 18px 34px -12px rgba(217, 107, 255, 0.8);
+  filter: brightness(1.05);
+  box-shadow:
+    0 16px 32px -10px rgba(168, 85, 247, 0.68),
+    0 6px 16px -6px rgba(236, 72, 153, 0.36),
+    inset 0 1px 0 rgba(255, 255, 255, 0.50);
 }
 
 .zzz-submit-btn:active {
@@ -344,27 +438,298 @@
 }
 
 .zzz-submit-btn:focus-visible {
-  outline: 2px solid #f4f2fa;
+  outline: 2px solid #9333ea;
   outline-offset: 2px;
 }
 
 .zzz-field-error {
   font-size: 13px;
   line-height: 1.5;
-  color: #ff9cb6;
-  padding: 8px 12px;
+  color: #be123c;
+  padding: 9px 12px;
   border-radius: 10px;
-  background: rgba(145, 24, 58, 0.28);
-  border: 1px solid rgba(255, 110, 148, 0.35);
+  background: rgba(255, 241, 244, 0.92);
+  border: 1px solid rgba(225, 29, 72, 0.28);
 }
 
 .zzz-card-note {
   margin: 0;
   padding-top: 14px;
-  border-top: 1px solid rgba(255, 255, 255, 0.09);
+  border-top: 1px solid rgba(108, 78, 158, 0.14);
   font-size: 13px;
+  font-weight: 500;
   line-height: 1.5;
-  color: rgba(216, 207, 232, 0.78);
+  color: #4a4060;
+}
+
+/* =========================================================================
+   Buyer Redeem Detail Page (/r/:code) — Harmonized Light Frosted Glass
+   ========================================================================= */
+.buyer-page {
+  color-scheme: light;
+  --ink-1: #1e182b;
+  --ink-2: #3a3150;
+  --ink-3: #5a516e;
+  --ink-4: #7a7090;
+  --accent: #9333ea;
+  --accent-2: #ec4899;
+  --accent-hover: #7e22ce;
+  --accent-soft: rgba(168, 85, 247, 0.12);
+  --accent-border: rgba(168, 85, 247, 0.32);
+  --on-accent: #ffffff;
+  --up: #047857;
+  --up-bg: rgba(220, 252, 235, 0.90);
+  --up-border: rgba(16, 185, 129, 0.28);
+  --down: #be123c;
+  --down-bg: rgba(255, 228, 235, 0.90);
+  --down-border: rgba(225, 29, 72, 0.28);
+  --warn: #b45309;
+  --warn-bg: rgba(254, 243, 199, 0.92);
+  --warn-border: rgba(217, 119, 6, 0.30);
+  --info: #0369a1;
+  --info-bg: rgba(224, 242, 254, 0.90);
+  --info-border: rgba(2, 132, 199, 0.28);
+  --border: rgba(110, 82, 156, 0.16);
+  --border-strong: rgba(110, 82, 156, 0.28);
+  --bg: rgba(255, 255, 255, 0.72);
+  --bg-topbar: rgba(255, 255, 255, 0.68);
+  --panel: rgba(255, 255, 255, 0.62);
+  --panel-2: rgba(248, 244, 255, 0.76);
+  --panel-3: rgba(126, 98, 170, 0.14);
+  --shadow: 0 14px 36px rgba(96, 68, 138, 0.10);
+  --shadow-hover: 0 18px 42px rgba(96, 68, 138, 0.15);
+}
+
+.buyer-page .buyer-topbar {
+  background: rgba(255, 255, 255, 0.68);
+  border: 1px solid rgba(255, 255, 255, 0.84);
+  border-radius: 16px;
+  box-shadow:
+    0 12px 30px rgba(96, 68, 138, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+}
+
+.buyer-page .brand-lockup {
+  padding: 2px 6px 2px 2px;
+  border-radius: 12px;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  color: #1e182b;
+}
+
+.buyer-page .buyer-topbar .btn-ghost {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(138, 102, 196, 0.22);
+  color: #3a3150;
+  text-decoration: none;
+}
+
+.buyer-page .buyer-topbar .btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.94);
+  border-color: rgba(168, 85, 247, 0.36);
+  color: #7e22ce;
+}
+
+.buyer-page .brand-mark {
+  background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.45);
+}
+
+.buyer-page .brand-name {
+  color: #1e182b;
+}
+
+.buyer-page .brand-sub {
+  color: #5a516e;
+}
+
+.buyer-page .card {
+  background: rgba(255, 255, 255, 0.74);
+  border: 1px solid rgba(255, 255, 255, 0.84);
+  border-radius: 18px;
+  box-shadow:
+    0 14px 36px rgba(96, 68, 138, 0.10),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+}
+
+.buyer-page .inset-panel,
+.buyer-page .kv-item,
+.buyer-page .presubmit-card,
+.buyer-page .exclusive-steps-card,
+.buyer-page .voucher-code-pill,
+.buyer-page .credential-box {
+  background: rgba(248, 244, 255, 0.72);
+  border-color: rgba(138, 102, 196, 0.18);
+  color: #1e182b;
+}
+
+.buyer-page .store-email-box {
+  background: linear-gradient(
+    155deg,
+    rgba(250, 240, 255, 0.92) 0%,
+    rgba(255, 242, 249, 0.88) 100%
+  );
+  border-color: rgba(168, 85, 247, 0.30);
+}
+
+.buyer-page .input,
+.buyer-page .select,
+.buyer-page .textarea {
+  background: rgba(255, 255, 255, 0.88);
+  border-color: rgba(138, 102, 196, 0.24);
+  color: #1e182b;
+}
+
+.buyer-page .input::placeholder,
+.buyer-page .textarea::placeholder {
+  color: #7c7194;
+}
+
+.buyer-page .input:focus,
+.buyer-page .select:focus,
+.buyer-page .textarea:focus {
+  background: #ffffff;
+  border-color: #a855f7;
+  box-shadow: 0 0 0 3px rgba(168, 85, 247, 0.18);
+}
+
+.buyer-page .check-card {
+  background: rgba(255, 255, 255, 0.72);
+  border-color: rgba(138, 102, 196, 0.20);
+  color: #1e182b;
+}
+
+.buyer-page .check-card:hover {
+  background: rgba(255, 255, 255, 0.90);
+  border-color: rgba(168, 85, 247, 0.36);
+}
+
+.buyer-page .btn-primary {
+  background: linear-gradient(108deg, #a855f7 0%, #c946df 50%, #ec4899 100%);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.32);
+  box-shadow: 0 10px 24px -10px rgba(168, 85, 247, 0.56);
+}
+
+.buyer-page .btn-primary:disabled,
+.buyer-page .btn-primary[aria-disabled="true"] {
+  opacity: 1;
+  background: rgba(168, 85, 247, 0.20);
+  color: rgba(74, 58, 102, 0.62);
+  border-color: rgba(168, 85, 247, 0.22);
+  box-shadow: none;
+}
+
+.buyer-page .btn-secondary,
+.buyer-page .btn-ghost {
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.84);
+  color: #1e182b;
+  backdrop-filter: blur(14px) saturate(145%);
+  -webkit-backdrop-filter: blur(14px) saturate(145%);
+}
+
+.buyer-page .btn-secondary:hover:not(:disabled),
+.buyer-page .btn-ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.92);
+  border-color: rgba(168, 85, 247, 0.34);
+}
+
+.buyer-page .sku-tag-shared {
+  background: rgba(243, 232, 255, 0.92);
+  border-color: rgba(168, 85, 247, 0.28);
+  color: #7e22ce;
+}
+
+.buyer-page .sku-tag-exclusive {
+  background: rgba(252, 231, 243, 0.92);
+  border-color: rgba(236, 72, 153, 0.28);
+  color: #be185d;
+}
+
+.buyer-page .badge-neutral {
+  background: rgba(241, 236, 250, 0.90);
+  border-color: rgba(126, 98, 170, 0.20);
+  color: #4a4060;
+}
+
+.buyer-page .badge-success {
+  background: var(--up-bg);
+  border-color: var(--up-border);
+  color: var(--up);
+}
+
+.buyer-page .badge-warning {
+  background: var(--warn-bg);
+  border-color: var(--warn-border);
+  color: var(--warn);
+}
+
+.buyer-page .badge-danger {
+  background: var(--down-bg);
+  border-color: var(--down-border);
+  color: var(--down);
+}
+
+.buyer-page .badge-info {
+  background: var(--info-bg);
+  border-color: var(--info-border);
+  color: var(--info);
+}
+
+.buyer-page .badge-accent {
+  background: rgba(243, 232, 255, 0.92);
+  border-color: rgba(168, 85, 247, 0.30);
+  color: #7e22ce;
+}
+
+.buyer-page .callout-info {
+  background: rgba(235, 247, 255, 0.90);
+  border-color: rgba(2, 132, 199, 0.24);
+  color: #0c4a6e;
+}
+
+.buyer-page .callout-warning {
+  background: rgba(255, 249, 224, 0.92);
+  border-color: rgba(217, 119, 6, 0.28);
+  color: #78350f;
+}
+
+.buyer-page .callout-success {
+  background: rgba(232, 253, 242, 0.92);
+  border-color: rgba(16, 185, 129, 0.26);
+  color: #065f46;
+}
+
+.buyer-page .callout-danger {
+  background: rgba(255, 236, 241, 0.92);
+  border-color: rgba(225, 29, 72, 0.28);
+  color: #881337;
+}
+
+.buyer-page .upload-zone {
+  background: rgba(255, 255, 255, 0.68);
+  border-color: rgba(168, 85, 247, 0.32);
+}
+
+.buyer-page .footer-links {
+  color: #4b4161;
+}
+
+.buyer-page .skeleton {
+  background: linear-gradient(
+    90deg,
+    rgba(168, 85, 247, 0.08) 0%,
+    rgba(168, 85, 247, 0.18) 50%,
+    rgba(168, 85, 247, 0.08) 100%
+  );
+  background-size: 200% 100%;
 }
 
 /* =========================================================================
@@ -380,10 +745,10 @@
     background:
       linear-gradient(
         180deg,
-        rgba(10, 8, 18, 0.42) 0%,
-        rgba(10, 8, 18, 0.16) 24%,
-        rgba(10, 8, 18, 0.56) 52%,
-        rgba(10, 8, 18, 0.80) 100%
+        rgba(255, 252, 248, 0.14) 0%,
+        rgba(255, 255, 255, 0) 34%,
+        rgba(248, 243, 254, 0.22) 68%,
+        rgba(246, 239, 255, 0.42) 100%
       );
   }
 
@@ -406,9 +771,9 @@
     border-radius: 18px;
     gap: 16px;
     background: linear-gradient(
-      160deg,
-      rgba(22, 18, 36, 0.70) 0%,
-      rgba(12, 10, 22, 0.66) 100%
+      158deg,
+      rgba(255, 255, 255, 0.76) 0%,
+      rgba(248, 242, 255, 0.70) 100%
     );
   }
 
@@ -425,16 +790,17 @@
   }
 }
 
-.buyer-page .btn-primary:disabled,
-.buyer-page .btn-primary[aria-disabled="true"] {
-  opacity: 1;
-  background: rgba(217, 107, 255, 0.16);
-  color: rgba(244, 240, 255, 0.58);
-  border-color: rgba(242, 167, 255, 0.24);
-  box-shadow: none;
-}
-
 @media (prefers-reduced-motion: reduce) {
+  .buyer-wallpaper-webgl,
+  .buyer-wallpaper-particles {
+    display: none !important;
+  }
+
+  .buyer-wallpaper-video.is-webgl-source,
+  .buyer-wallpaper-poster.is-webgl-source {
+    opacity: 1;
+  }
+
   .zzz-brand,
   .zzz-input,
   .zzz-submit-btn {

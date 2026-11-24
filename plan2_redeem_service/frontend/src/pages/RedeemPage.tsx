@@ -615,11 +615,11 @@ export function RedeemPage() {
                       onChange={(event) => setCheckPayment(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>账号地区没问题</strong>（如果以前绑过其他地区付款资料，可点{" "}
+                      <strong>已关闭 Google 付款资料</strong>（请先打开{" "}
                       <a href="https://payments.google.com" target="_blank" rel="noreferrer">
                         payments.google.com <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />
                       </a>{" "}
-                      检查一下）。
+                      进入「设置」关闭现有付款资料，避免拉进家庭组时提示地区不符）。
                     </div>
                   </label>
                 </div>
@@ -630,7 +630,7 @@ export function RedeemPage() {
                     onEmailChange={setBuyerEmail}
                     disabled={submittingRedeem}
                     primaryLabel="收家庭组邀请的 Gmail"
-                    warningText="别输错邮箱！提交后会立刻开始安排拉人，改不了邮箱，点提交前看清拼写。"
+                    warningText="别输错邮箱！提交后会立刻开始安排拉人，买家原因换邮箱需要39.9手续费，点提交前看清拼写。"
                   />
 
                   <div className="presubmit-card" aria-live="polite">

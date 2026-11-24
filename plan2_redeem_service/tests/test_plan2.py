@@ -6,13 +6,14 @@ import hmac
 import json
 from datetime import datetime, timedelta, timezone
 
+import httpx
 import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
 from backend.config import Settings
 from backend.db import now_iso
-from backend.gateways import DryRunCanboso, UpstreamError, UpstreamTimeout
+from backend.gateways import DryRun16688, DryRunCanboso, UpstreamError, UpstreamTimeout
 from backend.gateways import CanbosoClient, Channel16688Client
 from backend.service import Mailer, format_warranty_forward_template
 
@@ -679,10 +680,91 @@ def test_issue_wangwang_message_contains_link_and_code_for_both_skus(components)
         slot_resp = c.post("/api/v1/admin/codes/issue", headers=ADMIN, json={"sku_key": "ultra_shared_slot", "channel": "taobao"}).json()
         assert slot_resp["code"] in slot_resp["wangwang_message"]
         assert slot_resp["redeem_url"] in slot_resp["wangwang_message"]
+        assert slot_resp["item"]["sku_title"] == "Google Ultra x20 共享车位"
+        assert slot_resp["wangwang_message"] == (
+            "感谢下单 Google Ultra x20 共享车位！\n"
+            f"点链接填您的 Gmail 提货：{slot_resp['redeem_url']}\n"
+            f"兑换码：{slot_resp['code']}\n"
+            "提交后一般 1~6 小时内发家庭组邀请（最晚 24 小时），随时能在链接里看进度。"
+        )
         assert "Gmail" in slot_resp["wangwang_message"]
 
         excl_resp = c.post("/api/v1/admin/codes/issue", headers=ADMIN, json={"sku_key": "ultra_exclusive_admin", "channel": "taobao"}).json()
         assert excl_resp["code"] in excl_resp["wangwang_message"]
         assert excl_resp["redeem_url"] in excl_resp["wangwang_message"]
         assert "保修" in excl_resp["wangwang_message"]
+
+
+def test_canboso_products_cache_and_get_transient_retries(monkeypatch):
+    calls = []
+    sleeps = []
+
+    class Response:
+        def __init__(self, status_code, payload=None):
+            self.status_code = status_code
+            self.headers = {}
+            self._payload = payload or {"products": [{"productId": "sku-1"}]}
+
+        def json(self):
+            return self._payload
+
+    events = [
+        httpx.ReadTimeout("timed out"),
+        Response(503, {"message": "temporary upstream overload"}),
+        Response(200, {"products": [{"productId": "sku-1"}]}),
+        Response(200, {"products": [{"productId": "sku-2"}]}),
+    ]
+
+    def fake_request(method, url, **kwargs):
+        calls.append((method, url))
+        item = events.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return item
+
+    monkeypatch.setattr("httpx.request", fake_request)
+    monkeypatch.setattr("time.sleep", lambda value: sleeps.append(value))
+    client_ = CanbosoClient("https://canboso.com", "buyer-secret", timeout=25, products_cache_ttl_seconds=60, max_get_retries=2)
+
+    first = client_.list_products()
+    second = client_.list_products()
+    assert first == {"products": [{"productId": "sku-1"}]}
+    assert second == first
+    assert len(calls) == 3
+    assert sleeps == [0.5, 1.0]
+
+    client_.invalidate_products_cache()
+    refreshed = client_.list_products()
+    assert refreshed == {"products": [{"productId": "sku-2"}]}
+    assert len(calls) == 4
+
+
+def test_canboso_purchase_does_not_retry_timeout_and_preflight_records_detail(tmp_path, monkeypatch):
+    post_calls = []
+
+    def fake_request(method, url, **kwargs):
+        post_calls.append(method)
+        raise httpx.ReadTimeout("purchase timed out with key=demo-secret-token")
+
+    monkeypatch.setattr("httpx.request", fake_request)
+    client_ = CanbosoClient("https://canboso.com", "demo-secret-token", timeout=25, max_get_retries=2)
+    with pytest.raises(UpstreamTimeout):
+        client_.purchase("plan2-idemp", {"product_id": "sku-1", "quantity": 1})
+    assert post_calls == ["POST"]
+
+    class FailingPreflightCanboso(DryRunCanboso):
+        def list_products(self, force_refresh: bool = False):
+            raise UpstreamTimeout("GET /api/v2/telegram-buyer/products timed out after 25s")
+
+    settings = Settings(db_path=str(tmp_path / "db.sqlite3"), storage_dir=str(tmp_path / "private"), admin_token="test-admin", execution_mode="dry_run")
+    app = create_app(settings, canboso=FailingPreflightCanboso(), channel=DryRun16688(), mailer=Mailer(settings))
+    with client(app) as c:
+        code = issue(c)
+        resp = c.post(f"/api/v1/public/codes/{code}/redeem", json={"buyer_email": "buyer@gmail.com", "preflight_confirmed": True})
+        assert resp.status_code == 200
+        assert resp.json()["status"] == "needs_manual_review"
+        detail = c.get(f"/api/v1/admin/codes/{code}", headers=ADMIN).json()
+        assert detail["last_error_code"] == "UPSTREAM_ERROR"
+        assert "上游预检失败" in detail["last_error_message"]
+        assert "timed out after 25s" in detail["last_error_message"]
 

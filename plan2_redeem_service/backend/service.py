@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._%+-]*@(gmail\.com|googlemail\.com)$", re.IGNORECASE)
 SKUS = {
-    "ultra_shared_slot": {"title": "VEO3 Ultra x20 共享车位（1个月·0信用全保）", "product_type": "slot", "product_id": "6ac26aaeec73a42d6430a837", "reference_price_usd": 13.47, "max_cost_usd": 16.0},
+    "ultra_shared_slot": {"title": "Google Ultra x20 共享车位", "product_type": "slot", "product_id": "6ac26aaeec73a42d6430a837", "reference_price_usd": 13.47, "max_cost_usd": 16.0},
     "ultra_exclusive_admin": {"title": "VEO3 Ultra x20 独享整组·管理员版（1个月全保）", "product_type": "account", "product_id": "6ae03419c0080f9e15f695a8", "reference_price_usd": 67.50, "max_cost_usd": 72.0},
 }
 
@@ -163,10 +163,13 @@ class Service:
                     return {}, "ORDER_NOT_ELIGIBLE"
         try:
             preflight_ok, reason, cost = self.upstream_preflight(sku)
-        except (UpstreamTimeout, UpstreamError, ValueError, TypeError):
+            error_message = self._preflight_error_message(reason, sku, cost)
+        except (UpstreamTimeout, UpstreamError, ValueError, TypeError) as exc:
+            logger.warning("upstream preflight failed code=%s sku=%s error_type=%s detail=%s", code, sku["sku_key"], type(exc).__name__, exc)
             preflight_ok, reason, cost = False, "UPSTREAM_ERROR", 0
+            error_message = self._format_upstream_exception("上游预检失败", exc)
         if not preflight_ok:
-            self.ledger.transition(code, "needs_manual_review", reason, {"last_error_code": reason, "last_error_message": reason}, ("purchasing",))
+            self.ledger.transition(code, "needs_manual_review", reason, {"last_error_code": reason, "last_error_message": error_message}, ("purchasing",))
             self.alert(code, reason)
             return self.public_row(self.ledger.get_code(code)), None
         return self._purchase(code, claimed, sku, cost), None
@@ -200,11 +203,13 @@ class Service:
     def _purchase(self, code: str, row: dict[str, Any], sku: dict[str, Any], cost: float) -> dict[str, Any]:
         try:
             result = self.canboso.purchase(row["idempotency_key"], json.loads(row["request_payload_json"]))
-        except UpstreamTimeout:
-            self.ledger.transition(code, "needs_manual_review", "upstream_timeout", {"last_error_code": "UPSTREAM_TIMEOUT", "last_error_message": "upstream timeout"}, ("purchasing",))
+        except UpstreamTimeout as exc:
+            logger.warning("upstream purchase timeout code=%s sku=%s detail=%s", code, sku["sku_key"], exc)
+            self.ledger.transition(code, "needs_manual_review", "upstream_timeout", {"last_error_code": "UPSTREAM_TIMEOUT", "last_error_message": self._format_upstream_exception("上游下单超时", exc)}, ("purchasing",))
             self.alert(code, "UPSTREAM_ERROR")
             return self.public_row(self.ledger.get_code(code))
         except UpstreamError as e:
+            logger.warning("upstream purchase error code=%s sku=%s status=%s detail=%s", code, sku["sku_key"], e.status_code, e.message)
             self.ledger.transition(code, "needs_manual_review", "upstream_error", {"last_error_code": f"HTTP_{e.status_code}", "last_error_message": e.message}, ("purchasing",))
             self.alert(code, "UPSTREAM_ERROR")
             return self.public_row(self.ledger.get_code(code))
@@ -226,10 +231,13 @@ class Service:
         sku = self.ledger.get_sku(row["sku_key"])
         try:
             ok, reason, cost = self.upstream_preflight(sku, override)
-        except (UpstreamTimeout, UpstreamError, ValueError, TypeError):
+            error_message = self._preflight_error_message(reason, sku, cost)
+        except (UpstreamTimeout, UpstreamError, ValueError, TypeError) as exc:
+            logger.warning("admin retry preflight failed code=%s sku=%s error_type=%s detail=%s", code, sku["sku_key"], type(exc).__name__, exc)
             ok, reason, cost = False, "UPSTREAM_ERROR", 0
+            error_message = self._format_upstream_exception("重试预检失败", exc)
         if not ok:
-            self.ledger.transition(code, "needs_manual_review", f"admin_retry_failed:{reason}", {"last_error_code": reason, "last_error_message": reason}, ("needs_manual_review",))
+            self.ledger.transition(code, "needs_manual_review", f"admin_retry_failed:{reason}", {"last_error_code": reason, "last_error_message": error_message}, ("needs_manual_review",))
             self.alert(code, reason)
             return self.admin_detail(self.ledger.get_code(code)), reason
         audit_reason = "admin_retry" if not note.strip() else f"admin_retry:{note.strip()[:200]}"
@@ -247,10 +255,10 @@ class Service:
             return self.public_row(self.ledger.get_code(code))
         try:
             response = self.canboso.get_order(row["upstream_order_code"])
-        except (UpstreamTimeout, UpstreamError):
-            return self._handle_poll_failure(code)
-        except Exception:
-            return self._handle_poll_failure(code)
+        except (UpstreamTimeout, UpstreamError) as exc:
+            return self._handle_poll_failure(code, self._format_upstream_exception("查询上游订单失败", exc))
+        except Exception as exc:
+            return self._handle_poll_failure(code, f"查询上游订单异常：{type(exc).__name__}")
         item = (response.get("orders") or [{}])[0]
         status = str(item.get("status") or "").lower()
         updates = {"upstream_status": status, "last_polled_at": now_iso()}
@@ -262,7 +270,7 @@ class Service:
             self.ledger.transition(code, "waiting_fulfillment", "shared_poll", updates, ("waiting_fulfillment",))
         return self.public_row(self.ledger.get_code(code))
 
-    def _handle_poll_failure(self, code: str) -> dict[str, Any]:
+    def _handle_poll_failure(self, code: str, error_message: str = "upstream error") -> dict[str, Any]:
         failures = self._consecutive_poll_failures(code) + 1
         if failures < self.POLL_FAILURE_THRESHOLD:
             self.ledger.transition(
@@ -271,22 +279,47 @@ class Service:
                 "poll_upstream_error",
                 {
                     "last_error_code": "UPSTREAM_ERROR",
-                    "last_error_message": "upstream error",
+                    "last_error_message": error_message,
                     "last_polled_at": now_iso(),
                 },
                 ("waiting_fulfillment",),
             )
-            logger.warning("shared fulfillment poll failed consecutive_failures=%s", failures)
+            logger.warning("shared fulfillment poll failed code=%s consecutive_failures=%s detail=%s", code, failures, error_message)
         else:
             self.ledger.transition(
                 code,
                 "needs_manual_review",
                 "upstream_error",
-                {"last_error_code": "UPSTREAM_ERROR", "last_error_message": "upstream error", "last_polled_at": now_iso()},
+                {"last_error_code": "UPSTREAM_ERROR", "last_error_message": error_message, "last_polled_at": now_iso()},
                 ("waiting_fulfillment",),
             )
+            logger.warning("shared fulfillment poll escalated to manual review code=%s consecutive_failures=%s detail=%s", code, failures, error_message)
             self.alert(code, "UPSTREAM_ERROR")
         return self.public_row(self.ledger.get_code(code))
+
+    @staticmethod
+    def _format_upstream_exception(prefix: str, exc: Exception) -> str:
+        if isinstance(exc, UpstreamTimeout):
+            detail = str(exc).strip()
+            return f"{prefix}（连接超时：{detail}）" if detail else f"{prefix}（连接超时）"
+        if isinstance(exc, UpstreamError):
+            detail = str(exc.message or "").strip()
+            return f"{prefix}（HTTP {exc.status_code}：{detail}）" if detail else f"{prefix}（HTTP {exc.status_code}）"
+        return f"{prefix}（{type(exc).__name__}）"
+
+    @staticmethod
+    def _preflight_error_message(reason: str, sku: dict[str, Any], cost: float) -> str:
+        if reason == "PRICE_LIMIT_EXCEEDED":
+            if cost > 0:
+                return f"上游现价 ${cost:.2f} 超过最高进价上限 ${float(sku['max_cost_usd']):.2f}"
+            return "上游商品价格异常，已暂停下单"
+        if reason == "LOW_BALANCE":
+            return f"Canboso 账户余额不足（需 ${cost:.2f}）"
+        if reason == "UPSTREAM_OUT_OF_STOCK":
+            return "上游商品当前缺货，请等补货后再重试"
+        if reason == "UPSTREAM_ERROR":
+            return "上游商品列表中未找到对应商品"
+        return reason
 
     def _consecutive_poll_failures(self, code: str) -> int:
         count = 0
@@ -486,7 +519,9 @@ class Service:
         })
         return result
 
-    def overview(self) -> dict[str, Any]:
+    def overview(self, force_refresh: bool = False) -> dict[str, Any]:
+        if force_refresh and hasattr(self.canboso, "invalidate_products_cache"):
+            self.canboso.invalidate_products_cache()
         catalog = self.canboso.list_products()
         balance = self.canboso.get_balance()
         balance_usd = float(balance.get("balanceUsd", balance.get("balance", 0)))

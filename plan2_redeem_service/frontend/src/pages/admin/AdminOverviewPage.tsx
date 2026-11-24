@@ -1,6 +1,7 @@
 import { useState } from "react";
 import {
   AlertTriangle,
+  ArrowUpRight,
   Clock,
   Loader2,
   RefreshCw,
@@ -36,50 +37,29 @@ export function AdminOverviewPage({
 
   const { canboso, counts, skus } = overview;
 
-  const kpiItems: Array<{
+  const priorityItems: Array<{
     key: string;
     label: string;
     value: number;
     meta: string;
     status?: CodeStatus | "";
-    variant?: "default" | "alert" | "warn";
+    highlight: "idle" | "purple" | "amber" | "alert";
   }> = [
-    {
-      key: "total",
-      label: "总发码量",
-      value: counts.total,
-      meta: "淘宝 + 16688 全部订单",
-      status: "",
-    },
     {
       key: "unused",
       label: "待提货",
       value: counts.unused,
       meta: "码已发出，买家还没领",
       status: "unused",
+      highlight: counts.unused > 0 ? "purple" : "idle",
     },
     {
       key: "waiting",
       label: "排队拉人中",
       value: counts.waiting_fulfillment,
-      meta: "每 20 分钟自动查进度，一般 1 到 6 小时完成",
+      meta: "每 20 分钟自动查进度，通常 1–6 小时完成",
       status: "waiting_fulfillment",
-      variant: counts.waiting_fulfillment > 0 ? "warn" : "default",
-    },
-    {
-      key: "warranty",
-      label: "待交保修 / 待报备",
-      value: counts.delivered_pending_warranty,
-      meta: "独享已发商店邮箱，等买家交保修",
-      status: "delivered_pending_warranty",
-      variant: counts.delivered_pending_warranty > 0 ? "warn" : "default",
-    },
-    {
-      key: "completed",
-      label: "已完成",
-      value: counts.completed,
-      meta: "共享已拉群，独享已交保修",
-      status: "completed",
+      highlight: counts.waiting_fulfillment > 0 ? "amber" : "idle",
     },
     {
       key: "review",
@@ -87,7 +67,7 @@ export function AdminOverviewPage({
       value: counts.needs_manual_review,
       meta: "超价停单、余额不够或上游出错",
       status: "needs_manual_review",
-      variant: counts.needs_manual_review > 0 ? "alert" : "default",
+      highlight: counts.needs_manual_review > 0 ? "alert" : "idle",
     },
     {
       key: "overdue",
@@ -95,7 +75,41 @@ export function AdminOverviewPage({
       value: counts.overdue_24h,
       meta: "点这里排查超时排队单",
       status: "waiting_fulfillment",
-      variant: counts.overdue_24h > 0 ? "alert" : "default",
+      highlight: counts.overdue_24h > 0 ? "amber" : "idle",
+    },
+  ];
+
+  const summaryItems: Array<{
+    key: string;
+    label: string;
+    value: number;
+    meta: string;
+    status?: CodeStatus | "";
+    highlight: "idle" | "amber" | "success";
+  }> = [
+    {
+      key: "total",
+      label: "总发码量",
+      value: counts.total,
+      meta: "淘宝 + 16688 全部订单",
+      status: "",
+      highlight: "idle",
+    },
+    {
+      key: "completed",
+      label: "已完成",
+      value: counts.completed,
+      meta: "共享已拉群，独享已交保修",
+      status: "completed",
+      highlight: counts.completed > 0 ? "success" : "idle",
+    },
+    {
+      key: "warranty",
+      label: "待交保修 / 待报备",
+      value: counts.delivered_pending_warranty,
+      meta: "独享已发商店邮箱，等买家交保修",
+      status: "delivered_pending_warranty",
+      highlight: counts.delivered_pending_warranty > 0 ? "amber" : "idle",
     },
     {
       key: "revoked",
@@ -103,22 +117,23 @@ export function AdminOverviewPage({
       value: counts.revoked,
       meta: "退款或手动作废，买家不能再领",
       status: "revoked",
+      highlight: "idle",
     },
   ];
 
   return (
-    <div className="stack-lg">
-      <header className="admin-header">
-        <div>
+    <div className="admin-overview-flow">
+      <header className="admin-header admin-header--minimal">
+        <div className="admin-header-copy">
           <h1 className="admin-page-title">总览</h1>
           <p className="admin-page-sub">
-            查看 Canboso 余额、共享车位和独享整组的实时进价与库存，系统每 20 分钟自动查一次排队进度。
+            实时监控 Canboso 余额、双规格进价库存，每 20 分钟自动查排队进度。
           </p>
         </div>
         <div className="row">
           <button
             type="button"
-            className={`btn btn-secondary ${refreshing ? "is-loading" : ""}`}
+            className={`btn btn-secondary admin-refresh-btn ${refreshing ? "is-loading" : ""}`}
             disabled={refreshing}
             aria-busy={refreshing}
             onClick={handleRefresh}
@@ -150,10 +165,12 @@ export function AdminOverviewPage({
       )}
 
       <section className="ops-strip" aria-label="上游余额与双规格进价监控">
-        <article className="sku-monitor-card">
+        <article className="sku-monitor-card sku-monitor-card--balance">
           <div className="row-between">
-            <div className="row">
-              <Wallet size={17} style={{ color: "var(--accent)" }} aria-hidden="true" />
+            <div className="row" style={{ gap: 8 }}>
+              <span className="ops-icon-badge" aria-hidden="true">
+                <Wallet size={15} />
+              </span>
               <h2 className="card-title" style={{ fontSize: 15 }}>
                 Canboso 账户余额
               </h2>
@@ -164,24 +181,29 @@ export function AdminOverviewPage({
           </div>
 
           <div
-            className="kpi-value"
+            className="kpi-value ops-balance-figure"
             style={{ color: canboso.is_low_balance ? "var(--down)" : "var(--ink-1)" }}
           >
             {formatUsd(canboso.balance_usd)}
           </div>
 
-          <div className="stack-sm">
-            <div className="row-between" style={{ fontSize: 13 }}>
-              <span style={{ color: "var(--ink-3)" }}>低余额提醒线</span>
-              <span className="mono">{formatUsd(canboso.low_balance_threshold_usd)}</span>
+          <div className="ops-meta-list">
+            <div className="ops-meta-row">
+              <span className="ops-meta-key">低余额提醒线</span>
+              <span className="mono tabular ops-meta-val">
+                {formatUsd(canboso.low_balance_threshold_usd)}
+              </span>
             </div>
-            <div className="row-between" style={{ fontSize: 13 }}>
-              <span style={{ color: "var(--ink-3)" }}>上次检查时间</span>
-              <span className="mono">{formatDateTime(canboso.checked_at)}</span>
+            <div className="ops-meta-row">
+              <span className="ops-meta-key">上次检查时间</span>
+              <span className="mono tabular ops-meta-val">{formatDateTime(canboso.checked_at)}</span>
             </div>
-            <div className="row-between" style={{ fontSize: 13 }}>
-              <span style={{ color: "var(--ink-3)" }}>买家提货网址</span>
-              <span className="mono" style={{ maxWidth: 210, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <div className="ops-meta-row">
+              <span className="ops-meta-key">买家提货网址</span>
+              <span
+                className="mono ops-meta-val ops-meta-url"
+                title={overview.public_base_url}
+              >
                 {overview.public_base_url}
               </span>
             </div>
@@ -222,15 +244,15 @@ export function AdminOverviewPage({
                 </span>
               </div>
 
-              <div className="row-between" style={{ alignItems: "baseline" }}>
+              <div className="ops-price-row">
                 <div>
-                  <div style={{ fontSize: 11.5, color: "var(--ink-3)" }}>当前进价</div>
-                  <span className="kpi-value" style={{ fontSize: 22 }}>
+                  <div className="ops-price-label">当前进价</div>
+                  <span className="kpi-value ops-price-figure">
                     {formatUsd(sku.current_price_usd)}
                   </span>
                 </div>
-                <span style={{ fontSize: 12.5, color: "var(--ink-3)" }}>
-                  最高进价上限 <strong className="mono">{formatUsd(sku.max_cost_usd)}</strong>
+                <span className="ops-price-cap">
+                  最高进价上限 <strong className="mono tabular">{formatUsd(sku.max_cost_usd)}</strong>
                 </span>
               </div>
 
@@ -241,28 +263,27 @@ export function AdminOverviewPage({
                 />
               </div>
 
-              <div className="stack-sm" style={{ fontSize: 12.5, color: "var(--ink-3)" }}>
-                <div className="row-between">
-                  <span>上游库存</span>
-                  <span className="mono" style={{ color: "var(--ink-1)" }}>
+              <div className="ops-meta-list">
+                <div className="ops-meta-row">
+                  <span className="ops-meta-key">上游库存</span>
+                  <span className="mono tabular ops-meta-val">
                     {sku.available === null ? "充足（不限量）" : `${sku.available} 件`}
                   </span>
                 </div>
-                <div className="row-between">
-                  <span>未提货码余量</span>
-                  <span className="mono" style={{ color: "var(--ink-1)" }}>
+                <div className="ops-meta-row">
+                  <span className="ops-meta-key">未提货码余量</span>
+                  <span className="mono tabular ops-meta-val">
                     淘宝 {sku.unused_codes_taobao} · 16688 {sku.unused_codes_16688}
                   </span>
                 </div>
-                <div className="row-between">
-                  <span>16688 商品编号</span>
+                <div className="ops-meta-row">
+                  <span className="ops-meta-key">16688 商品编号</span>
                   <button
                     type="button"
-                    className="btn btn-ghost btn-sm"
-                    style={{ minHeight: 28, padding: "0 8px", fontSize: 12 }}
+                    className="ops-inline-link"
                     onClick={onJumpToSettings}
                   >
-                    <span className="mono">{sku.goods_no || "还没填 · 去设置"}</span>
+                    <span className="mono tabular">{sku.goods_no || "还没填 · 去设置"}</span>
                   </button>
                 </div>
               </div>
@@ -271,34 +292,58 @@ export function AdminOverviewPage({
         })}
       </section>
 
-      <section className="stack-sm" aria-label="订单状态统计">
+      <section className="ops-orders-section" aria-label="订单状态统计">
         <div className="admin-section-bar">
-          <h2 className="card-title" style={{ fontSize: 16 }}>
-            订单处理进度
-          </h2>
-          <span className="row" style={{ fontSize: 12.5, color: "var(--ink-3)", gap: 6 }}>
-            <Clock size={14} aria-hidden="true" />
+          <h2 className="admin-section-title">订单处理进度</h2>
+          <span className="admin-section-hint">
+            <Clock size={13} aria-hidden="true" />
             <span>每 20 分钟自动查进度 · 点卡片看明细</span>
           </span>
         </div>
 
-        <div className="kpi-grid">
-          {kpiItems.map((item) => (
+        <div className="kpi-priority-grid" aria-label="重点待办订单">
+          {priorityItems.map((item) => (
             <button
               key={item.key}
               type="button"
-              className={`kpi-tile ${
-                item.variant === "alert"
+              className={`kpi-tile kpi-priority-card ${
+                item.highlight === "alert"
                   ? "kpi-tile-alert"
-                  : item.variant === "warn"
+                  : item.highlight === "amber"
                   ? "kpi-tile-warn"
+                  : item.highlight === "purple"
+                  ? "kpi-tile-accent"
                   : ""
               }`}
               onClick={() => onJumpToOrders(item.status)}
             >
-              <span className="kpi-label">{item.label}</span>
-              <span className="kpi-value">{item.value}</span>
+              <div className="kpi-card-top">
+                <span className="kpi-label">{item.label}</span>
+                <ArrowUpRight size={14} className="kpi-arrow" aria-hidden="true" />
+              </div>
+              <span className="kpi-value tabular">{item.value}</span>
               <span className="kpi-meta">{item.meta}</span>
+            </button>
+          ))}
+        </div>
+
+        <div className="kpi-summary-strip" aria-label="订单汇总胶囊">
+          {summaryItems.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              title={item.meta}
+              className={`kpi-summary-pill ${
+                item.highlight === "amber"
+                  ? "is-amber"
+                  : item.highlight === "success"
+                  ? "is-success"
+                  : ""
+              }`}
+              onClick={() => onJumpToOrders(item.status)}
+            >
+              <span className="kpi-summary-label">{item.label}</span>
+              <span className="kpi-summary-value tabular">{item.value}</span>
             </button>
           ))}
         </div>

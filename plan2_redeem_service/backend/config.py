@@ -17,7 +17,9 @@ class Settings:
     admin_token: str = "change-me"
     canboso_base_url: str = "https://canboso.com"
     canboso_api_secret: str = ""
-    canboso_timeout_seconds: float = 15.0
+    canboso_timeout_seconds: float = 25.0
+    canboso_products_cache_ttl_seconds: float = 60.0
+    canboso_get_retries: int = 2
     canboso_low_balance_threshold_usd: float = 80.0
     channel16688_base_url: str = "https://www.16688.com.cn"
     channel16688_api_key: str = ""
@@ -44,7 +46,14 @@ class Settings:
             for key in values:
                 if key in loaded:
                     values[key] = loaded[key]
-        converters = {"smtp_port": int, "poll_interval_seconds": int, "canboso_timeout_seconds": float, "canboso_low_balance_threshold_usd": float}
+        converters = {
+            "smtp_port": int,
+            "poll_interval_seconds": int,
+            "canboso_timeout_seconds": float,
+            "canboso_products_cache_ttl_seconds": float,
+            "canboso_get_retries": int,
+            "canboso_low_balance_threshold_usd": float,
+        }
         for key in values:
             env_name = "PLAN2_" + key.upper()
             if env_name in os.environ:

@@ -18,7 +18,7 @@ export function GmailDoubleInput({
   email,
   onEmailChange,
   primaryLabel = "你的 Gmail 邮箱",
-  warningText = "提交后改不了邮箱，点提交前仔细核对一遍拼写。",
+  warningText = "提交后如因买家原因换邮箱需要39.9手续费，点提交前仔细核对一遍拼写。",
   placeholder = "比如：yourname@gmail.com",
   disabled = false,
 }: GmailDoubleInputProps) {
