@@ -108,6 +108,17 @@ jobs:
       - name: Build production bundle
         run: npm run build
 
+      - name: Verify committed frontend bundle
+        shell: bash
+        run: |
+          set -eu
+          if [ -n "$(git status --short --untracked-files=all -- frontend/dist)" ]; then
+            echo "frontend/dist contains untracked build output. Run npm run build and commit the generated files." >&2
+            git status --short --untracked-files=all -- frontend/dist >&2
+            exit 1
+          fi
+          git diff --exit-code -- frontend/dist
+
   git-hygiene:
     name: Repo Hygiene & Secret Guard
     runs-on: ubuntu-latest
@@ -117,6 +128,26 @@ jobs:
 
       - name: Validate pre-commit hook syntax
         run: sh -n .githooks/pre-commit
+
+      - name: Validate commit-msg hook syntax and behavior
+        run: |
+          set -eu
+          sh -n .githooks/commit-msg
+          message_file="$(mktemp)"
+          trap 'rm -f "$message_file"' EXIT
+          printf 'feat(ci): validate commit message hook\n' > "$message_file"
+          .githooks/commit-msg "$message_file"
+          printf 'invalid commit message\n' > "$message_file"
+          if .githooks/commit-msg "$message_file"; then
+            echo "commit-msg hook accepted an invalid message" >&2
+            exit 1
+          fi
+
+      - name: Enable repository hooks
+        run: |
+          set -eu
+          git config core.hooksPath .githooks
+          test "$(git config --get core.hooksPath)" = ".githooks"
 
       - name: Verify no forbidden files are tracked
         run: |

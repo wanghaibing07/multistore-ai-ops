@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+set -eu
+
+commit_msg_file="${1:?commit message file is required}"
+subject="$(sed -n '1p' "$commit_msg_file")"
+
+case "$subject" in
+  Merge\ *|Revert\ \"*)
+    exit 0
+    ;;
+esac
+
+if printf '%s\n' "$subject" | grep -Eq '^(feat|fix|refactor|chore|docs|test|ci)(\([a-z0-9][a-z0-9._-]*\))?(!)?: .+'; then
+  exit 0
+fi
+
+printf '[commit-msg] BLOCKED: 提交信息必须符合 Conventional Commits，例如 feat(plan2): add redemption validation\n' >&2
+exit 1

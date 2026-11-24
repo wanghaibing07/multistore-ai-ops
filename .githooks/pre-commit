@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-staged_files="$(git -c core.quotepath=false diff --cached --name-only --diff-filter=ACMR)"
+staged_files="$(git -c core.quotepath=false diff --cached --name-only --diff-filter=ACMRD)"
 if [ -z "$staged_files" ]; then
   exit 0
 fi
@@ -14,6 +14,12 @@ report_error() {
   printf '[pre-commit] BLOCKED: %s\n' "$1" >&2
   errors=$((errors + 1))
 }
+
+whitespace_errors="$(git diff --cached --check 2>&1 || true)"
+if [ -n "$whitespace_errors" ]; then
+  report_error "暂存内容存在空白错误"
+  printf '%s\n' "$whitespace_errors" >&2
+fi
 
 while IFS= read -r file; do
   [ -z "$file" ] && continue
@@ -82,7 +88,7 @@ $staged_files
 EOF
 
 if [ "$has_frontend_src" -eq 1 ] && [ "$has_frontend_dist" -eq 0 ]; then
-  printf '[pre-commit] WARNING: 检测到 plan2_redeem_service/frontend 源码改动但未暂存 frontend/dist/；如涉及线上静态资源变更，请确认已运行 npm run build。\n' >&2
+  report_error "检测到 plan2_redeem_service/frontend 源码改动但未暂存 frontend/dist/，请先运行 npm run build 并暂存构建产物"
 fi
 
 if [ "$errors" -gt 0 ]; then
