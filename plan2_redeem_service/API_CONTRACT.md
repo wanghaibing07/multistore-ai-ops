@@ -29,7 +29,7 @@
 - `unused`：未使用，等待买家提交核销
 - `validating`：正在校验订单与上游状态（瞬态）
 - `purchasing`：正在调用 Canboso 下单（`Idempotency-Key` 已落库，防双花）
-- `waiting_fulfillment`：共享车位上游已受理（`paid` / `waiting_seller`），排队拉人中（1~6h，最晚 24h）
+- `waiting_fulfillment`：共享车位上游已受理（`paid` / `waiting_seller`），排队拉人中（2-6h，最晚 24h）
 - `delivered_pending_warranty`：独享整组已秒发商店套餐邮箱，待买家建家庭组邀请并回填保修信息
 - `completed`：履约完成（共享车位上游状态已变为 `completed`/`delivered`；独享整组买家已提交保修登记）
 - `needs_manual_review`：触发异常需商家人工介入（价格熔断、余额不足、上游断货/报错、24h 超时等；对买家隐藏内部敏感原因）
@@ -78,7 +78,7 @@
   "delivery": null,
   "warranty": null,
   "fulfillment": {
-    "eta_text": "预计 1~6 小时内发出家庭组邀请，最晚不超过 24 小时",
+    "eta_text": "一般 2-6 小时内发家庭组邀请，最晚 24 小时",
     "submitted_at": null,
     "completed_at": null,
     "last_polled_at": null,
@@ -221,7 +221,7 @@
 {
   "code": "U20S-8K3M-9P2Q",
   "redeem_url": "https://redeem.example.com/r/U20S-8K3M-9P2Q",
-  "wangwang_message": "感谢下单 Google Ultra x20 共享车位！\n点链接填您的 Gmail 提货：https://redeem.example.com/r/U20S-8K3M-9P2Q\n兑换码：U20S-8K3M-9P2Q\n提交后一般 1~6 小时内发家庭组邀请（最晚 24 小时），随时能在链接里看进度。",
+  "wangwang_message": "感谢下单 Google Ultra x20 共享车位！\n点链接自助填 Gmail 提货（不用在旺旺发邮箱）：https://redeem.example.com/r/U20S-8K3M-9P2Q\n兑换码：U20S-8K3M-9P2Q\n\n【提货前准备】\n1. 关闭付款资料：https://payments.google.com/gp/w/home/settings\n2. 退出原有家庭组：https://g.co/yourfamily\n3. 近 12 个月内没换过家庭组，不然可能进不来\n\n【发货与进度】\n提交邮箱后一般 2-6 小时内发家庭组邀请（最晚 24 小时），未超时勿催；随时可点链接看进度，收到邮件接受邀请即可。\n\n【使用须知】\n1. 质保 30 天会员权益，不质保您的 Google 账号；自行反代或违反官方条款导致封号不负责。\n2. 本款为 0 积分/点数车位，使用积分或点数会被机器人检测踢出家庭组且不退款。\n3. 确认后非商品问题不退款；买家原因填错邮箱或需换号，需补 39.9 元手续费。",
   "item": { "...AdminCodeSummary..." }
 }
 ```

@@ -36,7 +36,7 @@ logger = logging.getLogger(__name__)
 EMAIL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._%+-]*@(gmail\.com|googlemail\.com)$", re.IGNORECASE)
 SKUS = {
     "ultra_shared_slot": {"title": "Google Ultra x20 共享车位", "product_type": "slot", "product_id": "6ac26aaeec73a42d6430a837", "reference_price_usd": 13.47, "max_cost_usd": 16.0},
-    "ultra_exclusive_admin": {"title": "VEO3 Ultra x20 独享整组·管理员版（1个月全保）", "product_type": "account", "product_id": "6ae03419c0080f9e15f695a8", "reference_price_usd": 67.50, "max_cost_usd": 72.0},
+    "ultra_exclusive_admin": {"title": "Google Ultra x20 独享整组（管理员版）", "product_type": "account", "product_id": "6ae03419c0080f9e15f695a8", "reference_price_usd": 67.50, "max_cost_usd": 72.0},
 }
 
 
@@ -571,7 +571,7 @@ class Service:
                 pass
         notice = "订单正在人工处理，请带兑换码联系客服。" if row["status"] == "needs_manual_review" else None
         masked_email = row.get("buyer_email_masked") or (warranty.get("admin_email_masked") if warranty else None)
-        return {"code": row["code"], "sku_key": row["sku_key"], "sku_title": sku["title"], "product_type": sku["product_type"], "channel": row["channel"], "status": row["status"], "buyer_email_masked": masked_email, "delivery": delivery, "warranty": warranty, "fulfillment": {"eta_text": "一般 1~6 小时内发家庭组邀请，最晚 24 小时" if sku["product_type"] == "slot" else None, "submitted_at": row.get("submitted_at"), "completed_at": row.get("completed_at"), "last_polled_at": row.get("last_polled_at"), "elapsed_minutes": elapsed}, "buyer_notice": notice, "support_hint": "有问题请把订单号和兑换码发给客服。", "created_at": row["created_at"], "updated_at": row["updated_at"]}
+        return {"code": row["code"], "sku_key": row["sku_key"], "sku_title": sku["title"], "product_type": sku["product_type"], "channel": row["channel"], "status": row["status"], "buyer_email_masked": masked_email, "delivery": delivery, "warranty": warranty, "fulfillment": {"eta_text": "一般 2-6 小时内发家庭组邀请，最晚 24 小时" if sku["product_type"] == "slot" else None, "submitted_at": row.get("submitted_at"), "completed_at": row.get("completed_at"), "last_polled_at": row.get("last_polled_at"), "elapsed_minutes": elapsed}, "buyer_notice": notice, "support_hint": "有问题请把订单号和兑换码发给客服。", "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
     def admin_summary(self, row: dict[str, Any]) -> dict[str, Any]:
         sku = self.ledger.get_sku(row["sku_key"])

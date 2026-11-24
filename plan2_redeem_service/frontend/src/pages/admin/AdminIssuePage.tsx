@@ -192,7 +192,7 @@ export function AdminIssuePage({
                 onChange={(event) => setSingleSku(event.target.value as SkuKey)}
               >
                 <option value="ultra_shared_slot">Google Ultra x20 共享车位</option>
-                <option value="ultra_exclusive_admin">VEO3 Ultra x20 独享整组·管理员版（1个月全保）</option>
+                <option value="ultra_exclusive_admin">Google Ultra x20 独享整组（管理员版）</option>
               </select>
               <span className="field-hint">{getSkuIssueHint(singleSku)}</span>
             </div>
@@ -342,7 +342,7 @@ export function AdminIssuePage({
                 onChange={(event) => handleBatchSkuChange(event.target.value as SkuKey)}
               >
                 <option value="ultra_shared_slot">Google Ultra x20 共享车位</option>
-                <option value="ultra_exclusive_admin">VEO3 Ultra x20 独享整组·管理员版（1个月全保）</option>
+                <option value="ultra_exclusive_admin">Google Ultra x20 独享整组（管理员版）</option>
               </select>
               <span className="field-hint">{getSkuIssueHint(batchSku)}</span>
             </div>

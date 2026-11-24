@@ -116,6 +116,7 @@ export function RedeemPage() {
 
   const [checkFamily, setCheckFamily] = useState(false);
   const [checkPayment, setCheckPayment] = useState(false);
+  const [checkExclusiveRule, setCheckExclusiveRule] = useState(false);
 
   const [buyerEmail, setBuyerEmail] = useState("");
   const [submittingRedeem, setSubmittingRedeem] = useState(false);
@@ -167,6 +168,7 @@ export function RedeemPage() {
   useEffect(() => {
     setCheckFamily(false);
     setCheckPayment(false);
+    setCheckExclusiveRule(false);
     setBuyerEmail("");
     setRedeemError(null);
     setWarrantyError(null);
@@ -218,8 +220,11 @@ export function RedeemPage() {
     };
   }, [screenshotPreview]);
 
+  const isExclusive = record?.product_type === "account";
   const slotEmailCheck = validateGmailInput(buyerEmail);
-  const preflightReady = checkFamily && checkPayment;
+  const preflightReady = isExclusive
+    ? checkFamily && checkPayment && checkExclusiveRule
+    : checkFamily && checkPayment;
 
   const handleSlotSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -262,7 +267,7 @@ export function RedeemPage() {
     event.preventDefault();
     setRedeemError(null);
     if (!preflightReady) {
-      setRedeemError("请先勾选上面的两项提货前确认。");
+      setRedeemError("请先勾选上面的三项提货前确认。");
       return;
     }
     setSubmittingRedeem(true);
@@ -336,7 +341,6 @@ export function RedeemPage() {
   };
 
   const warrantyEmailCheck = validateGmailInput(adminEmail);
-  const isExclusive = record?.product_type === "account";
   const storeEmail =
     record && isExclusive && record.delivery
       ? record.delivery.account_text ||
@@ -408,6 +412,23 @@ export function RedeemPage() {
   );
   const buyerStatusMeta = record ? getBuyerStatusMeta(record) : null;
   const buyerWarrantyBadge = getBuyerWarrantyBadgeMeta(record?.warranty?.status);
+  const exclusiveWarrantyNotice = (
+    <div className="inset-panel stack-sm">
+      <strong style={{ fontSize: 13.5 }}>质保与须知</strong>
+      <ol className="guide-steps">
+        <li>
+          <strong>千万别踢掉会员邮箱！</strong>踢掉会失去会员，不保修。
+        </li>
+        <li>
+          <strong>质保 30 天（从领号起算）</strong>，非本人原因掉会员免费保修；确认提货后非商品问题不退款。
+        </li>
+        <li>自己的 Gmail 被封、无法登录不保修。</li>
+        <li>
+          自己号被封、无法登录或误踢权益号导致掉权益，补救/换号收 <strong>79.9 元手续费</strong>，且不保证成功恢复。
+        </li>
+      </ol>
+    </div>
+  );
 
   return (
     <div className="buyer-page">
@@ -586,7 +607,7 @@ export function RedeemPage() {
                 <div>
                   <h2 className="card-title">填你收家庭组邀请的 Gmail</h2>
                   <p className="card-subtitle">
-                    先勾选下面两项确认，再填你的 Gmail。提交后一般 1~6 小时拉人，最晚 24 小时。
+                    先勾选下面两项确认，再填你的 Gmail。提交后一般 2-6 小时发家庭组邀请，最晚 24 小时，未超时勿催。
                   </p>
                 </div>
 
@@ -616,12 +637,32 @@ export function RedeemPage() {
                     />
                     <div className="check-card-body">
                       <strong>已关闭 Google 付款资料</strong>（请先打开{" "}
-                      <a href="https://payments.google.com" target="_blank" rel="noreferrer">
-                        payments.google.com <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />
+                      <a
+                        href="https://payments.google.com/gp/w/home/settings"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        payments.google.com/gp/w/home/settings{" "}
+                        <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />
                       </a>{" "}
-                      进入「设置」关闭现有付款资料，避免拉进家庭组时提示地区不符）。
+                      关闭现有付款资料，避免拉进家庭组时提示地区不符）。
                     </div>
                   </label>
+                </div>
+
+                <div className="inset-panel stack-sm">
+                  <strong style={{ fontSize: 13.5 }}>使用须知</strong>
+                  <ol className="guide-steps">
+                    <li>
+                      <strong>质保 30 天会员权益</strong>，不质保个人 Google 账号；自行反代或违反官方条款导致封号不负责。
+                    </li>
+                    <li>
+                      本款为 <strong>0 积分/点数车位</strong>，使用积分或点数会被机器人检测踢出家庭组且不退款。
+                    </li>
+                    <li>
+                      确认提货后非商品问题不退款；买家原因填错邮箱或需换号，需补 <strong>39.9 元手续费</strong>。
+                    </li>
+                  </ol>
                 </div>
 
                 <form onSubmit={(event) => void handleSlotSubmit(event)} className="stack">
@@ -684,7 +725,7 @@ export function RedeemPage() {
                   <div>
                     <strong>已经排上队了，等发邀请就行</strong>
                     <div style={{ marginTop: 4 }}>
-                      一般 1~6 小时内拉人，最晚 24 小时。页面会自动刷新进度，建议收藏链接随时回来看。
+                      一般 2-6 小时内发家庭组邀请，最晚 24 小时，未超时勿催。页面会自动刷新进度，建议收藏链接随时回来看。
                     </div>
                   </div>
                 </div>
@@ -793,8 +834,12 @@ export function RedeemPage() {
                   <strong style={{ fontSize: 13.5 }}>一共就 3 步，很快</strong>
                   <ol className="guide-steps">
                     <li>点下面按钮，秒出你的专属<strong>商店套餐邮箱</strong>。</li>
-                    <li>用你自己的<strong>主力 Gmail</strong> 建 Google 家庭组，把这个商店邮箱拉进组。</li>
-                    <li>截一张「已发出邀请」的图，回到本页填你的主力 Gmail 和截图交保修。</li>
+                    <li>
+                      用你自己的<strong>主力 Gmail</strong> 建 Google 家庭组并邀请该商店邮箱加入，通过后即享 Ultra 权益，<strong>自己还能再邀请 4 个人</strong>。
+                    </li>
+                    <li>
+                      截一张「已发出邀请」的图，回到本页填主力 Gmail 和截图登记 30 天质保，一般 <strong>2-6 小时内处理（最晚 24 小时，未超时勿催）</strong>。
+                    </li>
                   </ol>
                 </div>
 
@@ -807,11 +852,11 @@ export function RedeemPage() {
                       onChange={(event) => setCheckFamily(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>我准备好了当管理员的主力 Gmail</strong>，而且它现在没在别的家庭组里（点{" "}
+                      <strong>我准备好了当管理员的稳定主力 Gmail</strong>，且现在没在别的家庭组里（点{" "}
                       <a href="https://g.co/yourfamily" target="_blank" rel="noreferrer">
                         g.co/yourfamily <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />
                       </a>{" "}
-                      可以看）。
+                      检查并退出原有家庭组）。
                     </div>
                   </label>
 
@@ -823,10 +868,33 @@ export function RedeemPage() {
                       onChange={(event) => setCheckPayment(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>我知道把商店邮箱拉进家庭组后别踢出组</strong>，发完邀请回来传截图交保修就行。
+                      <strong>已关闭 Google 付款资料</strong>（请先打开{" "}
+                      <a
+                        href="https://payments.google.com/gp/w/home/settings"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        payments.google.com/gp/w/home/settings{" "}
+                        <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />
+                      </a>{" "}
+                      关闭现有付款资料，避免建组或邀请受地区限制）。
+                    </div>
+                  </label>
+
+                  <label className={`check-card ${checkExclusiveRule ? "is-checked" : ""}`}>
+                    <input
+                      type="checkbox"
+                      checked={checkExclusiveRule}
+                      disabled={submittingRedeem}
+                      onChange={(event) => setCheckExclusiveRule(event.target.checked)}
+                    />
+                    <div className="check-card-body">
+                      <strong>我知道把会员/商店邮箱拉进家庭组后千万别踢掉</strong>（踢掉会失去会员且不保修），发完邀请后回来传截图登记保修。
                     </div>
                   </label>
                 </div>
+
+                {exclusiveWarrantyNotice}
 
                 {redeemError ? (
                   <div className="callout callout-danger" role="alert">
@@ -924,8 +992,12 @@ export function RedeemPage() {
                         </a>{" "}
                         建好 Google 家庭组。
                       </li>
-                      <li>在家庭组里点「发送邀请」，把上面复制的<strong>商店邮箱</strong>贴进去发邀请。</li>
-                      <li>截一张「已发出邀请」的页面图，回到下面填<strong>你自己的主力 Gmail</strong> 并传图交保修。</li>
+                      <li>
+                        在家庭组里点「发送邀请」，把上面复制的<strong>商店邮箱</strong>贴进去发邀请；通过后即享 Ultra 权益，<strong>自己还能再邀请 4 个人</strong>。
+                      </li>
+                      <li>
+                        截一张「已发出邀请」的页面图，回到下面填<strong>你自己的主力 Gmail</strong> 并传图登记 30 天质保（一般 <strong>2-6 小时内处理，最晚 24 小时，未超时勿催</strong>）。
+                      </li>
                     </ol>
                   </div>
                 </section>
@@ -936,7 +1008,7 @@ export function RedeemPage() {
                     <div style={{ flex: "1 1 240px", minWidth: 0 }}>
                       <h2 className="card-title">第 3 步：提交保修信息</h2>
                       <p className="card-subtitle">
-                        发完邀请回来把主力 Gmail 和截图交上去，商家会帮你在官方做好全保报备。
+                        发完邀请回来把主力 Gmail 和截图交上去，商家一般 2-6 小时内帮你在官方做好 30 天质保报备（最晚 24 小时，未超时勿催）。
                       </p>
                     </div>
                     <ToneBadge label={buyerWarrantyBadge.label} tone={buyerWarrantyBadge.tone} />
@@ -1137,6 +1209,8 @@ export function RedeemPage() {
                       </div>
                     </form>
                   )}
+
+                  {exclusiveWarrantyNotice}
                 </section>
               </>
             ) : null}

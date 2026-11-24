@@ -12,11 +12,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from backend.app import create_app
+from backend.agiso import format_trade_delivery_message
 from backend.config import Settings
 from backend.db import now_iso
 from backend.gateways import DryRun16688, DryRunCanboso, UpstreamError, UpstreamTimeout
 from backend.gateways import CanbosoClient, Channel16688Client
-from backend.service import Mailer, format_warranty_forward_template
+from backend.service import Mailer, SKUS, format_warranty_forward_template
 
 
 ADMIN = {"Authorization": "Bearer test-admin"}
@@ -685,16 +686,89 @@ def test_issue_wangwang_message_contains_link_and_code_for_both_skus(components)
         assert slot_resp["item"]["sku_title"] == "Google Ultra x20 共享车位"
         assert slot_resp["wangwang_message"] == (
             "感谢下单 Google Ultra x20 共享车位！\n"
-            f"点链接填您的 Gmail 提货：{slot_resp['redeem_url']}\n"
+            f"点链接自助填 Gmail 提货（不用在旺旺发邮箱）：{slot_resp['redeem_url']}\n"
             f"兑换码：{slot_resp['code']}\n"
-            "提交后一般 1~6 小时内发家庭组邀请（最晚 24 小时），随时能在链接里看进度。"
+            "\n"
+            "【提货前准备】\n"
+            "1. 关闭付款资料：https://payments.google.com/gp/w/home/settings\n"
+            "2. 退出原有家庭组：https://g.co/yourfamily\n"
+            "3. 近 12 个月内没换过家庭组，不然可能进不来\n"
+            "\n"
+            "【发货与进度】\n"
+            "提交邮箱后一般 2-6 小时内发家庭组邀请（最晚 24 小时），未超时勿催；随时可点链接看进度，收到邮件接受邀请即可。\n"
+            "\n"
+            "【使用须知】\n"
+            "1. 质保 30 天会员权益，不质保您的 Google 账号；自行反代或违反官方条款导致封号不负责。\n"
+            "2. 本款为 0 积分/点数车位，使用积分或点数会被机器人检测踢出家庭组且不退款。\n"
+            "3. 确认后非商品问题不退款；买家原因填错邮箱或需换号，需补 39.9 元手续费。"
         )
         assert "Gmail" in slot_resp["wangwang_message"]
+        slot_public = c.get(f"/api/v1/public/codes/{slot_resp['code']}").json()
+        assert slot_public["fulfillment"]["eta_text"] == "一般 2-6 小时内发家庭组邀请，最晚 24 小时"
 
         excl_resp = c.post("/api/v1/admin/codes/issue", headers=ADMIN, json={"sku_key": "ultra_exclusive_admin", "channel": "taobao"}).json()
         assert excl_resp["code"] in excl_resp["wangwang_message"]
         assert excl_resp["redeem_url"] in excl_resp["wangwang_message"]
-        assert "保修" in excl_resp["wangwang_message"]
+        assert excl_resp["item"]["sku_title"] == "Google Ultra x20 独享整组（管理员版）"
+        assert "VEO3" not in excl_resp["item"]["sku_title"]
+        assert excl_resp["wangwang_message"] == (
+            "感谢下单 Google Ultra x20 独享整组（管理员版）！\n"
+            f"点链接自助秒领会员邮箱：{excl_resp['redeem_url']}\n"
+            f"兑换码：{excl_resp['code']}\n"
+            "\n"
+            "【开通前准备】\n"
+            "1. 关闭付款资料：https://payments.google.com/gp/w/home/settings\n"
+            "2. 退出原有家庭组：https://g.co/yourfamily\n"
+            "3. 准备一个稳定的主力 Gmail，自己当管理员\n"
+            "\n"
+            "【开通流程】\n"
+            "1. 点上面链接秒领会员邮箱。\n"
+            "2. 用主力 Gmail 创建家庭组并邀请该会员邮箱加入，通过后即享 Ultra 权益，自己还能再拉 4 人。\n"
+            "3. 发出邀请后，务必回到同一提货页上传「已发出邀请」截图登记 30 天质保（一般 2-6 小时内处理，最晚 24 小时，未超时勿催）。\n"
+            "\n"
+            "【质保与须知】\n"
+            "1. 千万别踢掉我们给的会员邮箱！踢掉会失去会员，不保修。\n"
+            "2. 质保 30 天（从领号起算），非本人原因掉会员免费保修；确认后非商品问题不退款。\n"
+            "3. 自己的 Gmail 被封、无法登录不保修。\n"
+            "4. 自己号被封、无法登录或误踢权益号导致掉权益，补救/换号收 79.9 元手续费，且不保证成功恢复。"
+        )
+        excl_public = c.get(f"/api/v1/public/codes/{excl_resp['code']}").json()
+        assert excl_public["sku_title"] == "Google Ultra x20 独享整组（管理员版）"
+
+        merged_msg = format_trade_delivery_message(
+            [
+                {"sku_key": "ultra_shared_slot", "code": slot_resp["code"]},
+                {"sku_key": "ultra_exclusive_admin", "code": excl_resp["code"]},
+            ],
+            SKUS,
+            "https://redeem.example.com",
+        )
+        assert "Google Ultra x20 独享整组（管理员版）" in merged_msg
+        assert "点链接自助填 Gmail 提货（不用在旺旺发邮箱）：" in merged_msg
+        assert "点链接自助秒领会员邮箱：" in merged_msg
+        assert "https://payments.google.com/gp/w/home/settings" in merged_msg
+        assert "https://g.co/yourfamily" in merged_msg
+        assert "39.9 元手续费" in merged_msg
+        assert "79.9 元手续费" in merged_msg
+        assert "千万别踢掉我们给的会员邮箱" in merged_msg
+        assert "2-6 小时" in merged_msg
+        assert "1~6" not in merged_msg
+        assert "独享账号" not in merged_msg
+        assert "VEO3" not in merged_msg
+
+        multi_slot_msg = format_trade_delivery_message(
+            [
+                {"sku_key": "ultra_shared_slot", "code": slot_resp["code"]},
+                {"sku_key": "ultra_shared_slot", "code": "U20S-TEST-0002"},
+            ],
+            SKUS,
+            "https://redeem.example.com",
+        )
+        assert "https://payments.google.com/gp/w/home/settings" in multi_slot_msg
+        assert "https://g.co/yourfamily" in multi_slot_msg
+        assert "39.9 元手续费" in multi_slot_msg
+        assert "【共享车位·提货与使用须知】" not in multi_slot_msg
+        assert "79.9 元手续费" not in multi_slot_msg
 
 
 def test_canboso_products_cache_and_get_transient_retries(monkeypatch):

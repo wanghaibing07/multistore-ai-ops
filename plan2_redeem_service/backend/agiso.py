@@ -32,19 +32,55 @@ def build_redeem_url(public_base_url: str, code: str) -> str:
     return f"{public_base_url.rstrip('/')}/r/{code}"
 
 
+SLOT_DELIVERY_GUIDE = (
+    "【提货前准备】\n"
+    "1. 关闭付款资料：https://payments.google.com/gp/w/home/settings\n"
+    "2. 退出原有家庭组：https://g.co/yourfamily\n"
+    "3. 近 12 个月内没换过家庭组，不然可能进不来\n"
+    "\n"
+    "【发货与进度】\n"
+    "提交邮箱后一般 2-6 小时内发家庭组邀请（最晚 24 小时），未超时勿催；随时可点链接看进度，收到邮件接受邀请即可。\n"
+    "\n"
+    "【使用须知】\n"
+    "1. 质保 30 天会员权益，不质保您的 Google 账号；自行反代或违反官方条款导致封号不负责。\n"
+    "2. 本款为 0 积分/点数车位，使用积分或点数会被机器人检测踢出家庭组且不退款。\n"
+    "3. 确认后非商品问题不退款；买家原因填错邮箱或需换号，需补 39.9 元手续费。"
+)
+
+EXCLUSIVE_DELIVERY_GUIDE = (
+    "【开通前准备】\n"
+    "1. 关闭付款资料：https://payments.google.com/gp/w/home/settings\n"
+    "2. 退出原有家庭组：https://g.co/yourfamily\n"
+    "3. 准备一个稳定的主力 Gmail，自己当管理员\n"
+    "\n"
+    "【开通流程】\n"
+    "1. 点上面链接秒领会员邮箱。\n"
+    "2. 用主力 Gmail 创建家庭组并邀请该会员邮箱加入，通过后即享 Ultra 权益，自己还能再拉 4 人。\n"
+    "3. 发出邀请后，务必回到同一提货页上传「已发出邀请」截图登记 30 天质保（一般 2-6 小时内处理，最晚 24 小时，未超时勿催）。\n"
+    "\n"
+    "【质保与须知】\n"
+    "1. 千万别踢掉我们给的会员邮箱！踢掉会失去会员，不保修。\n"
+    "2. 质保 30 天（从领号起算），非本人原因掉会员免费保修；确认后非商品问题不退款。\n"
+    "3. 自己的 Gmail 被封、无法登录不保修。\n"
+    "4. 自己号被封、无法登录或误踢权益号导致掉权益，补救/换号收 79.9 元手续费，且不保证成功恢复。"
+)
+
+
 def format_delivery_message(sku_title: str, product_type: str, code: str, redeem_url: str) -> str:
     if product_type == "slot":
         return (
             f"感谢下单 {sku_title}！\n"
-            f"点链接填您的 Gmail 提货：{redeem_url}\n"
+            f"点链接自助填 Gmail 提货（不用在旺旺发邮箱）：{redeem_url}\n"
             f"兑换码：{code}\n"
-            "提交后一般 1~6 小时内发家庭组邀请（最晚 24 小时），随时能在链接里看进度。"
+            "\n"
+            f"{SLOT_DELIVERY_GUIDE}"
         )
     return (
         f"感谢下单 {sku_title}！\n"
-        f"点链接直接领套餐邮箱：{redeem_url}\n"
+        f"点链接自助秒领会员邮箱：{redeem_url}\n"
         f"兑换码：{code}\n"
-        "领完建好家庭组并邀请商店邮箱后，记得在同一页传截图登记保修。"
+        "\n"
+        f"{EXCLUSIVE_DELIVERY_GUIDE}"
     )
 
 
@@ -64,20 +100,28 @@ def format_trade_delivery_message(
     for index, item in enumerate(deliveries, start=1):
         sku = skus[item["sku_key"]]
         url = build_redeem_url(public_base_url, item["code"])
+        link_label = (
+            "点链接自助填 Gmail 提货（不用在旺旺发邮箱）："
+            if sku["product_type"] == "slot"
+            else "点链接自助秒领会员邮箱："
+        )
         blocks.append(
             f"【第 {index} 份】{sku['title']}\n"
-            f"提货链接：{url}\n"
+            f"{link_label}{url}\n"
             f"兑换码：{item['code']}"
         )
     has_slot = any(skus[item["sku_key"]]["product_type"] == "slot" for item in deliveries)
     has_account = any(skus[item["sku_key"]]["product_type"] != "slot" for item in deliveries)
-    hints: list[str] = []
-    if has_slot:
-        hints.append("共享车位提交 Gmail 后一般 1~6 小时内发家庭组邀请（最晚 24 小时），随时能在链接里看进度。")
-    if has_account:
-        hints.append("独享账号领完建好家庭组并邀请商店邮箱后，记得在同一页传截图登记保修。")
+    guides: list[str] = []
+    if has_slot and has_account:
+        guides.append(f"【共享车位·提货与使用须知】\n{SLOT_DELIVERY_GUIDE}")
+        guides.append(f"【独享整组·开通与质保须知】\n{EXCLUSIVE_DELIVERY_GUIDE}")
+    elif has_slot:
+        guides.append(SLOT_DELIVERY_GUIDE)
+    elif has_account:
+        guides.append(EXCLUSIVE_DELIVERY_GUIDE)
     header = f"感谢下单！本次共为您发出 {len(deliveries)} 份提货码："
-    text = "\n\n".join([header, *blocks, *hints])
+    text = "\n\n".join([header, *blocks, *guides])
     return text[:4950]
 
 
