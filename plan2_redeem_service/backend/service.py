@@ -219,7 +219,6 @@ class Service:
             delivery = self._safe_delivery(result.get("delivery") or {})
             updates.update({"status": "delivered_pending_warranty", "delivery_json": json.dumps(delivery, ensure_ascii=False), "completed_at": None})
             self.ledger.transition(code, "delivered_pending_warranty", "exclusive_delivered", updates, ("purchasing",))
-            self._safe_send("独享整组出货成功", f"兑换码 {code} 已出货，订单号 {order.get('orderCode') or 'unknown'}。")
         else:
             self.ledger.transition(code, "waiting_fulfillment", "shared_order_accepted", updates, ("purchasing",))
         return self.public_row(self.ledger.get_code(code))
@@ -265,7 +264,6 @@ class Service:
         if status in {"completed", "delivered"} or item.get("deliveredAt"):
             updates.update({"completed_at": now_iso(), "delivery_json": None})
             self.ledger.transition(code, "completed", "shared_fulfillment_completed", updates, ("waiting_fulfillment",))
-            self._safe_send("共享车位拉人完成", f"兑换码 {code} 已完成，订单号 {row.get('upstream_order_code') or 'unknown'}。")
         else:
             self.ledger.transition(code, "waiting_fulfillment", "shared_poll", updates, ("waiting_fulfillment",))
         return self.public_row(self.ledger.get_code(code))

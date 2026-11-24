@@ -67,7 +67,7 @@ def test_shared_redeem_and_poll_completion(components):
         done = c.post(f"/api/v1/admin/codes/{code}/poll", headers=ADMIN)
         assert done.json()["status"] == "completed"
         assert done.json()["delivery"] is None
-        assert any("共享车位" in mail["subject"] for mail in mailer.sent)
+        assert mailer.sent == []
 
 
 def test_gmail_domain_is_required(components):
@@ -215,6 +215,7 @@ def test_exclusive_delivery_warranty_and_screenshot_auth(components):
     code = issue(c, sku="ultra_exclusive_admin")
     delivered = c.post(f"/api/v1/public/codes/{code}/redeem", json={"preflight_confirmed": True})
     assert delivered.json()["status"] == "delivered_pending_warranty"
+    assert mailer.sent == []
     warranty = c.post(f"/api/v1/public/codes/{code}/warranty", data={"admin_email": "owner@gmail.com", "admin_email_confirm": "owner@gmail.com", "note": "已建组"}, files={"screenshot": ("invite.png", b"png-bytes", "image/png")})
     assert warranty.status_code == 200 and warranty.json()["status"] == "completed"
     assert set(warranty.json()["warranty"]) == {"status", "admin_email_masked", "submitted_at", "has_screenshot", "note"}

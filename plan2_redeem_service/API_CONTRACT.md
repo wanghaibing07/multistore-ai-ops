@@ -41,12 +41,10 @@
 - `registered_upstream`：商家已在后台标记“已向 Canboso 管理员报备”
 
 ### 2.5 通知策略（硬性要求）
-- 邮件通知仅在以下事件发送给商家：
-  1. 共享车位拉人完成 (`waiting_fulfillment -> completed`)
-  2. 共享车位**超过 24 小时**仍未完成（**严禁在 6 小时发送提醒邮件**）
-  3. 独享整组出货成功 (`delivered_pending_warranty`)
-  4. 独享整组买家提交保修信息 (`warranty.status -> submitted`)
-  5. 异常报警：单笔价格超熔断上限、Canboso 余额低于阈值、上游断货/报错、订单进入 `needs_manual_review`
+- 仅在需要商家人工介入时发送邮件通知（正常拉人完成、独享自动出货成功不发邮件打扰）：
+  1. 共享车位**超过 24 小时**仍未完成（**严禁在 6 小时发送提醒邮件**）
+  2. 独享整组买家提交保修信息（需人工转发上游报备，`warranty.status -> submitted`）
+  3. 异常报警：单笔价格超熔断上限、Canboso 余额低于阈值、上游断货/报错、订单进入 `needs_manual_review`
 
 ## 3. 通用约定
 
