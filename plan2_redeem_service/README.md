@@ -20,6 +20,16 @@ uvicorn backend.main:app --host 127.0.0.1 --port 8000 --reload
 
 ## 单台云服务器启动
 
+当前生产服务默认固定运行在云端主机（SSH 别名 `plan2-prod`，应用目录 `/opt/plan2_redeem_service`，服务单元 `plan2-redeem.service` + `caddy.service`）。日常排障、看日志、查线上状态与发布同步统一优先使用仓库根目录脚本：
+
+```powershell
+pwsh -File .\scripts\plan2-cloud.ps1 -Action status
+pwsh -File .\scripts\plan2-cloud.ps1 -Action logs -Lines 80
+pwsh -File .\scripts\plan2-cloud.ps1 -Action deploy
+```
+
+首次初始化云端主机时的手工启动步骤如下：
+
 ```bash
 cd /opt/plan2_redeem_service
 python3.12 -m venv .venv

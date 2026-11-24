@@ -8,6 +8,20 @@
 - `plan1_auto_restock/`：16688 自营卡密秒发 + Canboso 低水位自动补库守护进程（`pyproject.toml`、`plan1_auto_restock/`、`tests/`）。
 - `plan2_redeem_service/`：自助提货/兑换码与售后履约服务（后端 `backend/` + `tests/` + `pyproject.toml`；前端 `frontend/` 为 React + Vite，构建产物 `frontend/dist/` 由后端同源托管并随源码同步版本化）。
 
+## 云端生产环境与默认运维入口（强制默认）
+
+- `plan2_redeem_service` 的固定生产服务运行在云端主机（SSH 别名 `plan2-prod`，由本机 `~/.ssh/config` 解析；严禁将真实 IP、私钥、`.env` 或管理员 Token 写入任何版本化文件）。
+- 云端生产拓扑：
+  - 应用目录：`/opt/plan2_redeem_service`（非 Git 仓库，属主 `plan2:plan2`）
+  - 虚拟环境：`/opt/plan2_redeem_service/.venv/bin/python`
+  - 生产数据库与私有目录：`/opt/plan2_redeem_service/data/redeem.sqlite3`、`/opt/plan2_redeem_service/data/private`
+  - 环境文件：`/opt/plan2_redeem_service/.env`（排查时不得打印或导出密钥明文）
+  - Systemd 服务：`plan2-redeem.service`（监听 `127.0.0.1:8000`，由 `caddy.service` 反向代理对外提供 HTTPS）
+- **默认操作路由**：
+  - 凡涉及 `plan2_redeem_service` 的线上报错（如 HTTP 500、批量制码、提货、16688、阿奇索 webhook/履约异常）、服务状态、日志、真实订单/兑换码数据库排查、重启或发布验证，**默认直接通过 `plan2-prod` 在云端排查和操作**，不要误查本地 `127.0.0.1` 或本地 `data/redeem.sqlite3`（仅在用户明确要求本地 `dry_run` 调试时使用本地实例）。
+  - **本地与云端职责分工**：本地工作区负责改代码、跑 `pytest` / 前端 `typecheck` & `build`、Git 提交与推送；改动验证通过后，统一使用 `.\scripts\plan2-cloud.ps1` 在云端检查状态、查看日志或部署重启（`-Action status | health | logs | deploy`）。
+  - 严禁在本地另起连接真实上游的 `live` 实例，避免与云端后台轮询和 webhook 冲突。
+
 ## 严格 Git 工程流（强制执行）
 
 1. **先启用仓库内建钩子**：在新环境或重新克隆后立即执行：
