@@ -10,6 +10,21 @@ from email.message import EmailMessage
 from pathlib import Path
 from typing import Any, Callable, Optional
 
+from .agiso import (
+    AOPIC_AUTO_SEND_SUCCESS,
+    AOPIC_BUYER_PAY,
+    AOPIC_BUYER_PAY_SIMPLE,
+    AOPIC_REFUND_CREATED,
+    AOPIC_REFUND_SUCCESS,
+    AgisoError,
+    build_create_order_result_content,
+    build_redeem_url,
+    extract_plan2_codes_from_sent_cards,
+    format_trade_delivery_message,
+    match_agiso_sku,
+    parse_env_sku_rules,
+    rule_has_matcher,
+)
 from .config import Settings
 from .db import Ledger, now_iso
 from .gateways import UpstreamError, UpstreamTimeout
@@ -84,8 +99,8 @@ class Mailer:
 class Service:
     POLL_FAILURE_THRESHOLD = 3
 
-    def __init__(self, ledger: Ledger, settings: Settings, canboso: Any, channel: Any, mailer: Mailer):
-        self.ledger, self.settings, self.canboso, self.channel, self.mailer = ledger, settings, canboso, channel, mailer
+    def __init__(self, ledger: Ledger, settings: Settings, canboso: Any, channel: Any, mailer: Mailer, agiso: Any = None):
+        self.ledger, self.settings, self.canboso, self.channel, self.mailer, self.agiso = ledger, settings, canboso, channel, mailer, agiso
         ledger.seed_skus(SKUS)
 
     def issue(self, sku_key: str, channel: str, external_order_id: str = "", remark: str = "", batch_id: Optional[str] = None, goods_no: Optional[str] = None) -> dict[str, Any]:
@@ -545,4 +560,828 @@ class Service:
     def _count(self, where: str = "", params: tuple[Any, ...] = ()) -> int:
         with self.ledger.connect() as c:
             return c.execute("SELECT COUNT(*) FROM codes" + (" WHERE " + where if where else ""), params).fetchone()[0]
+
+    def agiso_sku_rules(self, enabled_only: bool = False) -> list[dict[str, Any]]:
+        db_rules = [
+            {
+                **row,
+                "enabled": bool(row["enabled"]),
+                "source": "db",
+            }
+            for row in self.ledger.list_agiso_sku_mappings(enabled_only=enabled_only)
+        ]
+        env_rules: list[dict[str, Any]] = []
+        try:
+            env_rules = parse_env_sku_rules(self.settings.agiso_sku_rules_json)
+        except ValueError as exc:
+            logger.warning("invalid PLAN2_AGISO_SKU_RULES_JSON: %s", exc)
+        if enabled_only:
+            env_rules = [rule for rule in env_rules if rule.get("enabled")]
+        return db_rules + env_rules
+
+    def agiso_status(self) -> dict[str, Any]:
+        enabled_rules = self.agiso_sku_rules(enabled_only=True)
+        return {
+            "configured": bool(self.settings.agiso_app_secret.strip()),
+            "webhook_ready": bool(self.settings.agiso_app_secret.strip()),
+            "api_ready": bool(self.agiso and getattr(self.agiso, "is_ready", False)),
+            "app_id": self.settings.agiso_app_id,
+            "has_app_secret": bool(self.settings.agiso_app_secret.strip()),
+            "has_access_token": bool(self.settings.agiso_access_token.strip()),
+            "webhook_url": f"{self.settings.public_base_url.rstrip('/')}/api/v1/webhooks/agiso",
+            "api_base_url": self.settings.agiso_api_base_url,
+            "execution_mode": self.settings.execution_mode,
+            "auto_create_result": self.settings.agiso_auto_create_result,
+            "auto_dummy_send": self.settings.agiso_auto_dummy_send,
+            "auto_send_tb_card": self.settings.agiso_auto_send_tb_card,
+            "auto_send_ww_msg": self.settings.agiso_auto_send_ww_msg,
+            "auto_revoke_on_refund": self.settings.agiso_auto_revoke_on_refund,
+            "poll_enabled": self.settings.agiso_poll_enabled,
+            "poll_interval_seconds": self.settings.agiso_poll_interval_seconds,
+            "sku_mappings_count": len(enabled_rules),
+            "deliveries_summary": self.ledger.agiso_delivery_counts(),
+            "events_total": self.ledger.agiso_event_count(),
+        }
+
+    def create_agiso_sku_mapping(self, data: dict[str, Any]) -> dict[str, Any]:
+        sku_key = str(data.get("sku_key") or "").strip()
+        if sku_key not in SKUS:
+            raise ValueError("UNKNOWN_SKU")
+        normalized = {
+            "sku_key": sku_key,
+            "num_iid": str(data.get("num_iid") or "").strip(),
+            "sku_id": str(data.get("sku_id") or "").strip(),
+            "outer_iid": str(data.get("outer_iid") or "").strip(),
+            "outer_sku_id": str(data.get("outer_sku_id") or "").strip(),
+            "sku_props_contains": str(data.get("sku_props_contains") or "").strip(),
+            "enabled": bool(data.get("enabled", True)),
+            "note": str(data.get("note") or "").strip()[:200],
+        }
+        if not rule_has_matcher(normalized):
+            raise ValueError("MATCHER_REQUIRED")
+        created = self.ledger.create_agiso_sku_mapping(normalized)
+        created["enabled"] = bool(created["enabled"])
+        created["source"] = "db"
+        return created
+
+    def _agiso_alert(self, dedupe_key: str, subject: str, body: str) -> None:
+        if self.ledger.claim_notification(f"agiso:{dedupe_key}"):
+            self._safe_send(subject, body)
+
+    @staticmethod
+    def _summarize_agiso_payload(payload: dict[str, Any]) -> str:
+        orders = payload.get("Orders") if isinstance(payload.get("Orders"), list) else []
+        num_iids = sorted({str(item.get("NumIid")) for item in orders if isinstance(item, dict) and item.get("NumIid") is not None})
+        summary = {
+            "Tid": str(payload.get("Tid") or ""),
+            "Oid": str(payload.get("Oid") or ""),
+            "Status": str(payload.get("Status") or ""),
+            "RefundId": str(payload.get("RefundId") or ""),
+            "OrdersCount": len(orders),
+            "NumIids": num_iids[:10],
+        }
+        return json.dumps({k: v for k, v in summary.items() if v not in ("", [], 0)}, ensure_ascii=False)
+
+    def handle_agiso_webhook(
+        self,
+        *,
+        from_platform: str,
+        aopic: int,
+        payload: dict[str, Any],
+        timestamp: str,
+        sign: str,
+    ) -> tuple[int, str, dict[str, Any]]:
+        tid = str(payload.get("Tid") or "").strip()
+        oid = str(payload.get("Oid") or "").strip()
+        summary = self._summarize_agiso_payload(payload)
+
+        if from_platform.lower() == "open":
+            self.ledger.record_agiso_event(
+                source="webhook",
+                from_platform=from_platform,
+                aopic=aopic,
+                tid=tid,
+                oid=oid,
+                status="simulated_verified",
+                detail="开放平台模拟推送验签通过",
+                payload_summary=summary,
+            )
+            return 200, "", {"status": "simulated_verified", "tid": tid}
+
+        if aopic in (AOPIC_BUYER_PAY, AOPIC_BUYER_PAY_SIMPLE):
+            trade_status = str(payload.get("Status") or "").strip()
+            if trade_status and trade_status != "WAIT_SELLER_SEND_GOODS":
+                self.ledger.record_agiso_event(
+                    source="webhook",
+                    from_platform=from_platform,
+                    aopic=aopic,
+                    tid=tid,
+                    oid=oid,
+                    status="ignored_status",
+                    detail=f"订单状态为 {trade_status}，仅处理 WAIT_SELLER_SEND_GOODS",
+                    payload_summary=summary,
+                )
+                return 200, "", {"status": "ignored_status", "tid": tid, "trade_status": trade_status}
+
+            trade = payload
+            orders = payload.get("Orders")
+            if aopic == AOPIC_BUYER_PAY_SIMPLE or not isinstance(orders, list) or not orders:
+                if not tid:
+                    self.ledger.record_agiso_event(
+                        source="webhook",
+                        from_platform=from_platform,
+                        aopic=aopic,
+                        tid="",
+                        oid=oid,
+                        status="invalid_payload",
+                        detail="推送缺少 Tid",
+                        payload_summary=summary,
+                    )
+                    return 400, "缺少订单号", {"status": "invalid_payload"}
+                if not self.agiso or not getattr(self.agiso, "is_ready", False):
+                    self.ledger.record_agiso_event(
+                        source="webhook",
+                        from_platform=from_platform,
+                        aopic=aopic,
+                        tid=tid,
+                        oid=oid,
+                        status="missing_access_token",
+                        detail="收到简化付款推送，但尚未配置 AccessToken 无法反查订单详情",
+                        payload_summary=summary,
+                    )
+                    self._agiso_alert(
+                        f"missing-token:{tid}",
+                        "阿奇索自动发货需人工处理（未配置 AccessToken）",
+                        f"淘宝订单 {tid} 收到付款推送（aopic={aopic}），但服务尚未配置 AccessToken，无法反查订单明细并自动发码。",
+                    )
+                    return 503, "未配置AccessToken", {"status": "missing_access_token", "tid": tid}
+                try:
+                    trade = self.agiso.trade_info(tid)
+                except AgisoError as exc:
+                    self.ledger.record_agiso_event(
+                        source="webhook",
+                        from_platform=from_platform,
+                        aopic=aopic,
+                        tid=tid,
+                        oid=oid,
+                        status="trade_info_error",
+                        detail=exc.message,
+                        payload_summary=summary,
+                    )
+                    should_retry = exc.transient or exc.error_code in {1, 2, 8, 10, 13, 16, 28}
+                    if should_retry:
+                        self._agiso_alert(
+                            f"tradeinfo:{tid}",
+                            "阿奇索订单查询失败（需人工核对）",
+                            f"淘宝订单 {tid} 反查 TradeInfo 失败：{exc.message}",
+                        )
+                        return 503, "订单查询失败", {"status": "trade_info_error", "tid": tid}
+                    return 200, "", {"status": "trade_info_error", "tid": tid}
+                fetched_status = str(trade.get("Status") or "").strip()
+                if fetched_status and fetched_status != "WAIT_SELLER_SEND_GOODS":
+                    self.ledger.record_agiso_event(
+                        source="webhook",
+                        from_platform=from_platform,
+                        aopic=aopic,
+                        tid=tid,
+                        oid=oid,
+                        status="ignored_status",
+                        detail=f"反查订单状态为 {fetched_status}，跳过自动发码",
+                        payload_summary=self._summarize_agiso_payload(trade),
+                    )
+                    return 200, "", {"status": "ignored_status", "tid": tid, "trade_status": fetched_status}
+
+            outcome = self.fulfill_agiso_trade(
+                trade,
+                source="webhook",
+                from_platform=from_platform,
+                aopic=aopic,
+            )
+            if outcome.get("retry_webhook"):
+                return 503, outcome.get("detail", "发货暂不可用"), outcome
+            return 200, "", outcome
+
+        if aopic in (AOPIC_REFUND_CREATED, AOPIC_REFUND_SUCCESS):
+            outcome = self.handle_agiso_refund(payload, aopic=aopic, from_platform=from_platform)
+            return 200, "", outcome
+
+        if aopic == AOPIC_AUTO_SEND_SUCCESS:
+            outcome = self.handle_agiso_sent_cards(payload, from_platform=from_platform)
+            return 200, "", outcome
+
+        self.ledger.record_agiso_event(
+            source="webhook",
+            from_platform=from_platform,
+            aopic=aopic,
+            tid=tid,
+            oid=oid,
+            status="ignored_aopic",
+            detail=f"暂不处理的推送类型 aopic={aopic}",
+            payload_summary=summary,
+        )
+        return 200, "", {"status": "ignored_aopic", "aopic": aopic, "tid": tid}
+
+    def fulfill_agiso_trade(
+        self,
+        trade: dict[str, Any],
+        *,
+        source: str,
+        from_platform: str = "TbAlds",
+        aopic: Optional[int] = None,
+    ) -> dict[str, Any]:
+        tid = str(trade.get("Tid") or "").strip()
+        buyer_nick = str(trade.get("BuyerNick") or "").strip()
+        orders = trade.get("Orders") if isinstance(trade.get("Orders"), list) else []
+        summary = self._summarize_agiso_payload(trade)
+        if not tid:
+            self.ledger.record_agiso_event(
+                source=source,
+                from_platform=from_platform,
+                aopic=aopic,
+                tid="",
+                oid="",
+                status="invalid_payload",
+                detail="订单缺少 Tid",
+                payload_summary=summary,
+            )
+            return {"status": "invalid_payload", "tid": "", "codes": []}
+
+        rules = self.agiso_sku_rules(enabled_only=True)
+        valid_skus = set(SKUS.keys())
+        matched_deliveries: list[dict[str, Any]] = []
+        unmapped_num_iids: list[str] = []
+        oversized_oids: list[str] = []
+
+        for order in orders:
+            if not isinstance(order, dict):
+                continue
+            oid = str(order.get("Oid") or tid).strip()
+            num_iid = str(order.get("NumIid") or "").strip()
+            sku_id = str(order.get("SkuId") or "").strip()
+            matched_rule = match_agiso_sku(order, rules, valid_sku_keys=valid_skus)
+            if not matched_rule:
+                unmapped_num_iids.append(num_iid or oid)
+                continue
+            try:
+                qty = int(order.get("Num") or 1)
+            except (TypeError, ValueError):
+                qty = 1
+            if qty < 1:
+                qty = 1
+            if qty > 50:
+                oversized_oids.append(f"{oid}(qty={qty})")
+                continue
+            sku_key = matched_rule["sku_key"]
+            sku = self.ledger.get_sku(sku_key)
+            goods_no = sku.get("goods_no") if sku else None
+            for seq in range(1, qty + 1):
+                delivery_key = f"{tid}:{oid}:{seq}"
+                remark = f"阿奇索自动发码(Oid={oid}, 序号={seq}/{qty})" if qty > 1 else f"阿奇索自动发码(Oid={oid})"
+                _, delivery = self.ledger.ensure_agiso_delivery(
+                    delivery_key=delivery_key,
+                    tid=tid,
+                    oid=oid,
+                    seq=seq,
+                    num_iid=num_iid,
+                    sku_id=sku_id,
+                    sku_key=sku_key,
+                    buyer_nick=buyer_nick,
+                    remark=remark,
+                    goods_no=goods_no,
+                    code_factory=lambda key=sku_key: self._new_code(key),
+                )
+                matched_deliveries.append(delivery)
+
+        if oversized_oids:
+            detail = f"子订单购买数量超安全阈值(>50)，已暂停自动发码：{', '.join(oversized_oids)}"
+            self.ledger.record_agiso_event(
+                source=source,
+                from_platform=from_platform,
+                aopic=aopic,
+                tid=tid,
+                oid="",
+                status="quantity_limit_exceeded",
+                detail=detail,
+                payload_summary=summary,
+            )
+            self._agiso_alert(f"qty-limit:{tid}", "阿奇索大额数量订单需人工审核", f"淘宝订单 {tid}：{detail}")
+
+        if not matched_deliveries:
+            detail = f"未命中任何 SKU 映射规则，已安全忽略（num_iids={','.join(sorted(set(unmapped_num_iids))) or '-'}）"
+            self.ledger.record_agiso_event(
+                source=source,
+                from_platform=from_platform,
+                aopic=aopic,
+                tid=tid,
+                oid="",
+                status="ignored_unmapped",
+                detail=detail,
+                payload_summary=summary,
+            )
+            return {
+                "status": "ignored_unmapped",
+                "tid": tid,
+                "codes": [],
+                "unmapped_count": len(unmapped_num_iids),
+                "retry_webhook": False,
+            }
+
+        return self._dispatch_agiso_trade_delivery(
+            tid,
+            source=source,
+            from_platform=from_platform,
+            aopic=aopic,
+            payload_summary=summary,
+            force_retry=False,
+        )
+
+    def _dispatch_agiso_trade_delivery(
+        self,
+        tid: str,
+        *,
+        source: str,
+        from_platform: str,
+        aopic: Optional[int],
+        payload_summary: str = "",
+        force_retry: bool = False,
+    ) -> dict[str, Any]:
+        claimed = self.ledger.claim_agiso_trade_delivery(tid, force_retry=force_retry)
+        if not claimed:
+            existing = self.ledger.list_agiso_deliveries_by_tid(tid)
+            codes = [item["code"] for item in existing]
+            active = [item for item in existing if item["delivery_status"] != "revoked"]
+            if existing and not active:
+                self.ledger.record_agiso_event(
+                    source=source,
+                    from_platform=from_platform,
+                    aopic=aopic,
+                    tid=tid,
+                    oid="",
+                    status="already_revoked",
+                    detail=f"订单关联兑换码已作废，跳过重复发货（{len(codes)} 份）",
+                    payload_summary=payload_summary,
+                )
+                return {"status": "already_revoked", "tid": tid, "codes": codes, "deliveries": existing, "retry_webhook": False}
+            if active and all(item["delivery_status"] == "delivered" for item in active):
+                self.ledger.record_agiso_event(
+                    source=source,
+                    from_platform=from_platform,
+                    aopic=aopic,
+                    tid=tid,
+                    oid="",
+                    status="already_delivered",
+                    detail=f"订单已发货，幂等跳过（{len(codes)} 份）",
+                    payload_summary=payload_summary,
+                )
+                return {"status": "already_delivered", "tid": tid, "codes": codes, "deliveries": existing, "retry_webhook": False}
+            self.ledger.record_agiso_event(
+                source=source,
+                from_platform=from_platform,
+                aopic=aopic,
+                tid=tid,
+                oid="",
+                status="in_flight",
+                detail="订单正在发货处理中，并发重复请求已跳过",
+                payload_summary=payload_summary,
+            )
+            return {"status": "in_flight", "tid": tid, "codes": codes, "deliveries": existing, "retry_webhook": False}
+
+        codes = [item["code"] for item in claimed]
+        if not self.agiso or not getattr(self.agiso, "is_ready", False):
+            error_text = "AGISO_ACCESS_TOKEN_MISSING"
+            updated = self.ledger.update_agiso_trade_deliveries(
+                tid,
+                {"delivery_status": "failed", "last_error": error_text},
+            )
+            self.ledger.record_agiso_event(
+                source=source,
+                from_platform=from_platform,
+                aopic=aopic,
+                tid=tid,
+                oid="",
+                status="delivery_failed",
+                detail="已生成兑换码但未配置 AccessToken，无法调用阿奇索发货接口",
+                payload_summary=payload_summary,
+            )
+            self._agiso_alert(
+                f"delivery-token:{tid}",
+                "阿奇索自动发货失败（需人工处理）",
+                f"淘宝订单 {tid} 已生成兑换码 {', '.join(codes)}，但未配置 AccessToken，无法自动写入发货结果和标记发货。",
+            )
+            return {
+                "status": "failed",
+                "tid": tid,
+                "codes": codes,
+                "deliveries": updated,
+                "errors": [error_text],
+                "detail": error_text,
+                "retry_webhook": False,
+            }
+
+        result_created = all(bool(row["result_created"]) for row in claimed)
+        dummy_sent = all(bool(row["dummy_sent"]) for row in claimed)
+        card_sent = all(bool(row["card_sent"]) for row in claimed)
+        ww_sent = all(bool(row["ww_sent"]) for row in claimed)
+        errors: list[str] = []
+        transient_core_failure = False
+
+        if self.settings.agiso_auto_create_result and not result_created:
+            content = build_create_order_result_content(claimed, SKUS, self.settings.public_base_url)
+            try:
+                self.agiso.create_order_result(tid, content, alds_type=1)
+                result_created = True
+                self.ledger.update_agiso_trade_deliveries(tid, {"result_created": 1})
+            except AgisoError as exc:
+                errors.append(f"CreateOrderResult: {exc.message}")
+                transient_core_failure = transient_core_failure or exc.transient
+
+        if self.settings.agiso_auto_dummy_send and not dummy_sent and (result_created or not self.settings.agiso_auto_create_result):
+            try:
+                self.agiso.logistics_dummy_send([tid])
+                dummy_sent = True
+                self.ledger.update_agiso_trade_deliveries(tid, {"dummy_sent": 1})
+            except AgisoError as exc:
+                errors.append(f"LogisticsDummySend: {exc.message}")
+                transient_core_failure = transient_core_failure or exc.transient
+
+        if self.settings.agiso_auto_send_tb_card and not card_sent and result_created:
+            try:
+                self.agiso.send_tb_app_card(tid)
+                card_sent = True
+                self.ledger.update_agiso_trade_deliveries(tid, {"card_sent": 1})
+            except AgisoError as exc:
+                errors.append(f"SendTbAppCard: {exc.message}")
+
+        if self.settings.agiso_auto_send_ww_msg and not ww_sent:
+            msg = format_trade_delivery_message(claimed, SKUS, self.settings.public_base_url)
+            try:
+                self.agiso.send_ww_msg(tid, msg)
+                ww_sent = True
+                self.ledger.update_agiso_trade_deliveries(tid, {"ww_sent": 1})
+            except AgisoError as exc:
+                errors.append(f"WwMsg/Send: {exc.message}")
+
+        need_result = self.settings.agiso_auto_create_result
+        need_dummy = self.settings.agiso_auto_dummy_send
+        need_card = self.settings.agiso_auto_send_tb_card and need_result
+        need_ww = self.settings.agiso_auto_send_ww_msg
+
+        all_done = (
+            (not need_result or result_created)
+            and (not need_dummy or dummy_sent)
+            and (not need_card or card_sent)
+            and (not need_ww or ww_sent)
+        )
+        any_done = result_created or dummy_sent or card_sent or ww_sent
+        if all_done:
+            final_status = "delivered"
+            last_error = None
+        elif any_done:
+            final_status = "partial"
+            last_error = "; ".join(errors)[:450] or "部分发货步骤未完成"
+        else:
+            final_status = "failed"
+            last_error = "; ".join(errors)[:450] or "发货失败"
+
+        updated = self.ledger.update_agiso_trade_deliveries(
+            tid,
+            {
+                "delivery_status": final_status,
+                "result_created": int(result_created),
+                "dummy_sent": int(dummy_sent),
+                "card_sent": int(card_sent),
+                "ww_sent": int(ww_sent),
+                "last_error": last_error,
+            },
+        )
+        self.ledger.record_agiso_event(
+            source=source,
+            from_platform=from_platform,
+            aopic=aopic,
+            tid=tid,
+            oid="",
+            status=final_status,
+            detail=last_error or f"自动发货完成（{len(codes)} 份）",
+            payload_summary=payload_summary,
+        )
+        if final_status != "delivered":
+            self._agiso_alert(
+                f"delivery:{tid}:{final_status}",
+                "阿奇索自动发货异常（需人工处理）",
+                (
+                    f"淘宝订单 {tid} 自动发货状态：{final_status}\n"
+                    f"已生成兑换码：{', '.join(codes)}\n"
+                    f"步骤状态：结果={result_created}, 虚拟发货={dummy_sent}, 手淘卡片={card_sent}, 旺旺消息={ww_sent}\n"
+                    f"错误详情：{last_error}"
+                ),
+            )
+        return {
+            "status": final_status,
+            "tid": tid,
+            "codes": codes,
+            "deliveries": updated,
+            "errors": errors,
+            "detail": last_error or "",
+            "retry_webhook": final_status == "failed" and transient_core_failure,
+        }
+
+    def handle_agiso_refund(
+        self,
+        payload: dict[str, Any],
+        *,
+        aopic: int,
+        from_platform: str = "TbAlds",
+    ) -> dict[str, Any]:
+        tid = str(payload.get("Tid") or "").strip()
+        oid = str(payload.get("Oid") or "").strip()
+        refund_id = str(payload.get("RefundId") or "").strip()
+        refund_fee = str(payload.get("RefundFee") or "").strip()
+        summary = self._summarize_agiso_payload(payload)
+
+        candidate_codes: list[str] = []
+        seen: set[str] = set()
+        for row in self.ledger.list_agiso_deliveries_for_refund(tid, oid):
+            if row["code"] not in seen:
+                seen.add(row["code"])
+                candidate_codes.append(row["code"])
+        if not candidate_codes and tid:
+            has_other_suborder_deliveries = bool(oid and oid != tid and self.ledger.list_agiso_deliveries_by_tid(tid))
+            if not has_other_suborder_deliveries:
+                for row in self.ledger.find_codes_by_external_order(tid):
+                    if row["code"] not in seen:
+                        seen.add(row["code"])
+                        candidate_codes.append(row["code"])
+
+        if not candidate_codes:
+            self.ledger.record_agiso_event(
+                source="webhook",
+                from_platform=from_platform,
+                aopic=aopic,
+                tid=tid,
+                oid=oid,
+                status="refund_no_code",
+                detail=f"未找到订单 {tid} 关联的兑换码（RefundId={refund_id or '-'}）",
+                payload_summary=summary,
+            )
+            return {"status": "refund_no_code", "tid": tid, "oid": oid, "refund_id": refund_id}
+
+        revoked_codes: list[str] = []
+        already_revoked: list[str] = []
+        alerted_codes: list[str] = []
+
+        for code in candidate_codes:
+            row = self.ledger.get_code(code)
+            if not row:
+                continue
+            if self.settings.agiso_auto_revoke_on_refund and row["status"] == "unused":
+                changed = self.ledger.transition(
+                    code,
+                    "revoked",
+                    f"agiso_refund:{aopic}:{refund_id or tid}",
+                    {
+                        "last_error_code": "REFUNDED",
+                        "last_error_message": f"淘宝退款自动作废（RefundId={refund_id or tid}）",
+                    },
+                    ("unused",),
+                )
+                if changed:
+                    self.ledger.mark_agiso_delivery_revoked(code)
+                    revoked_codes.append(code)
+                    continue
+                row = self.ledger.get_code(code)
+            if row["status"] == "revoked":
+                self.ledger.mark_agiso_delivery_revoked(code)
+                already_revoked.append(code)
+                continue
+            alerted_codes.append(code)
+            self._agiso_alert(
+                f"refund-used:{code}:{refund_id or aopic}",
+                "淘宝退款需人工处理（兑换码已使用）",
+                (
+                    f"淘宝订单 {tid}（子订单 {oid or '-'}，退款单 {refund_id or '-'}，退款金额 {refund_fee or '-'}）收到退款通知（aopic={aopic}），\n"
+                    f"但对应兑换码 {code} 当前状态为 {row['status']}（买家邮箱：{row.get('buyer_email_masked') or '-'}，"
+                    f"上游单号：{row.get('upstream_order_code') or '-'}），系统未自动作废，请立即人工核对。"
+                ),
+            )
+
+        if alerted_codes:
+            event_status = "refund_alert_sent"
+            detail = f"已核对退款：自动作废 {len(revoked_codes)} 个，已使用需人工处理 {len(alerted_codes)} 个（{','.join(alerted_codes)}）"
+        elif revoked_codes:
+            event_status = "refund_revoked"
+            detail = f"买家未提货，已自动作废兑换码：{','.join(revoked_codes)}"
+        else:
+            event_status = "refund_already_revoked"
+            detail = f"相关兑换码此前已作废：{','.join(already_revoked)}"
+
+        self.ledger.record_agiso_event(
+            source="webhook",
+            from_platform=from_platform,
+            aopic=aopic,
+            tid=tid,
+            oid=oid,
+            status=event_status,
+            detail=detail,
+            payload_summary=summary,
+        )
+        return {
+            "status": event_status,
+            "tid": tid,
+            "oid": oid,
+            "refund_id": refund_id,
+            "revoked_codes": revoked_codes,
+            "already_revoked": already_revoked,
+            "alerted_codes": alerted_codes,
+        }
+
+    def handle_agiso_sent_cards(self, payload: dict[str, Any], *, from_platform: str = "TbAlds") -> dict[str, Any]:
+        tid = str(payload.get("Tid") or "").strip()
+        summary = self._summarize_agiso_payload(payload)
+        extracted = extract_plan2_codes_from_sent_cards(payload)
+        bound: list[str] = []
+        already_bound: list[str] = []
+        unmatched: list[str] = []
+        conflicts: list[str] = []
+
+        for _, code in extracted:
+            if not tid:
+                unmatched.append(code)
+                continue
+            result = self.ledger.bind_code_external_order(code, tid, reason="agiso_card_bound")
+            if result == "bound":
+                bound.append(code)
+            elif result == "already_bound":
+                already_bound.append(code)
+            elif result == "conflict":
+                conflicts.append(code)
+            else:
+                unmatched.append(code)
+
+        status = "cards_bound" if bound else ("cards_conflict" if conflicts else "cards_noop")
+        detail = f"解析出 {len(extracted)} 个兑换码：新绑定 {len(bound)}，已绑定 {len(already_bound)}，冲突 {len(conflicts)}，未知 {len(unmatched)}"
+        self.ledger.record_agiso_event(
+            source="webhook",
+            from_platform=from_platform,
+            aopic=AOPIC_AUTO_SEND_SUCCESS,
+            tid=tid,
+            oid="",
+            status=status,
+            detail=detail,
+            payload_summary=summary,
+        )
+        return {
+            "status": status,
+            "tid": tid,
+            "bound_codes": bound,
+            "already_bound": already_bound,
+            "conflicts": conflicts,
+            "unmatched": unmatched,
+        }
+
+    def sync_agiso_orders(self, *, lookback_minutes: int = 60, page_size: int = 50, max_pages: int = 5) -> dict[str, Any]:
+        if not self.agiso or not getattr(self.agiso, "is_ready", False):
+            raise AgisoError("Agiso API credentials are not configured", status_code=503)
+        tz_cn = timezone(timedelta(hours=8))
+        start_str = (datetime.now(tz_cn) - timedelta(minutes=lookback_minutes)).strftime("%Y-%m-%d %H:%M:%S")
+        fetched = 0
+        fulfilled = 0
+        skipped = 0
+        failed = 0
+        items: list[dict[str, Any]] = []
+
+        for page_no in range(1, max_pages + 1):
+            trades = self.agiso.trades_buyer_pay(start_str, page_no=page_no, page_size=page_size)
+            fetched += len(trades)
+            for trade in trades:
+                status_str = str(trade.get("Status") or "").strip()
+                if status_str and status_str != "WAIT_SELLER_SEND_GOODS":
+                    skipped += 1
+                    continue
+                outcome = self.fulfill_agiso_trade(trade, source="poll", from_platform="TbAlds", aopic=None)
+                items.append({"tid": outcome.get("tid"), "status": outcome.get("status"), "codes": outcome.get("codes", [])})
+                if outcome.get("status") == "delivered":
+                    fulfilled += 1
+                elif outcome.get("status") in {"failed", "partial"}:
+                    failed += 1
+                else:
+                    skipped += 1
+            if len(trades) < page_size:
+                break
+        return {
+            "modify_time_start": start_str,
+            "fetched": fetched,
+            "fulfilled": fulfilled,
+            "skipped": skipped,
+            "failed": failed,
+            "items": items,
+        }
+
+    def retry_agiso_order(self, tid: str, *, fetch_from_agiso: bool = True) -> Optional[dict[str, Any]]:
+        clean_tid = tid.strip()
+        existing = self.ledger.list_agiso_deliveries_by_tid(clean_tid)
+        if not existing:
+            if not fetch_from_agiso:
+                return None
+            if not self.agiso or not getattr(self.agiso, "is_ready", False):
+                raise AgisoError("Agiso API credentials are not configured", status_code=503)
+            trade = self.agiso.trade_info(clean_tid)
+            return self.fulfill_agiso_trade(trade, source="admin_retry", from_platform="TbAlds", aopic=None)
+        return self._dispatch_agiso_trade_delivery(
+            clean_tid,
+            source="admin_retry",
+            from_platform="TbAlds",
+            aopic=None,
+            force_retry=True,
+        )
+
+    def get_agiso_remote_skus(self, num_iids: list[str]) -> list[dict[str, Any]]:
+        if not self.agiso or not getattr(self.agiso, "is_ready", False):
+            raise AgisoError("Agiso API credentials are not configured", status_code=503)
+        cleaned = [item.strip() for item in num_iids if item and item.strip()]
+        if not cleaned:
+            raise ValueError("NUM_IIDS_REQUIRED")
+        return self.agiso.item_skus_get(cleaned)
+
+    def push_agiso_cards(
+        self,
+        *,
+        sku_key: str,
+        cpc_id: int,
+        count: int,
+        batch_label: str = "",
+        is_use_first: bool = False,
+        allow_replace: bool = False,
+    ) -> dict[str, Any]:
+        if count < 1 or count > 500:
+            raise ValueError("COUNT_OUT_OF_RANGE")
+        if sku_key not in SKUS:
+            raise ValueError("UNKNOWN_SKU")
+        if not self.agiso or not getattr(self.agiso, "is_ready", False):
+            raise AgisoError("Agiso API credentials are not configured", status_code=503)
+
+        batch_id = "AG" + datetime.now().strftime("%Y%m%d%H%M%S") + secrets.token_hex(2).upper()
+        sku = self.ledger.get_sku(sku_key)
+        goods_no = sku.get("goods_no") if sku else None
+        codes = [
+            self.issue(
+                sku_key,
+                "taobao",
+                remark=f"阿奇索卡密库推送(cpcId={cpc_id}, batch={batch_id})",
+                batch_id=batch_id,
+                goods_no=goods_no,
+            )["code"]
+            for _ in range(count)
+        ]
+        with self.ledger.transaction(immediate=True) as c:
+            c.execute(
+                "INSERT INTO batches(batch_id,sku_key,channel,goods_no,batch_label,count,created_at) VALUES(?,?,?,?,?,?,?)",
+                (batch_id, sku_key, "taobao", goods_no, batch_label or f"agiso-cpc-{cpc_id}", count, now_iso()),
+            )
+        lines = [f"{build_redeem_url(self.settings.public_base_url, code)},{code}" for code in codes]
+        try:
+            agiso_result = self.agiso.card_pwd_add(
+                cpc_id,
+                lines,
+                is_use_first=is_use_first,
+                allow_replace=allow_replace,
+                summary=batch_label or batch_id,
+            )
+        except AgisoError as exc:
+            if not exc.transient and exc.status_code == 200:
+                for code in codes:
+                    self.ledger.transition(
+                        code,
+                        "revoked",
+                        "agiso_push_cards_failed",
+                        {"last_error_code": "AGISO_PUSH_FAILED", "last_error_message": exc.message},
+                        ("unused",),
+                    )
+            self.ledger.record_agiso_event(
+                source="admin_push_cards",
+                from_platform="TbAlds",
+                aopic=None,
+                tid="",
+                oid="",
+                status="push_cards_failed",
+                detail=f"batch={batch_id}, cpcId={cpc_id}: {exc.message}",
+            )
+            raise
+
+        self.ledger.record_agiso_event(
+            source="admin_push_cards",
+            from_platform="TbAlds",
+            aopic=None,
+            tid="",
+            oid="",
+            status="push_cards_ok",
+            detail=f"batch={batch_id}, cpcId={cpc_id}, count={count}",
+        )
+        return {
+            "batch_id": batch_id,
+            "sku_key": sku_key,
+            "cpc_id": cpc_id,
+            "count": count,
+            "codes": codes,
+            "agiso_result": agiso_result,
+        }
 

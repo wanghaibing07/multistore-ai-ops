@@ -6,7 +6,7 @@ import sqlite3
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator, Optional
+from typing import Any, Callable, Iterator, Optional
 
 
 STATUSES = {"unused", "validating", "purchasing", "waiting_fulfillment", "delivered_pending_warranty", "completed", "needs_manual_review", "revoked"}
@@ -74,12 +74,65 @@ class Ledger:
             CREATE TABLE IF NOT EXISTS notification_keys (
                 dedupe_key TEXT PRIMARY KEY, created_at TEXT NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS agiso_sku_mappings (
+                mapping_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                num_iid TEXT NOT NULL DEFAULT '',
+                sku_id TEXT NOT NULL DEFAULT '',
+                outer_iid TEXT NOT NULL DEFAULT '',
+                outer_sku_id TEXT NOT NULL DEFAULT '',
+                sku_props_contains TEXT NOT NULL DEFAULT '',
+                sku_key TEXT NOT NULL,
+                enabled INTEGER NOT NULL DEFAULT 1,
+                note TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS agiso_deliveries (
+                delivery_key TEXT PRIMARY KEY,
+                tid TEXT NOT NULL,
+                oid TEXT NOT NULL,
+                seq INTEGER NOT NULL,
+                num_iid TEXT NOT NULL DEFAULT '',
+                sku_id TEXT NOT NULL DEFAULT '',
+                sku_key TEXT NOT NULL,
+                code TEXT NOT NULL UNIQUE,
+                buyer_nick TEXT NOT NULL DEFAULT '',
+                delivery_status TEXT NOT NULL,
+                result_created INTEGER NOT NULL DEFAULT 0,
+                card_sent INTEGER NOT NULL DEFAULT 0,
+                ww_sent INTEGER NOT NULL DEFAULT 0,
+                dummy_sent INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS agiso_events (
+                event_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                event_key TEXT UNIQUE,
+                source TEXT NOT NULL,
+                from_platform TEXT NOT NULL DEFAULT '',
+                aopic INTEGER,
+                tid TEXT NOT NULL DEFAULT '',
+                oid TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL,
+                detail TEXT NOT NULL DEFAULT '',
+                payload_summary TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL
+            );
             CREATE INDEX IF NOT EXISTS idx_codes_status ON codes(status);
             CREATE INDEX IF NOT EXISTS idx_codes_filter ON codes(channel, sku_key, created_at);
+            CREATE INDEX IF NOT EXISTS idx_codes_external_order ON codes(external_order_id);
+            CREATE INDEX IF NOT EXISTS idx_agiso_deliveries_tid ON agiso_deliveries(tid);
+            CREATE INDEX IF NOT EXISTS idx_agiso_deliveries_oid ON agiso_deliveries(oid);
+            CREATE INDEX IF NOT EXISTS idx_agiso_events_created ON agiso_events(created_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_agiso_events_tid ON agiso_events(tid);
             """)
             columns = {r["name"] for r in c.execute("PRAGMA table_info(codes)")}
             if "goods_no" not in columns:
                 c.execute("ALTER TABLE codes ADD COLUMN goods_no TEXT")
+            delivery_columns = {r["name"] for r in c.execute("PRAGMA table_info(agiso_deliveries)")}
+            if "result_created" not in delivery_columns:
+                c.execute("ALTER TABLE agiso_deliveries ADD COLUMN result_created INTEGER NOT NULL DEFAULT 0")
         finally:
             conn.close()
 
@@ -155,4 +208,278 @@ class Ledger:
             total = c.execute("SELECT COUNT(*) FROM codes" + (" WHERE " + where if where else ""), params).fetchone()[0]
             rows = c.execute("SELECT * FROM codes" + (" WHERE " + where if where else "") + " ORDER BY created_at DESC LIMIT ? OFFSET ?", params + (limit, offset)).fetchall()
             return [dict(r) for r in rows], total
+
+    def list_agiso_sku_mappings(self, enabled_only: bool = False) -> list[dict[str, Any]]:
+        sql = "SELECT * FROM agiso_sku_mappings"
+        if enabled_only:
+            sql += " WHERE enabled=1"
+        sql += " ORDER BY mapping_id ASC"
+        with self.connect() as c:
+            return [dict(r) for r in c.execute(sql).fetchall()]
+
+    def create_agiso_sku_mapping(self, data: dict[str, Any]) -> dict[str, Any]:
+        t = now_iso()
+        with self.transaction(immediate=True) as c:
+            cursor = c.execute(
+                """INSERT INTO agiso_sku_mappings(
+                    num_iid, sku_id, outer_iid, outer_sku_id, sku_props_contains,
+                    sku_key, enabled, note, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    data.get("num_iid", ""),
+                    data.get("sku_id", ""),
+                    data.get("outer_iid", ""),
+                    data.get("outer_sku_id", ""),
+                    data.get("sku_props_contains", ""),
+                    data["sku_key"],
+                    1 if data.get("enabled", True) else 0,
+                    data.get("note", ""),
+                    t,
+                    t,
+                ),
+            )
+            row = c.execute("SELECT * FROM agiso_sku_mappings WHERE mapping_id=?", (cursor.lastrowid,)).fetchone()
+            return dict(row)
+
+    def delete_agiso_sku_mapping(self, mapping_id: int) -> bool:
+        with self.transaction(immediate=True) as c:
+            result = c.execute("DELETE FROM agiso_sku_mappings WHERE mapping_id=?", (mapping_id,))
+            return result.rowcount == 1
+
+    def ensure_agiso_delivery(
+        self,
+        *,
+        delivery_key: str,
+        tid: str,
+        oid: str,
+        seq: int,
+        num_iid: str,
+        sku_id: str,
+        sku_key: str,
+        buyer_nick: str,
+        remark: str,
+        goods_no: Optional[str],
+        code_factory: Callable[[], str],
+    ) -> tuple[bool, dict[str, Any]]:
+        with self.transaction(immediate=True) as c:
+            existing = c.execute("SELECT * FROM agiso_deliveries WHERE delivery_key=?", (delivery_key,)).fetchone()
+            if existing:
+                return False, dict(existing)
+            t = now_iso()
+            code = ""
+            for _ in range(16):
+                candidate = code_factory()
+                if not c.execute("SELECT 1 FROM codes WHERE code=?", (candidate,)).fetchone():
+                    code = candidate
+                    break
+            if not code:
+                raise RuntimeError("Failed to generate unique redemption code")
+            c.execute(
+                """INSERT INTO codes(
+                    code, sku_key, channel, batch_id, goods_no, external_order_id,
+                    remark, status, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (code, sku_key, "taobao", None, goods_no, tid, remark, "unused", t, t),
+            )
+            c.execute(
+                "INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)",
+                (code, None, "unused", "agiso_issued", t),
+            )
+            c.execute(
+                """INSERT INTO agiso_deliveries(
+                    delivery_key, tid, oid, seq, num_iid, sku_id, sku_key, code,
+                    buyer_nick, delivery_status, result_created, card_sent, ww_sent,
+                    dummy_sent, last_error, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (delivery_key, tid, oid, seq, num_iid, sku_id, sku_key, code, buyer_nick, "issued", 0, 0, 0, 0, None, t, t),
+            )
+            row = c.execute("SELECT * FROM agiso_deliveries WHERE delivery_key=?", (delivery_key,)).fetchone()
+            return True, dict(row)
+
+    def list_agiso_deliveries_by_tid(self, tid: str) -> list[dict[str, Any]]:
+        with self.connect() as c:
+            rows = c.execute(
+                "SELECT * FROM agiso_deliveries WHERE tid=? ORDER BY oid ASC, seq ASC",
+                (tid,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def list_agiso_deliveries_for_refund(self, tid: str, oid: str = "") -> list[dict[str, Any]]:
+        with self.connect() as c:
+            if oid:
+                rows = c.execute(
+                    "SELECT * FROM agiso_deliveries WHERE oid=? ORDER BY seq ASC",
+                    (oid,),
+                ).fetchall()
+                if rows:
+                    return [dict(r) for r in rows]
+                if tid and oid != tid:
+                    return []
+            if tid:
+                rows = c.execute(
+                    "SELECT * FROM agiso_deliveries WHERE tid=? ORDER BY oid ASC, seq ASC",
+                    (tid,),
+                ).fetchall()
+                return [dict(r) for r in rows]
+            return []
+
+    def find_codes_by_external_order(self, tid: str) -> list[dict[str, Any]]:
+        if not tid:
+            return []
+        with self.connect() as c:
+            rows = c.execute(
+                "SELECT * FROM codes WHERE external_order_id=? ORDER BY created_at ASC",
+                (tid,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def bind_code_external_order(self, code: str, tid: str, reason: str = "agiso_card_bound") -> str:
+        with self.transaction(immediate=True) as c:
+            row = c.execute("SELECT status, external_order_id FROM codes WHERE code=?", (code,)).fetchone()
+            if not row:
+                return "missing"
+            existing = (row["external_order_id"] or "").strip()
+            if existing == tid:
+                return "already_bound"
+            if existing:
+                return "conflict"
+            t = now_iso()
+            c.execute("UPDATE codes SET external_order_id=?, updated_at=? WHERE code=?", (tid, t, code))
+            c.execute(
+                "INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)",
+                (code, row["status"], row["status"], reason, t),
+            )
+            return "bound"
+
+    def claim_agiso_trade_delivery(self, tid: str, stale_seconds: int = 60, force_retry: bool = False) -> list[dict[str, Any]]:
+        with self.transaction(immediate=True) as c:
+            rows = [
+                dict(r)
+                for r in c.execute(
+                    "SELECT * FROM agiso_deliveries WHERE tid=? AND delivery_status != 'revoked' ORDER BY oid ASC, seq ASC",
+                    (tid,),
+                ).fetchall()
+            ]
+            if not rows:
+                return []
+            now_dt = datetime.now(timezone.utc).astimezone()
+            for row in rows:
+                if row["delivery_status"] == "delivering":
+                    try:
+                        age = (now_dt - datetime.fromisoformat(row["updated_at"])).total_seconds()
+                    except ValueError:
+                        age = stale_seconds + 1
+                    if age < stale_seconds:
+                        return []
+            if not force_retry and all(row["delivery_status"] == "delivered" for row in rows):
+                return []
+            t = now_iso()
+            if force_retry:
+                c.execute(
+                    "UPDATE agiso_deliveries SET delivery_status='delivering', updated_at=? WHERE tid=? AND delivery_status != 'revoked'",
+                    (t, tid),
+                )
+            else:
+                c.execute(
+                    "UPDATE agiso_deliveries SET delivery_status='delivering', updated_at=? WHERE tid=? AND delivery_status NOT IN ('delivered', 'revoked')",
+                    (t, tid),
+                )
+            return [
+                dict(r)
+                for r in c.execute(
+                    "SELECT * FROM agiso_deliveries WHERE tid=? AND delivery_status != 'revoked' ORDER BY oid ASC, seq ASC",
+                    (tid,),
+                ).fetchall()
+            ]
+
+    def update_agiso_trade_deliveries(self, tid: str, updates: dict[str, Any], exclude_revoked: bool = True) -> list[dict[str, Any]]:
+        values = {"updated_at": now_iso(), **updates}
+        set_sql = ",".join(f"{key}=?" for key in values)
+        where_sql = "tid=? AND delivery_status != 'revoked'" if exclude_revoked else "tid=?"
+        with self.transaction(immediate=True) as c:
+            c.execute(f"UPDATE agiso_deliveries SET {set_sql} WHERE {where_sql}", tuple(values.values()) + (tid,))
+            return [
+                dict(r)
+                for r in c.execute(
+                    "SELECT * FROM agiso_deliveries WHERE tid=? ORDER BY oid ASC, seq ASC",
+                    (tid,),
+                ).fetchall()
+            ]
+
+    def mark_agiso_delivery_revoked(self, code: str) -> None:
+        with self.transaction(immediate=True) as c:
+            c.execute(
+                "UPDATE agiso_deliveries SET delivery_status='revoked', updated_at=? WHERE code=?",
+                (now_iso(), code),
+            )
+
+    def record_agiso_event(
+        self,
+        *,
+        source: str,
+        from_platform: str = "",
+        aopic: Optional[int] = None,
+        tid: str = "",
+        oid: str = "",
+        status: str,
+        detail: str = "",
+        payload_summary: str = "",
+        event_key: Optional[str] = None,
+    ) -> int:
+        t = now_iso()
+        with self.transaction(immediate=True) as c:
+            if event_key:
+                c.execute(
+                    """INSERT INTO agiso_events(
+                        event_key, source, from_platform, aopic, tid, oid, status, detail, payload_summary, created_at
+                    ) VALUES(?,?,?,?,?,?,?,?,?,?)
+                    ON CONFLICT(event_key) DO UPDATE SET
+                        status=excluded.status,
+                        detail=excluded.detail,
+                        payload_summary=excluded.payload_summary""",
+                    (event_key, source, from_platform, aopic, tid, oid, status, detail[:500], payload_summary[:1000], t),
+                )
+                row = c.execute("SELECT event_id FROM agiso_events WHERE event_key=?", (event_key,)).fetchone()
+                return int(row["event_id"])
+            cursor = c.execute(
+                """INSERT INTO agiso_events(
+                    event_key, source, from_platform, aopic, tid, oid, status, detail, payload_summary, created_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                (None, source, from_platform, aopic, tid, oid, status, detail[:500], payload_summary[:1000], t),
+            )
+            return int(cursor.lastrowid)
+
+    def list_agiso_events(
+        self,
+        where: str = "",
+        params: tuple[Any, ...] = (),
+        limit: int = 20,
+        offset: int = 0,
+    ) -> tuple[list[dict[str, Any]], int]:
+        with self.connect() as c:
+            total = c.execute("SELECT COUNT(*) FROM agiso_events" + (" WHERE " + where if where else ""), params).fetchone()[0]
+            rows = c.execute(
+                "SELECT * FROM agiso_events" + (" WHERE " + where if where else "") + " ORDER BY event_id DESC LIMIT ? OFFSET ?",
+                params + (limit, offset),
+            ).fetchall()
+            return [dict(r) for r in rows], total
+
+    def agiso_delivery_counts(self) -> dict[str, int]:
+        with self.connect() as c:
+            rows = c.execute("SELECT delivery_status, COUNT(*) AS cnt FROM agiso_deliveries GROUP BY delivery_status").fetchall()
+            counts = {r["delivery_status"]: int(r["cnt"]) for r in rows}
+            total = sum(counts.values())
+            return {
+                "issued": counts.get("issued", 0),
+                "delivering": counts.get("delivering", 0),
+                "delivered": counts.get("delivered", 0),
+                "partial": counts.get("partial", 0),
+                "failed": counts.get("failed", 0),
+                "revoked": counts.get("revoked", 0),
+                "total": total,
+            }
+
+    def agiso_event_count(self) -> int:
+        with self.connect() as c:
+            return int(c.execute("SELECT COUNT(*) FROM agiso_events").fetchone()[0])
 

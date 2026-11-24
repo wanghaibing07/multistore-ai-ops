@@ -318,5 +318,148 @@
 - `PATCH /api/v1/admin/settings/skus/{sku_key}`：请求 `{ "max_cost_usd": 16.0, "goods_no": "G12345678" }`，返回更新后的 SKU 对象。
 - `POST /api/v1/admin/notifications/test-email`：发送一封测试邮件到商家邮箱，返回 `{ "ok": true, "message": "..." }`。
 
-## 6. 健康检查
+## 6. 阿奇索（Agiso）自动发货接口
+
+### 6.1 消息推送回调（免管理员 Token，使用阿奇索 MD5 签名校验）
+`POST /api/v1/webhooks/agiso?fromPlatform=TbAlds&timestamp=1700000000&aopic=2&sign=<md5>`
+- 请求体：`application/x-www-form-urlencoded`，包含 `json=<JSON字符串>`（兼容按表单解析时的 `+` 空格解码，也可从 Query 兜底读取）。
+- 验签规则：
+  - 时间戳校验：`PLAN2_AGISO_TIMESTAMP_TOLERANCE_SECONDS > 0` 时要求 `|now - timestamp| <= tolerance`（默认 600 秒）。
+  - 签名算法：`md5(app_secret + "json" + raw_json + "timestamp" + timestamp + app_secret).lower()`，使用常量时间比对。
+- 文本响应（`text/plain`）：
+  - `200 OK`，响应体为空串 `""`：验签成功且事件处理完成（或幂等/安全忽略）。
+  - `400 Bad Request`：`"参数错误"` 或 `"缺少订单号"`（`aopic` / `json` 非法或简化推送缺 `Tid`）。
+  - `403 Forbidden`：`"时间戳无效"` 或 `"验签失败"`。
+  - `503 Service Unavailable`：`"服务未配置"`（未配 `PLAN2_AGISO_APP_SECRET`）、`"未配置AccessToken"`、`"订单查询失败"` 或瞬态核心发货失败（触发阿奇索重试）。
+- 事件行为：
+  - `fromPlatform=Open`：开放平台「模拟推送」验签探测，直接落审计事件 `simulated_verified` 并返回 `200 ""`，不生成兑换码。
+  - `aopic=2`（付款推送含明细）/ `aopic=2097152`（简化付款推送，自动调用 `TradeInfo` 反查）：仅处理 `Status=WAIT_SELLER_SEND_GOODS`；严格按已启用 SKU 映射匹配（优先级 `outer_sku_id > sku_id > num_iid+sku_props_contains > outer_iid > sku_props_contains > num_iid`，未命中商品安全忽略，单子单数量超过 50 暂停并告警）。按 `delivery_key = "{tid}:{oid}:{seq}"` 原子幂等签发兑换码，合并同单所有命中子单执行 `CreateOrderResult` -> `LogisticsDummySend` -> 可选 `SendTbAppCard` / `WwMsg/Send`。自动发货成功**不发邮件**，失败或部分失败才告警。
+  - `aopic=256`（申请退款）/ `aopic=65536`（退款成功）：按 `Oid` 精确匹配（避免多子单混合订单跨子单误伤）；`unused` 码自动作废且不发邮件，已使用/履约中/已完成码不作废并发送人工核对告警邮件。
+  - `aopic=2048`（阿奇索卡密池自动发货成功）：从已发卡密中提取 `U20S-...` / `U20E-...` 并绑定 `external_order_id`。
+
+### 6.2 阿奇索集成状态（管理员鉴权）
+`GET /api/v1/admin/agiso/status`
+- 严禁返回 `app_secret` 或 `access_token` 明文，仅返回布尔配置状态与统计。
+- `200 OK`：
+```json
+{
+  "configured": true,
+  "webhook_ready": true,
+  "api_ready": true,
+  "app_id": "2026000000000000000",
+  "has_app_secret": true,
+  "has_access_token": true,
+  "webhook_url": "https://redeem.example.com/api/v1/webhooks/agiso",
+  "api_base_url": "https://gw-api.agiso.com",
+  "execution_mode": "live",
+  "auto_create_result": true,
+  "auto_dummy_send": true,
+  "auto_send_tb_card": true,
+  "auto_send_ww_msg": false,
+  "auto_revoke_on_refund": true,
+  "poll_enabled": false,
+  "poll_interval_seconds": 120,
+  "sku_mappings_count": 1,
+  "deliveries_summary": {
+    "issued": 0,
+    "delivering": 0,
+    "delivered": 0,
+    "partial": 0,
+    "failed": 0,
+    "revoked": 0,
+    "total": 0
+  },
+  "events_total": 0
+}
+```
+
+### 6.3 淘宝 SKU 映射规则管理（管理员鉴权）
+- `GET /api/v1/admin/agiso/sku-mappings`
+  - 返回 `{ "items": [ ...数据库规则... ], "env_rules": [ ...环境变量只读规则... ] }`。
+- `POST /api/v1/admin/agiso/sku-mappings`（`201 Created`）
+  - 请求：
+```json
+{
+  "sku_key": "ultra_shared_slot",
+  "num_iid": "1100000000000",
+  "sku_id": "5000000000000",
+  "outer_iid": "",
+  "outer_sku_id": "",
+  "sku_props_contains": "",
+  "enabled": true,
+  "note": "Ultra 20x 共享车位"
+}
+```
+  - 规则：至少填写 `num_iid` / `sku_id` / `outer_iid` / `outer_sku_id` / `sku_props_contains` 之一，否则返回 `422 MATCHER_REQUIRED`；未知 `sku_key` 返回 `422 UNKNOWN_SKU`。
+- `DELETE /api/v1/admin/agiso/sku-mappings/{mapping_id}`
+  - 删除成功返回 `{ "ok": true, "mapping_id": 1 }`，不存在返回 `404 MAPPING_NOT_FOUND`。
+
+### 6.4 阿奇索事件与发货跟踪日志（管理员鉴权）
+`GET /api/v1/admin/agiso/events?tid=&aopic=&status=&page=1&page_size=20`
+- `200 OK`：
+```json
+{
+  "items": [
+    {
+      "event_id": 1,
+      "event_key": null,
+      "source": "webhook",
+      "from_platform": "TbAlds",
+      "aopic": 2,
+      "tid": "TB202611250001",
+      "oid": "",
+      "status": "delivered",
+      "detail": "自动发货完成（1 份）",
+      "payload_summary": "Tid=TB202611250001 Status=WAIT_SELLER_SEND_GOODS Orders=1",
+      "created_at": "2026-11-25T02:00:00+08:00"
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "page_size": 20
+}
+```
+- 当传入 `tid` 时，响应额外附带 `"deliveries": [...]` 明细列表。
+
+### 6.5 单笔补发 / 重试（管理员鉴权）
+`POST /api/v1/admin/agiso/orders/{tid}/retry`
+- 请求体（可选）：`{ "fetch_from_agiso": true }`
+- 行为：若本地已有 `agiso_deliveries` 记录，仅补执行未完成的步骤（不重复调用已成功的 `CreateOrderResult` / `LogisticsDummySend`）；若本地无记录且 `fetch_from_agiso=true`，先调 `TradeInfo` 拉单后走自动发货；若 `fetch_from_agiso=false` 且无记录返回 `404 ORDER_NOT_FOUND`；上游错误返回 `503 AGISO_ERROR`。
+
+### 6.6 手动拉单补漏（管理员鉴权）
+`POST /api/v1/admin/agiso/sync-orders`
+- 请求体（可选）：
+```json
+{
+  "lookback_minutes": 60,
+  "page_size": 50,
+  "max_pages": 5
+}
+```
+- 按北京时间（UTC+8）分页调用 `TradesBuyerPay` 并对 `WAIT_SELLER_SEND_GOODS` 订单执行幂等自动发货。
+- `200 OK`：`{ "modify_time_start", "fetched", "fulfilled", "skipped", "failed", "items" }`；上游失败返回 `503 AGISO_ERROR`。
+
+### 6.7 拉取淘宝商品 SKU 列表（管理员鉴权）
+`GET /api/v1/admin/agiso/remote-skus?num_iids=1100000000000,1100000000001`
+- `num_iids` 逗号分隔，必填且最多 40 个（否则 `422 NUM_IIDS_REQUIRED` / `422 TOO_MANY_NUM_IIDS`）。
+- 调用阿奇索 `Item/SkusGet`，返回 `{ "items": [...] }`；上游失败返回 `503 AGISO_ERROR`。
+
+### 6.8 批量制码并推送到阿奇索卡密库（管理员鉴权）
+`POST /api/v1/admin/agiso/push-cards`（`201 Created`）
+- 请求：
+```json
+{
+  "sku_key": "ultra_shared_slot",
+  "cpc_id": 12345,
+  "count": 20,
+  "batch_label": "阿奇索首批20张",
+  "is_use_first": false,
+  "allow_replace": false
+}
+```
+- `count` 范围 `1..500`。批量签发兑换码并调用 `CardPwd/Add`（每行 `提货链接,兑换码`）。
+- 若阿奇索返回确定性业务拒绝（HTTP 200 且 `IsSuccess=false` 且非瞬态），自动作废本次新建的 `unused` 码防止孤儿库存；网络/瞬态异常则保留以便核对。
+- `201 Created`：`{ "batch_id", "sku_key", "cpc_id", "count", "codes", "agiso_result" }`；校验错误 `422`，上游失败 `503 AGISO_ERROR`。
+
+## 7. 健康检查
 `GET /api/v1/health` -> `{ "status": "ok", "execution_mode": "dry_run" }`

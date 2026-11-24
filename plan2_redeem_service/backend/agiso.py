@@ -1,0 +1,595 @@
+from __future__ import annotations
+
+import hashlib
+import hmac
+import json
+import logging
+import re
+import time
+from typing import Any, Optional
+
+import httpx
+
+
+logger = logging.getLogger(__name__)
+
+PLAN2_CODE_RE = re.compile(r"\bU20[SE]-[A-Z0-9]{4}-[A-Z0-9]{4}\b")
+
+AOPIC_BUYER_CREATE = 1
+AOPIC_BUYER_PAY = 2
+AOPIC_BUYER_CONFIRM = 4
+AOPIC_REFUND_CREATED = 256
+AOPIC_AUTO_SEND_SUCCESS = 2048
+AOPIC_REFUND_CLOSED = 32768
+AOPIC_REFUND_SUCCESS = 65536
+AOPIC_SELLER_SHIP = 1048576
+AOPIC_BUYER_PAY_SIMPLE = 2097152
+
+DEFAULT_SKUS_FIELDS = "sku_id,iid,num_iid,properties,properties_name,quantity,price,outer_id,status"
+
+
+def build_redeem_url(public_base_url: str, code: str) -> str:
+    return f"{public_base_url.rstrip('/')}/r/{code}"
+
+
+def format_delivery_message(sku_title: str, product_type: str, code: str, redeem_url: str) -> str:
+    if product_type == "slot":
+        return (
+            f"感谢下单 {sku_title}！\n"
+            f"点链接填您的 Gmail 提货：{redeem_url}\n"
+            f"兑换码：{code}\n"
+            "提交后一般 1~6 小时内发家庭组邀请（最晚 24 小时），随时能在链接里看进度。"
+        )
+    return (
+        f"感谢下单 {sku_title}！\n"
+        f"点链接直接领套餐邮箱：{redeem_url}\n"
+        f"兑换码：{code}\n"
+        "领完建好家庭组并邀请商店邮箱后，记得在同一页传截图登记保修。"
+    )
+
+
+def format_trade_delivery_message(
+    deliveries: list[dict[str, Any]],
+    skus: dict[str, dict[str, Any]],
+    public_base_url: str,
+) -> str:
+    if not deliveries:
+        return ""
+    if len(deliveries) == 1:
+        item = deliveries[0]
+        sku = skus[item["sku_key"]]
+        url = build_redeem_url(public_base_url, item["code"])
+        return format_delivery_message(sku["title"], sku["product_type"], item["code"], url)
+    blocks: list[str] = []
+    for index, item in enumerate(deliveries, start=1):
+        sku = skus[item["sku_key"]]
+        url = build_redeem_url(public_base_url, item["code"])
+        blocks.append(
+            f"【第 {index} 份】{sku['title']}\n"
+            f"提货链接：{url}\n"
+            f"兑换码：{item['code']}"
+        )
+    has_slot = any(skus[item["sku_key"]]["product_type"] == "slot" for item in deliveries)
+    has_account = any(skus[item["sku_key"]]["product_type"] != "slot" for item in deliveries)
+    hints: list[str] = []
+    if has_slot:
+        hints.append("共享车位提交 Gmail 后一般 1~6 小时内发家庭组邀请（最晚 24 小时），随时能在链接里看进度。")
+    if has_account:
+        hints.append("独享账号领完建好家庭组并邀请商店邮箱后，记得在同一页传截图登记保修。")
+    header = f"感谢下单！本次共为您发出 {len(deliveries)} 份提货码："
+    text = "\n\n".join([header, *blocks, *hints])
+    return text[:4950]
+
+
+def build_create_order_result_content(
+    deliveries: list[dict[str, Any]],
+    skus: dict[str, dict[str, Any]],
+    public_base_url: str,
+) -> list[dict[str, Any]]:
+    grouped: dict[str, list[dict[str, Any]]] = {}
+    for item in deliveries:
+        oid_key = str(item["oid"])
+        grouped.setdefault(oid_key, []).append(item)
+
+    content: list[dict[str, Any]] = []
+    for oid_str, group_items in grouped.items():
+        oid_value: Any = int(oid_str) if oid_str.isdigit() else oid_str
+        by_sku: dict[str, list[dict[str, Any]]] = {}
+        for item in group_items:
+            by_sku.setdefault(item["sku_key"], []).append(item)
+        card_pwd_content: list[dict[str, Any]] = []
+        for sku_key, sku_items in by_sku.items():
+            sku = skus[sku_key]
+            card_pwd_content.append(
+                {
+                    "CardNoShowType": 0,
+                    "PwdShowType": 0,
+                    "Title": sku["title"],
+                    "PrefixCardNo": "提货链接：",
+                    "PrefixPwd": "兑换码：",
+                    "CardPwdArr": [
+                        {
+                            "c": build_redeem_url(public_base_url, entry["code"]),
+                            "p": entry["code"],
+                            "d": "",
+                        }
+                        for entry in sku_items
+                    ],
+                }
+            )
+        additional = format_trade_delivery_message(group_items, skus, public_base_url)
+        content.append(
+            {
+                "Oid": oid_value,
+                "Additional": additional,
+                "CardPwdContent": card_pwd_content,
+            }
+        )
+    return content
+
+
+def _redact(text: str, secrets_to_hide: list[str]) -> str:
+    cleaned = (text or "").strip()
+    for secret in secrets_to_hide:
+        if secret:
+            cleaned = cleaned.replace(secret, "[REDACTED]")
+    cleaned = " ".join(cleaned.split())
+    return cleaned[:240]
+
+
+def sign_agiso_api_params(params: dict[str, Any], app_secret: str) -> str:
+    items: dict[str, str] = {}
+    for key, value in params.items():
+        if key == "sign" or value is None or isinstance(value, (bytes, bytearray)):
+            continue
+        if isinstance(value, bool):
+            items[key] = "1" if value else "0"
+        else:
+            items[key] = str(value)
+    ordered_keys = sorted(items.keys())
+    raw = app_secret + "".join(f"{key}{items[key]}" for key in ordered_keys) + app_secret
+    return hashlib.md5(raw.encode("utf-8")).hexdigest().lower()
+
+
+def verify_agiso_push_signature(raw_json: str, timestamp: str, sign: str, app_secret: str) -> bool:
+    if not app_secret or not timestamp or not sign:
+        return False
+    payload = f"{app_secret}json{raw_json}timestamp{timestamp}{app_secret}"
+    expected = hashlib.md5(payload.encode("utf-8")).hexdigest().lower()
+    return hmac.compare_digest(expected, sign.strip().lower())
+
+
+def _norm_id(value: Any) -> str:
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
+def parse_env_sku_rules(raw_json: str) -> list[dict[str, Any]]:
+    text = (raw_json or "").strip()
+    if not text:
+        return []
+    parsed = json.loads(text)
+    if not isinstance(parsed, list):
+        raise ValueError("PLAN2_AGISO_SKU_RULES_JSON must be a JSON array")
+    normalized: list[dict[str, Any]] = []
+    for idx, entry in enumerate(parsed):
+        if not isinstance(entry, dict):
+            raise ValueError(f"SKU rule at index {idx} must be an object")
+        normalized.append(
+            {
+                "mapping_id": None,
+                "source": "env",
+                "num_iid": _norm_id(entry.get("num_iid")),
+                "sku_id": _norm_id(entry.get("sku_id")),
+                "outer_iid": _norm_id(entry.get("outer_iid")),
+                "outer_sku_id": _norm_id(entry.get("outer_sku_id")),
+                "sku_props_contains": _norm_id(entry.get("sku_props_contains")),
+                "sku_key": _norm_id(entry.get("sku_key")),
+                "enabled": bool(entry.get("enabled", True)),
+                "note": _norm_id(entry.get("note")),
+            }
+        )
+    return normalized
+
+
+def rule_has_matcher(rule: dict[str, Any]) -> bool:
+    return any(
+        _norm_id(rule.get(field))
+        for field in ("outer_sku_id", "sku_id", "num_iid", "outer_iid", "sku_props_contains")
+    )
+
+
+def _rule_priority(rule: dict[str, Any]) -> int:
+    if _norm_id(rule.get("outer_sku_id")):
+        return 50
+    if _norm_id(rule.get("sku_id")):
+        return 40
+    if _norm_id(rule.get("num_iid")) and _norm_id(rule.get("sku_props_contains")):
+        return 30
+    if _norm_id(rule.get("outer_iid")):
+        return 20
+    if _norm_id(rule.get("sku_props_contains")):
+        return 15
+    if _norm_id(rule.get("num_iid")):
+        return 10
+    return 0
+
+
+def match_agiso_sku(
+    order: dict[str, Any],
+    rules: list[dict[str, Any]],
+    valid_sku_keys: Optional[set[str]] = None,
+) -> Optional[dict[str, Any]]:
+    num_iid = _norm_id(order.get("NumIid") if "NumIid" in order else order.get("num_iid"))
+    sku_id = _norm_id(order.get("SkuId") if "SkuId" in order else order.get("sku_id"))
+    outer_iid = _norm_id(order.get("OuterIid") if "OuterIid" in order else order.get("outer_iid"))
+    outer_sku_id = _norm_id(order.get("OuterSkuId") if "OuterSkuId" in order else order.get("outer_sku_id"))
+    sku_props = str(
+        order.get("SkuPropertiesName")
+        if order.get("SkuPropertiesName") is not None
+        else (order.get("sku_properties_name") or "")
+    ).lower()
+
+    best_rule: Optional[dict[str, Any]] = None
+    best_rank: tuple[int, int] = (-1, 0)
+
+    for index, rule in enumerate(rules):
+        if not rule.get("enabled", True):
+            continue
+        sku_key = _norm_id(rule.get("sku_key"))
+        if not sku_key:
+            continue
+        if valid_sku_keys is not None and sku_key not in valid_sku_keys:
+            continue
+        if not rule_has_matcher(rule):
+            continue
+
+        rule_outer_sku_id = _norm_id(rule.get("outer_sku_id"))
+        rule_sku_id = _norm_id(rule.get("sku_id"))
+        rule_outer_iid = _norm_id(rule.get("outer_iid"))
+        rule_num_iid = _norm_id(rule.get("num_iid"))
+        rule_props = _norm_id(rule.get("sku_props_contains")).lower()
+
+        if rule_outer_sku_id and rule_outer_sku_id != outer_sku_id:
+            continue
+        if rule_sku_id and rule_sku_id != sku_id:
+            continue
+        if rule_outer_iid and rule_outer_iid != outer_iid:
+            continue
+        if rule_num_iid and rule_num_iid != num_iid:
+            continue
+        if rule_props and rule_props not in sku_props:
+            continue
+
+        priority = _rule_priority(rule)
+        rank = (priority, -index)
+        if rank > best_rank:
+            best_rank = rank
+            best_rule = rule
+
+    return best_rule
+
+
+def extract_plan2_codes_from_sent_cards(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    seen: set[str] = set()
+    orders = payload.get("Orders")
+    if not isinstance(orders, list):
+        return found
+    for order in orders:
+        if not isinstance(order, dict):
+            continue
+        oid = _norm_id(order.get("Oid"))
+        send_cards = order.get("SendCards")
+        if not isinstance(send_cards, list):
+            continue
+        for group in send_cards:
+            if not isinstance(group, dict):
+                continue
+            cards = group.get("Cards")
+            if not isinstance(cards, list):
+                continue
+            for card in cards:
+                if not isinstance(card, dict):
+                    continue
+                for field in ("Pwd", "Card"):
+                    text = str(card.get(field) or "")
+                    for match in PLAN2_CODE_RE.findall(text):
+                        if match not in seen:
+                            seen.add(match)
+                            found.append((oid, match))
+    return found
+
+
+class AgisoError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        error_code: Optional[int] = None,
+        status_code: Optional[int] = None,
+        allow_retry: Optional[bool] = None,
+        transient: bool = False,
+        data: Any = None,
+    ):
+        self.message = message
+        self.error_code = error_code
+        self.status_code = status_code
+        self.allow_retry = allow_retry
+        self.transient = transient
+        self.data = data
+        super().__init__(message)
+
+
+class AgisoClient:
+    def __init__(
+        self,
+        base_url: str,
+        app_secret: str,
+        access_token: str,
+        timeout: float = 15.0,
+    ):
+        self.base_url = base_url.rstrip("/")
+        self.app_secret = app_secret.strip()
+        self.access_token = access_token.strip()
+        self.timeout = timeout
+
+    @property
+    def is_ready(self) -> bool:
+        return bool(self.app_secret and self.access_token)
+
+    def _post(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
+        if not self.app_secret or not self.access_token:
+            raise AgisoError("Agiso API credentials are not configured", status_code=503, transient=False)
+        payload: dict[str, str] = {}
+        for key, value in params.items():
+            if value is None:
+                continue
+            if isinstance(value, bool):
+                payload[key] = "1" if value else "0"
+            else:
+                payload[key] = str(value)
+        payload["timestamp"] = str(int(time.time()))
+        payload["sign"] = sign_agiso_api_params(payload, self.app_secret)
+        headers = {
+            "Authorization": f"Bearer {self.access_token}",
+            "ApiVersion": "1",
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        secrets_to_hide = [self.app_secret, self.access_token]
+        try:
+            response = httpx.post(
+                f"{self.base_url}{path}",
+                data=payload,
+                headers=headers,
+                timeout=self.timeout,
+            )
+        except httpx.TimeoutException as exc:
+            raise AgisoError(
+                f"Agiso {path} timed out after {self.timeout:g}s",
+                status_code=504,
+                transient=True,
+            ) from exc
+        except httpx.HTTPError as exc:
+            raise AgisoError(
+                _redact(f"Agiso {path} network error ({type(exc).__name__})", secrets_to_hide),
+                status_code=503,
+                transient=True,
+            ) from exc
+
+        if response.status_code >= 400:
+            detail = _redact(response.text, secrets_to_hide)
+            raise AgisoError(
+                f"Agiso HTTP {response.status_code}: {detail}" if detail else f"Agiso HTTP {response.status_code}",
+                status_code=response.status_code,
+                transient=response.status_code in {429, 500, 502, 503, 504},
+            )
+        try:
+            body = response.json()
+        except ValueError as exc:
+            raise AgisoError(
+                f"Agiso {path} returned invalid JSON",
+                status_code=502,
+                transient=True,
+            ) from exc
+        if not isinstance(body, dict):
+            raise AgisoError(f"Agiso {path} returned unexpected payload", status_code=502, transient=True)
+        if not body.get("IsSuccess"):
+            error_code = body.get("Error_Code")
+            error_msg = _redact(str(body.get("Error_Msg") or "Agiso API error"), secrets_to_hide)
+            allow_retry = body.get("AllowRetry")
+            transient = bool(allow_retry) or error_code in {2, 10, 13}
+            raise AgisoError(
+                f"Agiso error {error_code}: {error_msg}",
+                error_code=error_code if isinstance(error_code, int) else None,
+                status_code=200,
+                allow_retry=allow_retry if isinstance(allow_retry, bool) else None,
+                transient=transient,
+                data=body.get("Data"),
+            )
+        return body
+
+    def trade_info(self, tid: str) -> dict[str, Any]:
+        body = self._post("/alds/Trade/TradeInfo", {"tid": str(tid)})
+        data = body.get("Data")
+        if not isinstance(data, dict):
+            raise AgisoError("Agiso TradeInfo returned empty data", status_code=502, transient=True)
+        return data
+
+    def trades_buyer_pay(self, modify_time_start: str, page_no: int = 1, page_size: int = 20) -> list[dict[str, Any]]:
+        body = self._post(
+            "/alds/Trade/TradesBuyerPay",
+            {
+                "modifyTimeStart": modify_time_start,
+                "pageNo": page_no,
+                "pageSize": min(max(1, page_size), 100),
+            },
+        )
+        data = body.get("Data")
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        if isinstance(data, dict):
+            for key in ("List", "Trades", "Items"):
+                nested = data.get(key)
+                if isinstance(nested, list):
+                    return [item for item in nested if isinstance(item, dict)]
+            if "Tid" in data:
+                return [data]
+        return []
+
+    def create_order_result(self, tid: str, content: list[dict[str, Any]], alds_type: int = 1) -> dict[str, Any]:
+        return self._post(
+            "/alds/Trade/CreateOrderResult",
+            {
+                "tid": str(tid),
+                "aldsType": alds_type,
+                "content": json.dumps(content, ensure_ascii=False, separators=(",", ":")),
+            },
+        )
+
+    def logistics_dummy_send(self, tids: list[str]) -> dict[str, Any]:
+        return self._post("/alds/Trade/LogisticsDummySend", {"tids": ",".join(str(t) for t in tids)})
+
+    def send_tb_app_card(self, tid: str) -> dict[str, Any]:
+        return self._post("/alds/Trade/SendTbAppCard", {"tid": str(tid)})
+
+    def send_ww_msg(self, tid: str, msg: str) -> dict[str, Any]:
+        return self._post("/alds/WwMsg/Send", {"tid": str(tid), "msg": msg[:5000]})
+
+    def item_skus_get(self, num_iids: list[str], fields: str = DEFAULT_SKUS_FIELDS) -> list[dict[str, Any]]:
+        body = self._post(
+            "/alds/Item/SkusGet",
+            {
+                "numIids": ",".join(str(item).strip() for item in num_iids[:40] if str(item).strip()),
+                "fields": fields,
+            },
+        )
+        data = body.get("Data")
+        if isinstance(data, list):
+            return [item for item in data if isinstance(item, dict)]
+        return []
+
+    def card_pwd_category_get_list(self, page_no: int = 1, page_size: int = 100) -> dict[str, Any]:
+        body = self._post(
+            "/alds/CardPwdCategory/GetList",
+            {"pageNo": page_no, "pageSize": min(max(1, page_size), 100)},
+        )
+        data = body.get("Data")
+        return data if isinstance(data, dict) else {"List": [], "HasNext": False}
+
+    def card_pwd_category_get_storage(self, id_nos: list[int | str]) -> list[dict[str, Any]]:
+        body = self._post(
+            "/alds/CardPwdCategory/GetStorage",
+            {"idNos": ",".join(str(item) for item in id_nos)},
+        )
+        data = body.get("Data")
+        return [item for item in data if isinstance(item, dict)] if isinstance(data, list) else []
+
+    def card_pwd_add(
+        self,
+        cpc_id: int | str,
+        lines: list[str],
+        *,
+        is_use_first: bool = False,
+        allow_replace: bool = False,
+        summary: str = "",
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "cpcId": str(cpc_id),
+            "data": "\n".join(lines),
+            "isUseFirst": 1 if is_use_first else 0,
+            "allowReplace": 1 if allow_replace else 0,
+        }
+        if summary:
+            params["summary"] = summary
+        body = self._post("/alds/CardPwd/Add", params)
+        return body.get("Data") if isinstance(body.get("Data"), dict) else body
+
+
+class DryRunAgisoClient:
+    def __init__(self) -> None:
+        self.calls: list[dict[str, Any]] = []
+        self.trades: dict[str, dict[str, Any]] = {}
+        self.pending_trades: list[dict[str, Any]] = []
+        self.remote_skus: list[dict[str, Any]] = []
+        self.categories: list[dict[str, Any]] = []
+        self.fail_methods: dict[str, Exception] = {}
+
+    @property
+    def is_ready(self) -> bool:
+        return True
+
+    def _record(self, method: str, **kwargs: Any) -> None:
+        self.calls.append({"method": method, **kwargs})
+        exc = self.fail_methods.get(method)
+        if exc is not None:
+            raise exc
+
+    def trade_info(self, tid: str) -> dict[str, Any]:
+        self._record("trade_info", tid=str(tid))
+        trade = self.trades.get(str(tid))
+        if not trade:
+            raise AgisoError(f"Agiso error 9: 交易不存在 ({tid})", error_code=9, status_code=200)
+        return trade
+
+    def trades_buyer_pay(self, modify_time_start: str, page_no: int = 1, page_size: int = 20) -> list[dict[str, Any]]:
+        self._record("trades_buyer_pay", modify_time_start=modify_time_start, page_no=page_no, page_size=page_size)
+        start = (page_no - 1) * page_size
+        return self.pending_trades[start : start + page_size]
+
+    def create_order_result(self, tid: str, content: list[dict[str, Any]], alds_type: int = 1) -> dict[str, Any]:
+        self._record("create_order_result", tid=str(tid), content=content, alds_type=alds_type)
+        return {"IsSuccess": True, "Data": "", "Error_Code": 0, "Error_Msg": ""}
+
+    def logistics_dummy_send(self, tids: list[str]) -> dict[str, Any]:
+        self._record("logistics_dummy_send", tids=[str(t) for t in tids])
+        return {"IsSuccess": True, "Data": {}, "Error_Code": 0, "Error_Msg": ""}
+
+    def send_tb_app_card(self, tid: str) -> dict[str, Any]:
+        self._record("send_tb_app_card", tid=str(tid))
+        return {"IsSuccess": True, "Data": "发卡接口调用成功", "Error_Code": 0, "Error_Msg": ""}
+
+    def send_ww_msg(self, tid: str, msg: str) -> dict[str, Any]:
+        self._record("send_ww_msg", tid=str(tid), msg=msg)
+        return {"IsSuccess": True, "Data": None, "Error_Code": 0, "Error_Msg": ""}
+
+    def item_skus_get(self, num_iids: list[str], fields: str = DEFAULT_SKUS_FIELDS) -> list[dict[str, Any]]:
+        self._record("item_skus_get", num_iids=list(num_iids), fields=fields)
+        wanted = {str(item) for item in num_iids}
+        if not wanted:
+            return list(self.remote_skus)
+        return [sku for sku in self.remote_skus if str(sku.get("NumIid", "")) in wanted]
+
+    def card_pwd_category_get_list(self, page_no: int = 1, page_size: int = 100) -> dict[str, Any]:
+        self._record("card_pwd_category_get_list", page_no=page_no, page_size=page_size)
+        return {"List": list(self.categories), "HasNext": False}
+
+    def card_pwd_category_get_storage(self, id_nos: list[int | str]) -> list[dict[str, Any]]:
+        self._record("card_pwd_category_get_storage", id_nos=[str(i) for i in id_nos])
+        return [{"IdNo": int(i) if str(i).isdigit() else i, "Qty": 0} for i in id_nos]
+
+    def card_pwd_add(
+        self,
+        cpc_id: int | str,
+        lines: list[str],
+        *,
+        is_use_first: bool = False,
+        allow_replace: bool = False,
+        summary: str = "",
+    ) -> dict[str, Any]:
+        self._record(
+            "card_pwd_add",
+            cpc_id=str(cpc_id),
+            lines=list(lines),
+            is_use_first=is_use_first,
+            allow_replace=allow_replace,
+            summary=summary,
+        )
+        return {
+            "AddSuccessCount": len(lines),
+            "AddFailCount": 0,
+            "ReplaceUnSoldSuccessCount": 0,
+            "ReplaceSoldSuccessCount": 0,
+            "ReplaceFailCount": 0,
+        }

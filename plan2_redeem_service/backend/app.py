@@ -2,17 +2,39 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import json
 import logging
 from pathlib import Path
+import time
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, UploadFile
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
+from .agiso import (
+    AgisoClient,
+    AgisoError,
+    DryRunAgisoClient,
+    build_redeem_url,
+    format_delivery_message,
+    verify_agiso_push_signature,
+)
 from .config import Settings
 from .db import Ledger
 from .gateways import CanbosoClient, Channel16688Client, DryRun16688, DryRunCanboso
-from .models import BatchRequest, IssueRequest, RedeemRequest, RetryRequest, RevokeRequest, SkuPatchRequest, WarrantyAckRequest
+from .models import (
+    AgisoOrderRetryRequest,
+    AgisoPushCardsRequest,
+    AgisoSkuMappingRequest,
+    AgisoSyncOrdersRequest,
+    BatchRequest,
+    IssueRequest,
+    RedeemRequest,
+    RetryRequest,
+    RevokeRequest,
+    SkuPatchRequest,
+    WarrantyAckRequest,
+)
 from .service import Mailer, SKUS, Service
 
 
@@ -27,7 +49,13 @@ def status_for(code: str) -> int:
     return {"CODE_NOT_FOUND": 404, "CODE_REVOKED": 409, "CONCURRENT_IN_PROGRESS": 409, "ORDER_NOT_ELIGIBLE": 409, "CANNOT_REVOKE_COMPLETED": 409, "RETRY_NOT_AVAILABLE": 409, "WARRANTY_LOCKED": 409, "WARRANTY_NOT_APPLICABLE": 409, "WARRANTY_NOT_ALLOWED": 409, "INVALID_EMAIL": 422, "EMAIL_MISMATCH": 422, "PREFLIGHT_REQUIRED": 422, "INVALID_SCREENSHOT_TYPE": 422, "SCREENSHOT_TOO_LARGE": 422, "SCREENSHOT_EMPTY": 422, "NOTE_TOO_LONG": 422, "INVALID_CHANNEL": 422, "GOODS_NO_REQUIRED": 422}.get(code, 503)
 
 
-def create_app(settings: Optional[Settings] = None, canboso: Any = None, channel: Any = None, mailer: Optional[Mailer] = None) -> FastAPI:
+def create_app(
+    settings: Optional[Settings] = None,
+    canboso: Any = None,
+    channel: Any = None,
+    mailer: Optional[Mailer] = None,
+    agiso: Any = None,
+) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.prepare()
     ledger = Ledger(settings.db_path)
@@ -43,8 +71,18 @@ def create_app(settings: Optional[Settings] = None, canboso: Any = None, channel
         )
     )
     channel = channel or (DryRun16688() if settings.execution_mode == "dry_run" else Channel16688Client(settings.channel16688_base_url, settings.channel16688_api_key, settings.channel16688_api_secret, settings.canboso_timeout_seconds))
+    agiso = agiso or (
+        DryRunAgisoClient()
+        if settings.execution_mode == "dry_run"
+        else AgisoClient(
+            settings.agiso_api_base_url,
+            settings.agiso_app_secret,
+            settings.agiso_access_token,
+            settings.agiso_timeout_seconds,
+        )
+    )
     mailer = mailer or Mailer(settings)
-    service = Service(ledger, settings, canboso, channel, mailer)
+    service = Service(ledger, settings, canboso, channel, mailer, agiso=agiso)
 
     async def poller() -> None:
         while True:
@@ -57,17 +95,30 @@ def create_app(settings: Optional[Settings] = None, canboso: Any = None, channel
                     logger.warning("background poll failed code=%s error=%s", row["code"], type(exc).__name__)
                     service.alert(row["code"], "UPSTREAM_ERROR")
 
+    async def agiso_poller() -> None:
+        while True:
+            await asyncio.sleep(max(15, settings.agiso_poll_interval_seconds))
+            if not settings.agiso_poll_enabled or not getattr(agiso, "is_ready", False):
+                continue
+            try:
+                await asyncio.to_thread(service.sync_agiso_orders)
+            except Exception as exc:
+                logger.warning("background agiso sync failed error=%s", type(exc).__name__)
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
-        task = asyncio.create_task(poller())
+        tasks = [asyncio.create_task(poller())]
+        if settings.agiso_poll_enabled:
+            tasks.append(asyncio.create_task(agiso_poller()))
         try:
             yield
         finally:
-            task.cancel()
-            await asyncio.gather(task, return_exceptions=True)
+            for task in tasks:
+                task.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
 
     app = FastAPI(title="Plan 2 Redeem Service", version="1.0.0", lifespan=lifespan)
-    app.state.settings, app.state.ledger, app.state.service, app.state.mailer = settings, ledger, service, mailer
+    app.state.settings, app.state.ledger, app.state.service, app.state.mailer, app.state.agiso = settings, ledger, service, mailer, agiso
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(_, exc: HTTPException) -> JSONResponse:
@@ -86,6 +137,112 @@ def create_app(settings: Optional[Settings] = None, canboso: Any = None, channel
     @app.get("/api/v1/health")
     def health() -> dict[str, str]:
         return {"status": "ok", "execution_mode": settings.execution_mode}
+
+    @app.post("/api/v1/webhooks/agiso")
+    async def agiso_webhook(request: Request, svc: Service = Depends(get_service)) -> PlainTextResponse:
+        if not settings.agiso_app_secret.strip():
+            return PlainTextResponse("服务未配置", status_code=503)
+        try:
+            form = await request.form()
+        except Exception:
+            form = {}
+        from_platform = (request.query_params.get("fromPlatform") or str(form.get("fromPlatform") or "")).strip()
+        timestamp_raw = (request.query_params.get("timestamp") or str(form.get("timestamp") or "")).strip()
+        aopic_raw = (request.query_params.get("aopic") or str(form.get("aopic") or "")).strip()
+        sign = (request.query_params.get("sign") or str(form.get("sign") or "")).strip()
+        raw_json_value = form.get("json")
+        if raw_json_value is None:
+            raw_json_value = request.query_params.get("json")
+        raw_json = str(raw_json_value) if raw_json_value is not None else ""
+
+        try:
+            ts_int = int(timestamp_raw)
+        except ValueError:
+            ledger.record_agiso_event(
+                source="webhook",
+                from_platform=from_platform,
+                aopic=None,
+                tid="",
+                oid="",
+                status="invalid_timestamp",
+                detail="缺少或非法 timestamp",
+            )
+            return PlainTextResponse("时间戳无效", status_code=403)
+
+        if settings.agiso_timestamp_tolerance_seconds > 0:
+            skew = abs(int(time.time()) - ts_int)
+            if skew > settings.agiso_timestamp_tolerance_seconds:
+                ledger.record_agiso_event(
+                    source="webhook",
+                    from_platform=from_platform,
+                    aopic=int(aopic_raw) if aopic_raw.isdigit() else None,
+                    tid="",
+                    oid="",
+                    status="timestamp_expired",
+                    detail=f"时间戳偏差 {skew}s 超出允许范围 {settings.agiso_timestamp_tolerance_seconds}s",
+                )
+                return PlainTextResponse("时间戳无效", status_code=403)
+
+        if not verify_agiso_push_signature(raw_json, timestamp_raw, sign, settings.agiso_app_secret.strip()):
+            ledger.record_agiso_event(
+                source="webhook",
+                from_platform=from_platform,
+                aopic=int(aopic_raw) if aopic_raw.isdigit() else None,
+                tid="",
+                oid="",
+                status="invalid_signature",
+                detail="推送签名校验未通过",
+            )
+            return PlainTextResponse("验签失败", status_code=403)
+
+        try:
+            aopic = int(aopic_raw)
+        except ValueError:
+            ledger.record_agiso_event(
+                source="webhook",
+                from_platform=from_platform,
+                aopic=None,
+                tid="",
+                oid="",
+                status="invalid_aopic",
+                detail=f"非法 aopic: {aopic_raw[:32]}",
+            )
+            return PlainTextResponse("参数错误", status_code=400)
+
+        try:
+            payload = json.loads(raw_json)
+        except ValueError:
+            ledger.record_agiso_event(
+                source="webhook",
+                from_platform=from_platform,
+                aopic=aopic,
+                tid="",
+                oid="",
+                status="invalid_json",
+                detail="json 参数解析失败",
+            )
+            return PlainTextResponse("参数错误", status_code=400)
+        if not isinstance(payload, dict):
+            ledger.record_agiso_event(
+                source="webhook",
+                from_platform=from_platform,
+                aopic=aopic,
+                tid="",
+                oid="",
+                status="invalid_json",
+                detail="json 参数必须为对象",
+            )
+            return PlainTextResponse("参数错误", status_code=400)
+
+        status_code, body_text, _ = await asyncio.to_thread(
+            svc.handle_agiso_webhook,
+            from_platform=from_platform,
+            aopic=aopic,
+            payload=payload,
+            timestamp=timestamp_raw,
+            sign=sign,
+        )
+        return PlainTextResponse(body_text, status_code=status_code)
 
     @app.get("/api/v1/public/codes/{code}")
     def public_code(code: str, svc: Service = Depends(get_service)) -> Any:
@@ -177,21 +334,8 @@ def create_app(settings: Optional[Settings] = None, canboso: Any = None, channel
         except ValueError as e:
             return error(str(e), "找不到这个商品 SKU", 422)
         sku = SKUS[body.sku_key]
-        url = f"{settings.public_base_url}/r/{row['code']}"
-        if sku["product_type"] == "slot":
-            wangwang_message = (
-                f"感谢下单 {sku['title']}！\n"
-                f"点链接填您的 Gmail 提货：{url}\n"
-                f"兑换码：{row['code']}\n"
-                "提交后一般 1~6 小时内发家庭组邀请（最晚 24 小时），随时能在链接里看进度。"
-            )
-        else:
-            wangwang_message = (
-                f"感谢下单 {sku['title']}！\n"
-                f"点链接直接领套餐邮箱：{url}\n"
-                f"兑换码：{row['code']}\n"
-                "领完建好家庭组并邀请商店邮箱后，记得在同一页传截图登记保修。"
-            )
+        url = build_redeem_url(settings.public_base_url, row["code"])
+        wangwang_message = format_delivery_message(sku["title"], sku["product_type"], row["code"], url)
         return {"code": row["code"], "redeem_url": url, "wangwang_message": wangwang_message, "item": svc.admin_summary(row)}
 
     @app.post("/api/v1/admin/codes/batch", status_code=201, dependencies=[Depends(require_admin)])
@@ -302,6 +446,122 @@ def create_app(settings: Optional[Settings] = None, canboso: Any = None, channel
             return {"ok": True, "message": "测试邮件已发出，请去收件箱看看"}
         except Exception:
             return error("SMTP_ERROR", "测试邮件没发出去，请检查邮箱配置", 503)
+
+    @app.get("/api/v1/admin/agiso/status", dependencies=[Depends(require_admin)])
+    def admin_agiso_status(svc: Service = Depends(get_service)) -> Any:
+        return svc.agiso_status()
+
+    @app.get("/api/v1/admin/agiso/sku-mappings", dependencies=[Depends(require_admin)])
+    def admin_agiso_list_sku_mappings(svc: Service = Depends(get_service)) -> Any:
+        all_rules = svc.agiso_sku_rules(enabled_only=False)
+        db_items = [rule for rule in all_rules if rule.get("source") == "db"]
+        env_items = [rule for rule in all_rules if rule.get("source") == "env"]
+        return {"items": db_items, "env_rules": env_items}
+
+    @app.post("/api/v1/admin/agiso/sku-mappings", status_code=201, dependencies=[Depends(require_admin)])
+    def admin_agiso_create_sku_mapping(body: AgisoSkuMappingRequest, svc: Service = Depends(get_service)) -> Any:
+        try:
+            return svc.create_agiso_sku_mapping(body.model_dump())
+        except ValueError as exc:
+            messages = {
+                "UNKNOWN_SKU": "找不到这个商品 SKU",
+                "MATCHER_REQUIRED": "至少需要填写一个匹配条件（num_iid / sku_id / outer_iid / outer_sku_id / sku_props_contains）",
+            }
+            return error(str(exc), messages.get(str(exc), "SKU 映射参数不对"), 422)
+
+    @app.delete("/api/v1/admin/agiso/sku-mappings/{mapping_id}", dependencies=[Depends(require_admin)])
+    def admin_agiso_delete_sku_mapping(mapping_id: int) -> Any:
+        deleted = ledger.delete_agiso_sku_mapping(mapping_id)
+        if not deleted:
+            return error("MAPPING_NOT_FOUND", "没找到这条 SKU 映射规则", 404)
+        return {"ok": True, "mapping_id": mapping_id}
+
+    @app.get("/api/v1/admin/agiso/events", dependencies=[Depends(require_admin)])
+    def admin_agiso_events(
+        tid: Optional[str] = None,
+        aopic: Optional[int] = None,
+        status: Optional[str] = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+    ) -> Any:
+        clauses: list[str] = []
+        params: list[Any] = []
+        if tid and tid.strip():
+            clauses.append("tid=?")
+            params.append(tid.strip())
+        if aopic is not None:
+            clauses.append("aopic=?")
+            params.append(aopic)
+        if status and status.strip():
+            clauses.append("status=?")
+            params.append(status.strip())
+        rows, total = ledger.list_agiso_events(" AND ".join(clauses), tuple(params), page_size, (page - 1) * page_size)
+        response: dict[str, Any] = {"items": rows, "total": total, "page": page, "page_size": page_size}
+        if tid and tid.strip():
+            response["deliveries"] = ledger.list_agiso_deliveries_by_tid(tid.strip())
+        return response
+
+    @app.post("/api/v1/admin/agiso/orders/{tid}/retry", dependencies=[Depends(require_admin)])
+    def admin_agiso_retry_order(
+        tid: str,
+        body: Optional[AgisoOrderRetryRequest] = None,
+        svc: Service = Depends(get_service),
+    ) -> Any:
+        req = body or AgisoOrderRetryRequest()
+        try:
+            result = svc.retry_agiso_order(tid, fetch_from_agiso=req.fetch_from_agiso)
+        except AgisoError as exc:
+            return error("AGISO_ERROR", exc.message, 503)
+        if result is None:
+            return error("ORDER_NOT_FOUND", "没找到这笔阿奇索发货记录", 404)
+        return result
+
+    @app.post("/api/v1/admin/agiso/sync-orders", dependencies=[Depends(require_admin)])
+    def admin_agiso_sync_orders(
+        body: Optional[AgisoSyncOrdersRequest] = None,
+        svc: Service = Depends(get_service),
+    ) -> Any:
+        req = body or AgisoSyncOrdersRequest()
+        try:
+            return svc.sync_agiso_orders(
+                lookback_minutes=req.lookback_minutes,
+                page_size=req.page_size,
+                max_pages=req.max_pages,
+            )
+        except AgisoError as exc:
+            return error("AGISO_ERROR", exc.message, 503)
+
+    @app.get("/api/v1/admin/agiso/remote-skus", dependencies=[Depends(require_admin)])
+    def admin_agiso_remote_skus(num_iids: str = Query(..., min_length=1), svc: Service = Depends(get_service)) -> Any:
+        parsed = [item.strip() for item in num_iids.split(",") if item.strip()]
+        if not parsed:
+            return error("NUM_IIDS_REQUIRED", "请提供至少一个宝贝 ID（num_iids）", 422)
+        if len(parsed) > 40:
+            return error("TOO_MANY_NUM_IIDS", "单次最多查询 40 个宝贝 ID", 422)
+        try:
+            return {"items": svc.get_agiso_remote_skus(parsed)}
+        except AgisoError as exc:
+            return error("AGISO_ERROR", exc.message, 503)
+
+    @app.post("/api/v1/admin/agiso/push-cards", status_code=201, dependencies=[Depends(require_admin)])
+    def admin_agiso_push_cards(body: AgisoPushCardsRequest, svc: Service = Depends(get_service)) -> Any:
+        try:
+            return svc.push_agiso_cards(
+                sku_key=body.sku_key,
+                cpc_id=body.cpc_id,
+                count=body.count,
+                batch_label=body.batch_label,
+                is_use_first=body.is_use_first,
+                allow_replace=body.allow_replace,
+            )
+        except ValueError as exc:
+            messages = {
+                "COUNT_OUT_OF_RANGE": "数量要在 1 到 500 之间",
+                "UNKNOWN_SKU": "找不到这个商品 SKU",
+            }
+            return error(str(exc), messages.get(str(exc), "推送卡密参数不对"), 422)
+        except AgisoError as exc:
+            return error("AGISO_ERROR", exc.message, 503)
 
     @app.get("/api/{path:path}")
     def api_not_found(path: str) -> JSONResponse:

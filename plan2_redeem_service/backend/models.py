@@ -50,6 +50,36 @@ class SkuPatchRequest(BaseModel):
     goods_no: Optional[str] = None
 
 
+class AgisoSkuMappingRequest(BaseModel):
+    sku_key: str
+    num_iid: str = ""
+    sku_id: str = ""
+    outer_iid: str = ""
+    outer_sku_id: str = ""
+    sku_props_contains: str = ""
+    enabled: bool = True
+    note: str = ""
+
+
+class AgisoSyncOrdersRequest(BaseModel):
+    lookback_minutes: int = Field(default=60, ge=1, le=10080)
+    page_size: int = Field(default=50, ge=1, le=100)
+    max_pages: int = Field(default=5, ge=1, le=20)
+
+
+class AgisoOrderRetryRequest(BaseModel):
+    fetch_from_agiso: bool = True
+
+
+class AgisoPushCardsRequest(BaseModel):
+    sku_key: str
+    cpc_id: int = Field(ge=1)
+    count: int = Field(ge=1, le=500)
+    batch_label: str = ""
+    is_use_first: bool = False
+    allow_replace: bool = False
+
+
 class PublicCodeResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
     code: str

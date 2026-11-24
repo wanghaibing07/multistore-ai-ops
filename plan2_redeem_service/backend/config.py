@@ -8,6 +8,17 @@ from typing import Any
 import yaml
 
 
+def _parse_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value).strip().lower()
+    if text in {"1", "true", "yes", "on"}:
+        return True
+    if text in {"0", "false", "no", "off", ""}:
+        return False
+    raise ValueError(f"Invalid boolean setting value: {value!r}")
+
+
 @dataclass
 class Settings:
     execution_mode: str = "dry_run"
@@ -31,6 +42,20 @@ class Settings:
     smtp_from: str = ""
     merchant_email: str = ""
     poll_interval_seconds: int = 1200
+    agiso_app_id: str = ""
+    agiso_app_secret: str = ""
+    agiso_access_token: str = ""
+    agiso_api_base_url: str = "https://gw-api.agiso.com"
+    agiso_timeout_seconds: float = 15.0
+    agiso_timestamp_tolerance_seconds: int = 600
+    agiso_auto_create_result: bool = True
+    agiso_auto_dummy_send: bool = True
+    agiso_auto_send_tb_card: bool = True
+    agiso_auto_send_ww_msg: bool = False
+    agiso_auto_revoke_on_refund: bool = True
+    agiso_poll_enabled: bool = False
+    agiso_poll_interval_seconds: int = 120
+    agiso_sku_rules_json: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -53,6 +78,15 @@ class Settings:
             "canboso_products_cache_ttl_seconds": float,
             "canboso_get_retries": int,
             "canboso_low_balance_threshold_usd": float,
+            "agiso_timeout_seconds": float,
+            "agiso_timestamp_tolerance_seconds": int,
+            "agiso_auto_create_result": _parse_bool,
+            "agiso_auto_dummy_send": _parse_bool,
+            "agiso_auto_send_tb_card": _parse_bool,
+            "agiso_auto_send_ww_msg": _parse_bool,
+            "agiso_auto_revoke_on_refund": _parse_bool,
+            "agiso_poll_enabled": _parse_bool,
+            "agiso_poll_interval_seconds": int,
         }
         for key in values:
             env_name = "PLAN2_" + key.upper()
