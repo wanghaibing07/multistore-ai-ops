@@ -18,24 +18,25 @@ TRANSIENT_HTTP_STATUSES = {500, 502, 503, 504}
 _KEY_PARAM_RE = re.compile(r"(key=)[^&\s\"']+", re.IGNORECASE)
 
 
-def _sanitize_error_text(text: str, secret: str = "") -> str:
+def _sanitize_error_text(text: str, secret: str = "", *extra_secrets: str) -> str:
     cleaned = (text or "").strip()
-    if secret:
-        cleaned = cleaned.replace(secret, "[REDACTED]")
+    for candidate in (secret, *extra_secrets):
+        if candidate:
+            cleaned = cleaned.replace(candidate, "[REDACTED]")
     cleaned = _KEY_PARAM_RE.sub(r"\1[REDACTED]", cleaned)
     cleaned = " ".join(cleaned.split())
     return cleaned[:200]
 
 
-def _extract_response_error_detail(response: Any, secret: str = "") -> str:
+def _extract_response_error_detail(response: Any, secret: str = "", *extra_secrets: str) -> str:
     detail = ""
     try:
         payload = response.json()
         if isinstance(payload, dict):
-            detail = str(payload.get("message") or payload.get("error") or "")
+            detail = str(payload.get("message") or payload.get("msg") or payload.get("error") or "")
     except Exception:
         detail = str(getattr(response, "text", "") or "")
-    return _sanitize_error_text(detail, secret)
+    return _sanitize_error_text(detail, secret, *extra_secrets)
 
 
 class UpstreamTimeout(Exception):
@@ -43,8 +44,17 @@ class UpstreamTimeout(Exception):
 
 
 class UpstreamError(Exception):
-    def __init__(self, status_code: int, message: str, retry_after: Optional[int] = None):
-        self.status_code, self.message, self.retry_after = status_code, message, retry_after
+    def __init__(
+        self,
+        status_code: int,
+        message: str,
+        retry_after: Optional[int] = None,
+        rejected: bool = False,
+    ):
+        self.status_code = status_code
+        self.message = message
+        self.retry_after = retry_after
+        self.rejected = rejected
         super().__init__(message)
 
 
@@ -151,24 +161,42 @@ class Channel16688Client:
     def _call(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         nonce = "".join(secrets.choice("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") for _ in range(24))
         params = {**params, "app_id": self.api_key, "nonce": nonce, "timestamp": int(time.time())}
-        controller, action = path.strip("/").split("/")[-2:]
+        normalized_path = path.strip("/")
+        controller, action = normalized_path.split("/")[-2:]
         canonical = "&".join(f"{key}={_canonical_value(params[key])}" for key in sorted(params))
         plain = f"POST\n{controller.lower()}\n{action.lower()}\n{canonical}"
         params["sign"] = hmac.new(self.api_secret.encode(), plain.encode(), hashlib.sha256).hexdigest()
+        if self.base_url.lower().endswith("/openapi") and normalized_path.lower().startswith("openapi/"):
+            url = self.base_url + "/" + normalized_path[len("openapi/"):]
+        else:
+            url = self.base_url + "/" + normalized_path
         try:
-            r = httpx.post(self.base_url + "/" + path.strip("/"), json=params, timeout=self.timeout)
+            r = httpx.post(url, json=params, timeout=self.timeout)
         except httpx.TimeoutException as e:
-            raise UpstreamTimeout(str(e)) from e
+            detail = _sanitize_error_text(str(e) or "16688 request timed out", self.api_secret, self.api_key)
+            raise UpstreamTimeout(detail or "16688 request timed out") from e
+        except httpx.ConnectError as e:
+            raise UpstreamError(503, f"16688 network error ({type(e).__name__})", rejected=True) from e
         except httpx.HTTPError as e:
-            raise UpstreamError(503, "16688 network error") from e
+            raise UpstreamError(503, f"16688 network error ({type(e).__name__})", rejected=False) from e
         if r.status_code >= 400:
-            raise UpstreamError(r.status_code, "16688 rejected request")
+            detail = _extract_response_error_detail(r, self.api_secret, self.api_key)
+            message = f"16688 HTTP {r.status_code}: {detail}" if detail else f"16688 HTTP {r.status_code}"
+            raise UpstreamError(r.status_code, message, rejected=(400 <= r.status_code < 500))
         try:
             body = r.json()
         except ValueError as e:
-            raise UpstreamError(502, "invalid 16688 response") from e
+            raise UpstreamError(502, "invalid 16688 response", rejected=False) from e
+        if not isinstance(body, dict):
+            raise UpstreamError(502, "invalid 16688 response", rejected=False)
         if body.get("code") not in (None, 1, "1"):
-            raise UpstreamError(502, "16688 business error")
+            detail = _sanitize_error_text(
+                str(body.get("msg") or body.get("message") or body.get("error") or ""),
+                self.api_secret,
+                self.api_key,
+            )
+            message = detail or f"16688 business error (code={body.get('code')})"
+            raise UpstreamError(502, message, rejected=True)
         return body.get("data") or body
 
     def verify_order(self, code: str, goods_no: str) -> dict[str, Any]:

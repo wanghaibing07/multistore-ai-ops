@@ -251,6 +251,9 @@
   "export_lines_with_url": "提货链接：https://redeem.example.com/r/U20S-.... | 兑换码：U20S-....\n..."
 }
 ```
+- 16688 渠道导入失败时返回结构化错误，不再裸抛 `500`：
+  - `CHANNEL_16688_REJECTED`（`422` 或 `502`）：16688 明确拒绝（如商品非卡密/自动发货、商品不存在、连接被拒绝），本地不落库、不留孤儿兑换码。
+  - `CHANNEL_16688_TIMEOUT`（`504`）或 `CHANNEL_16688_ERROR`（`502`）：请求结果不明确（超时或 5xx/断流），为防止 16688 实际已导入导致买家找不到码，本地会以「待核对库存」备注保留该批次兑换码并提示商家核对。
 
 ### 5.5 订单与兑换码列表
 `GET /api/v1/admin/codes?status=&channel=&sku_key=&q=&page=1&page_size=20`

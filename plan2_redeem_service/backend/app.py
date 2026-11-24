@@ -21,7 +21,7 @@ from .agiso import (
 )
 from .config import Settings
 from .db import Ledger
-from .gateways import CanbosoClient, Channel16688Client, DryRun16688, DryRunCanboso
+from .gateways import CanbosoClient, Channel16688Client, DryRun16688, DryRunCanboso, UpstreamError, UpstreamTimeout
 from .models import (
     AgisoOrderRetryRequest,
     AgisoPushCardsRequest,
@@ -351,6 +351,43 @@ def create_app(
                 "GOODS_NO_REQUIRED": "16688 批量制码需要先填商品编号",
             }
             return error(str(e), batch_messages.get(str(e), "批量制码参数不对，请检查后再试"), 422)
+        except UpstreamTimeout as exc:
+            logger.warning(
+                "admin batch 16688 timeout sku=%s goods_no=%s detail=%s",
+                body.sku_key,
+                body.goods_no or "",
+                exc,
+            )
+            return error(
+                "CHANNEL_16688_TIMEOUT",
+                "16688 卡密导入超时，本地已先保留本次兑换码（备注待核对库存），请先去 16688 后台确认是否已导入成功，避免重复制码",
+                504,
+            )
+        except UpstreamError as exc:
+            logger.warning(
+                "admin batch 16688 failed sku=%s goods_no=%s status=%s rejected=%s detail=%s",
+                body.sku_key,
+                body.goods_no or "",
+                exc.status_code,
+                exc.rejected,
+                exc.message,
+            )
+            detail = exc.message or "16688 接口异常"
+            if exc.rejected:
+                status = 422 if 400 <= exc.status_code < 500 else 502
+                hint = ""
+                if "卡密" in detail or "自动发货" in detail:
+                    hint = "。请确认该 16688 商品的发货方式为「卡密/自动发货」，或改选「淘宝提前备码」"
+                return error(
+                    "CHANNEL_16688_REJECTED",
+                    f"16688 拒绝导入卡密：{detail}{hint}",
+                    status,
+                )
+            return error(
+                "CHANNEL_16688_ERROR",
+                f"16688 卡密导入结果异常（{detail}），本地已先保留本次兑换码（备注待核对库存），请先去 16688 后台核对是否已导入",
+                502,
+            )
 
     @app.get("/api/v1/admin/codes", dependencies=[Depends(require_admin)])
     def list_codes(status: Optional[str] = None, channel: Optional[str] = None, sku_key: Optional[str] = None, q: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), svc: Service = Depends(get_service)) -> Any:

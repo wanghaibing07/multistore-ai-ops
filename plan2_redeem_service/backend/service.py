@@ -5,6 +5,7 @@ import logging
 import re
 import secrets
 import uuid
+from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from email.message import EmailMessage
 from pathlib import Path
@@ -112,6 +113,63 @@ class Service:
         self.ledger.insert_code({"code": code, "sku_key": sku_key, "channel": channel, "batch_id": batch_id, "goods_no": goods_no or sku.get("goods_no"), "external_order_id": external_order_id, "remark": remark, "status": "unused", "created_at": t, "updated_at": t})
         return self._code_row(code)
 
+    def _generate_unique_codes(self, sku_key: str, count: int) -> list[str]:
+        codes: list[str] = []
+        seen: set[str] = set()
+        while len(codes) < count:
+            needed = count - len(codes)
+            candidates: list[str] = []
+            while len(candidates) < needed:
+                candidate = self._new_code(sku_key)
+                if candidate not in seen:
+                    seen.add(candidate)
+                    candidates.append(candidate)
+            placeholders = ",".join("?" for _ in candidates)
+            with closing(self.ledger.connect()) as conn:
+                existing = {
+                    row["code"]
+                    for row in conn.execute(
+                        f"SELECT code FROM codes WHERE code IN ({placeholders})",
+                        tuple(candidates),
+                    )
+                }
+            for candidate in candidates:
+                if candidate not in existing:
+                    codes.append(candidate)
+        return codes
+
+    def _persist_batch(
+        self,
+        batch_id: str,
+        sku_key: str,
+        channel: str,
+        goods_no: Optional[str],
+        label: str,
+        codes: list[str],
+        remark: str = "",
+        audit_reason: str = "issued",
+    ) -> None:
+        timestamp = now_iso()
+        with self.ledger.transaction(immediate=True) as conn:
+            conn.executemany(
+                """INSERT INTO codes(
+                    code, sku_key, channel, batch_id, goods_no,
+                    external_order_id, remark, status, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                [
+                    (code, sku_key, channel, batch_id, goods_no, "", remark, "unused", timestamp, timestamp)
+                    for code in codes
+                ],
+            )
+            conn.executemany(
+                "INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)",
+                [(code, None, "unused", audit_reason, timestamp) for code in codes],
+            )
+            conn.execute(
+                "INSERT INTO batches(batch_id,sku_key,channel,goods_no,batch_label,count,created_at) VALUES(?,?,?,?,?,?,?)",
+                (batch_id, sku_key, channel, goods_no, label, len(codes), timestamp),
+            )
+
     def batch(self, sku_key: str, channel: str, count: int, goods_no: Optional[str], label: str) -> dict[str, Any]:
         if count < 1 or count > 500:
             raise ValueError("COUNT_OUT_OF_RANGE")
@@ -119,20 +177,57 @@ class Service:
         if not sku:
             raise ValueError("UNKNOWN_SKU")
         batch_id = "B" + datetime.now().strftime("%Y%m%d%H%M%S") + secrets.token_hex(2).upper()
-        resolved_goods = goods_no or sku.get("goods_no")
+        trimmed_goods = (goods_no or "").strip() or None
+        sku_goods = (sku.get("goods_no") or "").strip() or None
+        resolved_goods = trimmed_goods or sku_goods
         if channel == "16688" and not resolved_goods:
             raise ValueError("GOODS_NO_REQUIRED")
-        codes = [self.issue(sku_key, channel, batch_id=batch_id, goods_no=resolved_goods)["code"] for _ in range(count)]
-        with self.ledger.transaction(immediate=True) as c:
-            c.execute("INSERT INTO batches(batch_id,sku_key,channel,goods_no,batch_label,count,created_at) VALUES(?,?,?,?,?,?,?)", (batch_id, sku_key, channel, resolved_goods, label, count, now_iso()))
+        codes = self._generate_unique_codes(sku_key, count)
         if channel == "16688" and resolved_goods:
-            content = "\n\n".join(f"提货链接：{self.settings.public_base_url}/r/{code}\n兑换码：{code}" for code in codes)
-            # In dry_run this is the injected safe adapter. The production adapter is
-            # only selected after the operator explicitly switches execution_mode=live.
-            self.channel.stock_secret_add(resolved_goods, content)
-        return {"batch_id": batch_id, "sku_key": sku_key, "channel": channel, "count": count, "codes": codes,
-                "export_lines_code_only": "\n".join(codes),
-                "export_lines_with_url": "\n".join(f"提货链接：{self.settings.public_base_url}/r/{c} | 兑换码：{c}" for c in codes)}
+            content = "\n\n".join(
+                f"提货链接：{build_redeem_url(self.settings.public_base_url, code)}\n兑换码：{code}"
+                for code in codes
+            )
+            try:
+                self.channel.stock_secret_add(resolved_goods, content)
+            except UpstreamTimeout:
+                self._persist_batch(
+                    batch_id,
+                    sku_key,
+                    channel,
+                    resolved_goods,
+                    label,
+                    codes,
+                    remark=f"16688 导入超时待核对库存(batch={batch_id})",
+                    audit_reason="issued_16688_import_uncertain",
+                )
+                raise
+            except UpstreamError as exc:
+                if not exc.rejected:
+                    self._persist_batch(
+                        batch_id,
+                        sku_key,
+                        channel,
+                        resolved_goods,
+                        label,
+                        codes,
+                        remark=f"16688 导入结果待核对库存(batch={batch_id})",
+                        audit_reason="issued_16688_import_uncertain",
+                    )
+                raise
+        self._persist_batch(batch_id, sku_key, channel, resolved_goods, label, codes)
+        return {
+            "batch_id": batch_id,
+            "sku_key": sku_key,
+            "channel": channel,
+            "count": count,
+            "codes": codes,
+            "export_lines_code_only": "\n".join(codes),
+            "export_lines_with_url": "\n".join(
+                f"提货链接：{build_redeem_url(self.settings.public_base_url, code)} | 兑换码：{code}"
+                for code in codes
+            ),
+        }
 
     def redeem(self, code: str, buyer_email: Optional[str], confirm: Optional[str], preflight: bool) -> tuple[dict[str, Any], Optional[str]]:
         row = self.ledger.get_code(code)

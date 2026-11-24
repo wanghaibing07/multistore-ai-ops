@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+from contextlib import closing
 import hashlib
 import hmac
 import json
@@ -768,4 +769,174 @@ def test_canboso_purchase_does_not_retry_timeout_and_preflight_records_detail(tm
         assert detail["last_error_code"] == "UPSTREAM_ERROR"
         assert "上游预检失败" in detail["last_error_message"]
         assert "timed out after 25s" in detail["last_error_message"]
+
+
+def test_16688_client_preserves_sanitized_business_error_and_normalizes_openapi_base_url(monkeypatch):
+    captured_urls = []
+
+    class FakeResponse:
+        def __init__(self, status_code, payload=None, text=""):
+            self.status_code = status_code
+            self._payload = payload
+            self.text = text
+
+        def json(self):
+            if self._payload is None:
+                raise ValueError("not json")
+            return self._payload
+
+    responses = [
+        FakeResponse(200, {"code": 0, "msg": "仅卡密商品支持导入库存 secret-token app-id-val"}),
+        FakeResponse(400, {"msg": "参数非法 key=raw-secret"}),
+        FakeResponse(502, text="bad gateway secret-token"),
+    ]
+
+    def fake_post(url, **kwargs):
+        captured_urls.append(url)
+        return responses.pop(0)
+
+    monkeypatch.setattr("httpx.post", fake_post)
+    client_ = Channel16688Client("https://16688.example/openApi/", "app-id-val", "secret-token")
+
+    with pytest.raises(UpstreamError) as business_exc:
+        client_.stock_secret_add("G66428225", "content")
+    assert captured_urls[-1] == "https://16688.example/openApi/stockSecretBatch/add"
+    assert business_exc.value.rejected is True
+    assert "仅卡密商品支持导入库存" in business_exc.value.message
+    assert "secret-token" not in business_exc.value.message
+    assert "app-id-val" not in business_exc.value.message
+
+    with pytest.raises(UpstreamError) as client_err:
+        client_.stock_secret_add("G66428225", "content")
+    assert client_err.value.status_code == 400
+    assert client_err.value.rejected is True
+    assert "参数非法" in client_err.value.message
+    assert "raw-secret" not in client_err.value.message
+
+    with pytest.raises(UpstreamError) as server_err:
+        client_.stock_secret_add("G66428225", "content")
+    assert server_err.value.status_code == 502
+    assert server_err.value.rejected is False
+    assert "secret-token" not in server_err.value.message
+
+    def fake_connect_error(url, **kwargs):
+        raise httpx.ConnectError("connect failed")
+
+    monkeypatch.setattr("httpx.post", fake_connect_error)
+    with pytest.raises(UpstreamError) as conn_err:
+        client_.stock_secret_add("G66428225", "content")
+    assert conn_err.value.rejected is True
+
+    def fake_read_error(url, **kwargs):
+        raise httpx.ReadError("read broken")
+
+    monkeypatch.setattr("httpx.post", fake_read_error)
+    with pytest.raises(UpstreamError) as read_err:
+        client_.stock_secret_add("G66428225", "content")
+    assert read_err.value.rejected is False
+
+
+def test_admin_batch_16688_rejection_returns_structured_error_without_orphan_codes(components):
+    app, _, _, _, _ = components
+
+    class Rejecting16688:
+        def __init__(self, exc):
+            self.exc = exc
+
+        def stock_secret_add(self, goods_no, content):
+            raise self.exc
+
+    app.state.service.channel = Rejecting16688(UpstreamError(502, "仅卡密商品支持导入库存", rejected=True))
+    with client(app) as c:
+        resp = c.post(
+            "/api/v1/admin/codes/batch",
+            headers=ADMIN,
+            json={"sku_key": "ultra_shared_slot", "channel": "16688", "count": 5, "goods_no": "G66428225", "batch_label": "测试批次"},
+        )
+        assert resp.status_code == 502
+        body = resp.json()
+        assert body["error_code"] == "CHANNEL_16688_REJECTED"
+        assert "仅卡密商品支持导入库存" in body["message"]
+        assert "卡密/自动发货" in body["message"]
+
+        with closing(app.state.ledger.connect()) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM codes").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM batches").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM audit_events").fetchone()[0] == 0
+
+        app.state.service.channel = Rejecting16688(UpstreamError(400, "16688 HTTP 400: goods_no invalid", rejected=True))
+        resp_4xx = c.post(
+            "/api/v1/admin/codes/batch",
+            headers=ADMIN,
+            json={"sku_key": "ultra_shared_slot", "channel": "16688", "count": 2, "goods_no": "G_BAD", "batch_label": "测试4xx"},
+        )
+        assert resp_4xx.status_code == 422
+        assert resp_4xx.json()["error_code"] == "CHANNEL_16688_REJECTED"
+        with closing(app.state.ledger.connect()) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM codes").fetchone()[0] == 0
+            assert conn.execute("SELECT COUNT(*) FROM batches").fetchone()[0] == 0
+
+
+def test_admin_batch_16688_timeout_and_ambiguous_error_persist_reconciliation_codes(components):
+    app, _, _, _, _ = components
+
+    class Timeout16688:
+        def stock_secret_add(self, goods_no, content):
+            raise UpstreamTimeout("16688 timed out")
+
+    app.state.service.channel = Timeout16688()
+    with client(app) as c:
+        resp = c.post(
+            "/api/v1/admin/codes/batch",
+            headers=ADMIN,
+            json={"sku_key": "ultra_shared_slot", "channel": "16688", "count": 3, "goods_no": "G100", "batch_label": "超时批次"},
+        )
+        assert resp.status_code == 504
+        assert resp.json()["error_code"] == "CHANNEL_16688_TIMEOUT"
+        with closing(app.state.ledger.connect()) as conn:
+            rows = conn.execute("SELECT code, remark, status FROM codes").fetchall()
+            assert len(rows) == 3
+            assert all(row["status"] == "unused" and "16688 导入超时待核对库存" in row["remark"] for row in rows)
+            assert conn.execute("SELECT COUNT(*) FROM batches").fetchone()[0] == 1
+            audits = conn.execute("SELECT reason FROM audit_events").fetchall()
+            assert len(audits) == 3
+            assert all(item["reason"] == "issued_16688_import_uncertain" for item in audits)
+
+    class Ambiguous16688:
+        def stock_secret_add(self, goods_no, content):
+            raise UpstreamError(503, "16688 network error (ReadError)", rejected=False)
+
+    app.state.service.channel = Ambiguous16688()
+    with client(app) as c:
+        resp = c.post(
+            "/api/v1/admin/codes/batch",
+            headers=ADMIN,
+            json={"sku_key": "ultra_shared_slot", "channel": "16688", "count": 2, "goods_no": "G100", "batch_label": "断流批次"},
+        )
+        assert resp.status_code == 502
+        assert resp.json()["error_code"] == "CHANNEL_16688_ERROR"
+        with closing(app.state.ledger.connect()) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM codes").fetchone()[0] == 5
+            assert conn.execute("SELECT COUNT(*) FROM batches").fetchone()[0] == 2
+
+
+def test_admin_batch_taobao_persists_atomically_without_calling_16688(components):
+    app, settings, _, channel, _ = components
+    settings.public_base_url = "https://redeem.example.com/"
+    with client(app) as c:
+        resp = c.post(
+            "/api/v1/admin/codes/batch",
+            headers=ADMIN,
+            json={"sku_key": "ultra_shared_slot", "channel": "taobao", "count": 4, "batch_label": "淘宝备码"},
+        )
+        assert resp.status_code == 201
+        body = resp.json()
+        assert body["count"] == 4
+        assert len(body["codes"]) == 4
+        assert "https://redeem.example.com//r/" not in body["export_lines_with_url"]
+        assert "https://redeem.example.com/r/" in body["export_lines_with_url"]
+        assert channel.imported == []
+        with closing(app.state.ledger.connect()) as conn:
+            assert conn.execute("SELECT COUNT(*) FROM codes WHERE batch_id=?", (body["batch_id"],)).fetchone()[0] == 4
+            assert conn.execute("SELECT COUNT(*) FROM batches WHERE batch_id=?", (body["batch_id"],)).fetchone()[0] == 1
 
