@@ -56,8 +56,9 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 1
 - `PLAN2_TG_SESSION`：Telethon `StringSession`（严格保存在 `.env`，严禁写入仓库或日志）
 - `PLAN2_TG_WEB_PROFILE_DIR`：`web` 模式使用的 Chromium 持久化 Profile 目录（如 `./data/tg_web_profile`，权限应为 `700`）
 - `PLAN2_TG_WEB_URL`：`web` 模式入口（默认 `https://web.telegram.org/k/`）
-- `PLAN2_TG_ADMIN_TARGET`：管理员目标（支持纯数字 `peerId` 或 `@username`）
-- `PLAN2_TG_TIMEOUT_SECONDS`：发送超时秒数（默认 `20`，`web` 模式建议设为 `45`）
+- `PLAN2_TG_ADMIN_TARGET`：管理员目标（`telethon` 模式支持纯数字 `peerId` 或 `@username`；`web` 模式强制要求纯数字 `peerId` 以防错发）
+- `PLAN2_TG_TIMEOUT_SECONDS`：发送超时秒数（默认 `20`，`web` 模式内部下限 `30`、建议设为 `45`）
+- `PLAYWRIGHT_BROWSERS_PATH`：`web` 模式 Chromium 浏览器目录；systemd 启用 `ProtectHome=true` 时须放在 `/home`/`/root` 之外且运行用户可读的目录（如 `/opt/plan2_redeem_service/pw-browsers`），安装命令为 `pip install -e ".[tg-web]"` 与 `PLAYWRIGHT_BROWSERS_PATH=/opt/plan2_redeem_service/pw-browsers playwright install chromium`
 
 获取 `StringSession` 与只读校验目标的辅助命令（不会发送测试消息）：
 

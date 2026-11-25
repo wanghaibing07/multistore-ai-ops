@@ -691,6 +691,8 @@ class _FakeWebPage:
         confirmed_mid: int = 11565,
         delivery_error: bool = False,
         mismatch_before_click: bool = False,
+        stuck_draft: bool = False,
+        corrupt_text_before_click: bool = False,
     ) -> None:
         self.logged_in = logged_in
         self.target_peer = target_peer
@@ -699,6 +701,8 @@ class _FakeWebPage:
         self.confirmed_mid = confirmed_mid
         self.delivery_error = delivery_error
         self.mismatch_before_click = mismatch_before_click
+        self.stuck_draft = stuck_draft
+        self.corrupt_text_before_click = corrupt_text_before_click
         self.composer_text = ""
         self.clicks: list[str] = []
         self.sent_payloads: list[str] = []
@@ -738,12 +742,24 @@ class _FakeWebPage:
                 "composerVisible": True,
             }
         if "btnReady:" in script:
+            assert isinstance(arg, dict)
+            expected_peer = str(arg.get("expectedPeer") or "")
+            expected_norm = str(arg.get("expectedNorm") or "")
+            actual_norm = " ".join(self.composer_text.split())
+            if self.corrupt_text_before_click:
+                actual_norm = "stale draft " + actual_norm
             return {
-                "peerMatch": (not self.mismatch_before_click) and (self.active_peer == arg),
-                "textLen": len(self.composer_text.strip()),
-                "btnReady": bool(self.composer_text.strip()),
+                "peerMatch": (not self.mismatch_before_click) and (self.active_peer == expected_peer),
+                "textLen": len(actual_norm),
+                "textMatch": bool(expected_norm) and actual_norm == expected_norm,
+                "btnReady": bool(actual_norm),
                 "maxMid": self.before_mid,
+                "errorMids": [],
             }
+        if "allCount" in script:
+            return {"maxMid": self.before_mid, "allCount": 3, "errorMids": []}
+        if "innerText || '').trim().length)" in script:
+            return 5 if self.stuck_draft else len(self.composer_text.strip())
         if "let maxMid = 0;" in script:
             return self.before_mid
         if "peer-title')?.getAttribute('data-peer-id')" in script:
@@ -822,6 +838,15 @@ def test_build_telegram_forwarder_transport_selection(tmp_path: Path):
     )
     assert missing_profile_fwd.is_ready is False
 
+    username_target_fwd = PlaywrightTelegramWebForwarder(
+        enabled=True,
+        profile_dir=str(profile_dir),
+        target="@admin_handle",
+    )
+    assert username_target_fwd.is_ready is False
+    with pytest.raises(TelegramForwardError, match="numeric peerId"):
+        username_target_fwd.send_text("hello")
+
 
 def test_playwright_web_forwarder_send_verify_and_guards(tmp_path: Path):
     profile_dir = tmp_path / "tg_web_profile"
@@ -886,6 +911,32 @@ def test_playwright_web_forwarder_send_verify_and_guards(tmp_path: Path):
     with pytest.raises(TelegramForwardError, match="failed to deliver"):
         err_fwd.send_text("test")
 
+    stuck_page = _FakeWebPage(stuck_draft=True)
+    stuck_fwd = PlaywrightTelegramWebForwarder(
+        enabled=True,
+        profile_dir=str(profile_dir),
+        target="998877",
+        timeout_seconds=5.0,
+        min_interval_seconds=0.0,
+        page_factory=_page_ctx_factory(stuck_page),
+    )
+    with pytest.raises(TelegramForwardError, match="could not be cleared"):
+        stuck_fwd.send_text("test")
+    assert stuck_page.sent_payloads == []
+
+    corrupt_page = _FakeWebPage(corrupt_text_before_click=True)
+    corrupt_fwd = PlaywrightTelegramWebForwarder(
+        enabled=True,
+        profile_dir=str(profile_dir),
+        target="998877",
+        timeout_seconds=5.0,
+        min_interval_seconds=0.0,
+        page_factory=_page_ctx_factory(corrupt_page),
+    )
+    with pytest.raises(TelegramForwardError, match="text mismatch"):
+        corrupt_fwd.send_text("test")
+    assert corrupt_page.sent_payloads == []
+
 
 def test_tg_login_verify_only_web_transport(tmp_path: Path, monkeypatch, capsys):
     from backend import tg_login
@@ -946,3 +997,6 @@ def test_tg_login_verify_only_web_transport(tmp_path: Path, monkeypatch, capsys)
     out = capsys.readouterr().out
     assert '"transport": "web"' in out
     assert '"ok": true' in out
+
+    assert tg_login.main(["--env-file", str(valid_env)]) == 1
+    assert "--verify-only" in capsys.readouterr().err

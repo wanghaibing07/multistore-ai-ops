@@ -292,23 +292,44 @@ class TelegramWarrantyForwarder:
 
 
 @contextmanager
-def _profile_file_lock(profile_dir: Path) -> Iterator[None]:
+def _profile_file_lock(profile_dir: Path, timeout_seconds: float = 30.0) -> Iterator[None]:
     if fcntl is None or not profile_dir.is_dir():
         yield
         return
     lock_path = profile_dir / ".plan2_tg_web.lock"
     handle = open(lock_path, "a+", encoding="utf-8")
+    acquired = False
     try:
-        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        deadline = time.monotonic() + max(1.0, float(timeout_seconds))
+        while True:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                acquired = True
+                break
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    raise TelegramForwardError("Timed out waiting for Telegram Web profile lock") from None
+                time.sleep(0.1)
         yield
     finally:
-        try:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
-        except Exception:
-            pass
+        if acquired:
+            try:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
         try:
             handle.close()
         except Exception:
+            pass
+
+
+def _cleanup_stale_singleton_files(profile_dir: Path) -> None:
+    for name in ("SingletonLock", "SingletonSocket", "SingletonCookie"):
+        candidate = profile_dir / name
+        try:
+            if os.path.lexists(candidate):
+                candidate.unlink()
+        except OSError:
             pass
 
 
@@ -318,10 +339,17 @@ def _build_playwright_env() -> dict[str, str]:
     home = env.get("HOME", "")
     if not home or not os.path.isdir(home) or not os.access(home, os.W_OK):
         env["HOME"] = tmp_dir
-    for key, subdir in (("XDG_CONFIG_HOME", ".config"), ("XDG_CACHE_HOME", ".cache")):
+    for key, subdir in (
+        ("XDG_CONFIG_HOME", ".config"),
+        ("XDG_CACHE_HOME", ".cache"),
+        ("XDG_DATA_HOME", ".local-share"),
+        ("XDG_RUNTIME_DIR", ".runtime"),
+    ):
         current = env.get(key, "")
         if not current or not os.path.isdir(current) or not os.access(current, os.W_OK):
-            env[key] = os.path.join(tmp_dir, subdir)
+            fallback = os.path.join(tmp_dir, subdir)
+            os.makedirs(fallback, exist_ok=True)
+            env[key] = fallback
     return env
 
 
@@ -362,9 +390,11 @@ class PlaywrightTelegramWebForwarder:
     @property
     def is_ready(self) -> bool:
         profile = self.profile_path
+        cleaned_target = self.target.strip()
         return bool(
             self.enabled
-            and self.target.strip()
+            and cleaned_target
+            and NUMERIC_PEER_RE.match(cleaned_target)
             and profile is not None
             and profile.is_dir()
         )
@@ -380,6 +410,7 @@ class PlaywrightTelegramWebForwarder:
             raise TelegramForwardError("Telegram Web profile directory does not exist")
         from playwright.async_api import async_playwright
 
+        _cleanup_stale_singleton_files(profile)
         env = _build_playwright_env()
         async with async_playwright() as playwright:
             context = await playwright.chromium.launch_persistent_context(
@@ -402,10 +433,10 @@ class PlaywrightTelegramWebForwarder:
         cleaned = self.target.strip()
         if not cleaned:
             raise TelegramForwardError("Telegram admin target is empty")
+        if not NUMERIC_PEER_RE.match(cleaned):
+            raise TelegramForwardError("Telegram Web transport requires a numeric peerId target")
 
-        is_numeric = bool(NUMERIC_PEER_RE.match(cleaned))
-        username_norm = cleaned.lstrip("@").strip().lower()
-        target_fragment = f"#{cleaned}" if is_numeric else f"#@{username_norm}"
+        target_fragment = f"#{cleaned}"
         target_url = f"{self.web_url}{target_fragment}"
 
         nav_timeout_ms = max(5000, int(min(30.0, max(5.0, deadline - time.monotonic())) * 1000))
@@ -416,8 +447,6 @@ class PlaywrightTelegramWebForwarder:
         while time.monotonic() < deadline:
             auth_state = await page.evaluate(
                 """() => {
-                    const keys = Object.keys(localStorage);
-                    const hasAuth = keys.some(k => /user_auth|account1|dc\\d+_auth_key/i.test(k));
                     const pageChats = document.querySelector('#page-chats');
                     const inChats = !!pageChats && getComputedStyle(pageChats).display !== 'none';
                     const authPages = document.querySelector('#auth-pages');
@@ -438,6 +467,7 @@ class PlaywrightTelegramWebForwarder:
                             }
                         } catch {}
                     }
+                    const hasAuth = parsedMeId !== null || Boolean(localStorage.getItem('user_auth') || localStorage.getItem('account1'));
                     return { hasAuth, inChats, authVisible, hasLoginPrompt, meId: parsedMeId };
                 }"""
             )
@@ -471,48 +501,32 @@ class PlaywrightTelegramWebForwarder:
                 }"""
             )
             active_peer_id = str(chat_state.get("peerId") or "")
-            active_hash = str(chat_state.get("hash") or "").lower()
             composer_visible = bool(chat_state.get("composerVisible"))
 
-            if is_numeric:
-                if active_peer_id == cleaned and composer_visible:
-                    return {
-                        "me_id": me_id,
-                        "target_id": active_peer_id,
-                        "target_title": str(chat_state.get("peerTitle") or ""),
-                        "composer_ready": True,
-                    }
-                if not fallback_clicked and time.monotonic() >= click_fallback_at:
-                    fallback_clicked = True
-                    chat_item = page.locator(
-                        f'.chatlist a.chatlist-chat[data-peer-id="{cleaned}"], '
-                        f'.chatlist [data-peer-id="{cleaned}"]'
-                    ).first
-                    try:
-                        if await chat_item.count() > 0:
-                            await chat_item.click(timeout=5000)
-                    except Exception:
-                        pass
-                elif not hash_retried and time.monotonic() >= hash_retry_at:
-                    hash_retried = True
-                    await page.evaluate(
-                        "(frag) => { window.location.hash = frag; window.dispatchEvent(new HashChangeEvent('hashchange')); }",
-                        target_fragment,
-                    )
-            else:
-                if active_peer_id and active_hash == f"#@{username_norm}" and composer_visible:
-                    return {
-                        "me_id": me_id,
-                        "target_id": active_peer_id,
-                        "target_title": str(chat_state.get("peerTitle") or ""),
-                        "composer_ready": True,
-                    }
-                if not hash_retried and time.monotonic() >= click_fallback_at:
-                    hash_retried = True
-                    await page.evaluate(
-                        "(frag) => { window.location.hash = frag; window.dispatchEvent(new HashChangeEvent('hashchange')); }",
-                        target_fragment,
-                    )
+            if active_peer_id == cleaned and composer_visible:
+                return {
+                    "me_id": me_id,
+                    "target_id": active_peer_id,
+                    "target_title": str(chat_state.get("peerTitle") or ""),
+                    "composer_ready": True,
+                }
+            if not fallback_clicked and time.monotonic() >= click_fallback_at:
+                fallback_clicked = True
+                chat_item = page.locator(
+                    f'.chatlist a.chatlist-chat[data-peer-id="{cleaned}"], '
+                    f'.chatlist [data-peer-id="{cleaned}"]'
+                ).first
+                try:
+                    if await chat_item.count() > 0:
+                        await chat_item.click(timeout=5000)
+                except Exception:
+                    pass
+            elif not hash_retried and time.monotonic() >= hash_retry_at:
+                hash_retried = True
+                await page.evaluate(
+                    "(frag) => { window.location.hash = frag; window.dispatchEvent(new HashChangeEvent('hashchange')); }",
+                    target_fragment,
+                )
 
             await page.wait_for_timeout(300)
 
@@ -522,22 +536,34 @@ class PlaywrightTelegramWebForwarder:
         chat_info = await self._open_target_chat(page, deadline)
         expected_peer_id = str(chat_info["target_id"])
 
-        before_max_mid = int(
-            await page.evaluate(
+        history_wait_until = min(deadline, time.monotonic() + 1.5)
+        before_max_mid = 0
+        before_error_mids: set[str] = set()
+        while True:
+            snap = await page.evaluate(
                 """() => {
                     let maxMid = 0;
+                    const errorMids = [];
+                    const allCount = document.querySelectorAll('.chat.active .bubble[data-mid]').length;
                     for (const el of document.querySelectorAll('.chat.active .bubble.is-out[data-mid]')) {
                         const raw = (el.getAttribute('data-mid') || '').trim();
+                        if (el.classList.contains('is-error') && raw) {
+                            errorMids.push(raw);
+                        }
                         if (/^\\d+$/.test(raw)) {
                             const num = Number(raw);
                             if (Number.isSafeInteger(num) && num > maxMid) maxMid = num;
                         }
                     }
-                    return maxMid;
+                    return { maxMid, allCount, errorMids };
                 }"""
             )
-            or 0
-        )
+            before_max_mid = max(before_max_mid, int((snap or {}).get("maxMid") or 0))
+            for item in (snap or {}).get("errorMids") or ():
+                before_error_mids.add(str(item))
+            if int((snap or {}).get("allCount") or 0) > 0 or time.monotonic() >= history_wait_until:
+                break
+            await page.wait_for_timeout(200)
 
         current_peer_id = str(
             await page.evaluate(
@@ -549,12 +575,26 @@ class PlaywrightTelegramWebForwarder:
             raise TelegramForwardError("Active Telegram Web chat peer mismatch before send")
 
         composer = page.locator('.chat.active .input-message-input[contenteditable="true"]').first
-        await composer.click()
-        await page.keyboard.press("Control+A")
-        await page.keyboard.press("Backspace")
+        for _attempt in range(2):
+            await composer.click(timeout=5000)
+            await page.keyboard.press("Control+A")
+            await page.keyboard.press("Backspace")
+            draft_len = int(
+                await page.evaluate(
+                    "() => ((document.querySelector('.chat.active .input-message-input[contenteditable=\"true\"]')?.innerText || '').trim().length)"
+                )
+                or 0
+            )
+            if draft_len == 0:
+                break
+        else:
+            raise TelegramForwardError("Telegram Web composer could not be cleared")
 
         normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
         lines = normalized_text.split("\n")
+        expected_norm = re.sub(r"\s+", " ", normalized_text).strip()
+        if not expected_norm:
+            raise TelegramForwardError("Telegram message text is empty")
         for idx, line in enumerate(lines):
             if idx > 0:
                 await page.keyboard.press("Shift+Enter")
@@ -563,35 +603,48 @@ class PlaywrightTelegramWebForwarder:
         await page.wait_for_timeout(250)
 
         send_ready = await page.evaluate(
-            """(expectedPeer) => {
+            """(payload) => {
+                const expectedPeer = String(payload?.expectedPeer || '');
+                const expectedNorm = String(payload?.expectedNorm || '');
                 const topPeer = document.querySelector('.chat.active .topbar .peer-title, .chat.active .chat-info .peer-title');
                 const box = document.querySelector('.chat.active .input-message-input[contenteditable="true"]');
                 const btn = document.querySelector('.chat.active button.btn-send');
                 let maxMid = 0;
+                const errorMids = [];
                 for (const el of document.querySelectorAll('.chat.active .bubble.is-out[data-mid]')) {
                     const raw = (el.getAttribute('data-mid') || '').trim();
+                    if (el.classList.contains('is-error') && raw) {
+                        errorMids.push(raw);
+                    }
                     if (/^\\d+$/.test(raw)) {
                         const num = Number(raw);
                         if (Number.isSafeInteger(num) && num > maxMid) maxMid = num;
                     }
                 }
+                const boxNorm = box ? (box.innerText || '').replace(/\\s+/g, ' ').trim() : '';
                 return {
                     peerMatch: (topPeer?.getAttribute('data-peer-id') || '').trim() === expectedPeer,
-                    textLen: box ? (box.innerText || '').trim().length : 0,
+                    textLen: boxNorm.length,
+                    textMatch: Boolean(expectedNorm) && boxNorm === expectedNorm,
                     btnReady: Boolean(btn && !btn.disabled && btn.classList.contains('send')),
                     maxMid,
+                    errorMids,
                 };
             }""",
-            expected_peer_id,
+            {"expectedPeer": expected_peer_id, "expectedNorm": expected_norm},
         )
         if not send_ready.get("peerMatch"):
             raise TelegramForwardError("Active Telegram Web chat peer mismatch before click")
         if not send_ready.get("textLen") or not send_ready.get("btnReady"):
             raise TelegramForwardError("Telegram Web composer or send button is not ready")
+        if not send_ready.get("textMatch"):
+            raise TelegramForwardError("Telegram Web composer text mismatch before send")
         before_max_mid = max(before_max_mid, int(send_ready.get("maxMid") or 0))
+        for item in send_ready.get("errorMids") or ():
+            before_error_mids.add(str(item))
         required_tokens = [re.sub(r"\s+", " ", line).strip() for line in lines if line.strip()]
 
-        await page.locator(".chat.active button.btn-send").first.click()
+        await page.locator(".chat.active button.btn-send").first.click(timeout=5000)
 
         confirm_deadline = max(deadline, time.monotonic() + 12.0)
         while time.monotonic() < confirm_deadline:
@@ -599,6 +652,7 @@ class PlaywrightTelegramWebForwarder:
                 """(payload) => {
                     const minMid = Number(payload?.minMid || 0);
                     const requiredTokens = Array.isArray(payload?.requiredTokens) ? payload.requiredTokens : [];
+                    const ignoredErrorMids = new Set(Array.isArray(payload?.ignoredErrorMids) ? payload.ignoredErrorMids : []);
                     const bubbles = Array.from(document.querySelectorAll('.chat.active .bubble.is-out[data-mid]'));
                     let confirmedMid = 0;
                     let hasError = false;
@@ -608,7 +662,7 @@ class PlaywrightTelegramWebForwarder:
                         const isError = el.classList.contains('is-error');
                         if (isError) {
                             const num = Number(raw);
-                            if (!Number.isFinite(num) || num > minMid) hasError = true;
+                            if (!ignoredErrorMids.has(raw) && (!Number.isFinite(num) || num > minMid)) hasError = true;
                         }
                         if (/^\\d+$/.test(raw) && !isSending && !isError) {
                             const num = Number(raw);
@@ -628,7 +682,11 @@ class PlaywrightTelegramWebForwarder:
                         remainingDraftLen: box ? (box.innerText || '').trim().length : 0,
                     };
                 }""",
-                {"minMid": before_max_mid, "requiredTokens": required_tokens},
+                {
+                    "minMid": before_max_mid,
+                    "requiredTokens": required_tokens,
+                    "ignoredErrorMids": sorted(before_error_mids),
+                },
             )
             if status.get("hasError"):
                 raise TelegramForwardError("Telegram Web failed to deliver message")
@@ -646,46 +704,54 @@ class PlaywrightTelegramWebForwarder:
 
     def send_text(self, text: str) -> dict[str, Any]:
         if not self.is_ready:
+            if self.enabled and self.target.strip() and not NUMERIC_PEER_RE.match(self.target.strip()):
+                raise TelegramForwardError("Telegram Web transport requires a numeric peerId target")
             raise TelegramForwardError("Telegram Web warranty forwarder is not configured")
 
         async def _do_send() -> dict[str, Any]:
-            deadline = time.monotonic() + self.timeout_seconds
             async with self._open_page() as page:
+                deadline = time.monotonic() + self.timeout_seconds
                 return await self._send_on_page(page, text, deadline)
 
         async def _with_timeout() -> dict[str, Any]:
             return await asyncio.wait_for(_do_send(), timeout=self.timeout_seconds + 15.0)
 
         profile = self.profile_path
+        lock_timeout = min(self.timeout_seconds, 30.0)
         with self._send_lock:
-            with _profile_file_lock(profile) if profile is not None else contextmanager(lambda: (yield))():
-                if self._last_send_monotonic is not None and self.min_interval_seconds > 0:
-                    elapsed = time.monotonic() - self._last_send_monotonic
-                    wait_seconds = self.min_interval_seconds - elapsed
-                    if wait_seconds > 0:
-                        time.sleep(wait_seconds)
-                try:
+            try:
+                with _profile_file_lock(profile, timeout_seconds=lock_timeout) if profile is not None else contextmanager(lambda: (yield))():
+                    if self._last_send_monotonic is not None and self.min_interval_seconds > 0:
+                        elapsed = time.monotonic() - self._last_send_monotonic
+                        wait_seconds = self.min_interval_seconds - elapsed
+                        if wait_seconds > 0:
+                            time.sleep(wait_seconds)
                     return _run_async(_with_timeout)
-                except TelegramForwardError as exc:
-                    raise TelegramForwardError(sanitize_tg_error(exc)) from None
-                except Exception as exc:
-                    raise TelegramForwardError(sanitize_tg_error(exc)) from None
-                finally:
-                    self._last_send_monotonic = time.monotonic()
+            except TelegramForwardError as exc:
+                raise TelegramForwardError(sanitize_tg_error(exc)) from None
+            except Exception as exc:
+                raise TelegramForwardError(sanitize_tg_error(exc)) from None
+            finally:
+                self._last_send_monotonic = time.monotonic()
 
     def verify_connection(self) -> dict[str, Any]:
         if not self.is_ready:
+            error_msg = (
+                "Telegram Web transport requires a numeric peerId target"
+                if self.enabled and self.target.strip() and not NUMERIC_PEER_RE.match(self.target.strip())
+                else "Telegram Web warranty forwarder is not configured"
+            )
             return {
                 "ok": False,
                 "mode": "live",
                 "transport": "web",
                 "target": self.target.strip(),
-                "error": "Telegram Web warranty forwarder is not configured",
+                "error": error_msg,
             }
 
         async def _do_verify() -> dict[str, Any]:
-            deadline = time.monotonic() + self.timeout_seconds
             async with self._open_page() as page:
+                deadline = time.monotonic() + self.timeout_seconds
                 chat_info = await self._open_target_chat(page, deadline)
                 return {
                     "ok": True,
@@ -702,14 +768,15 @@ class PlaywrightTelegramWebForwarder:
             return await asyncio.wait_for(_do_verify(), timeout=self.timeout_seconds + 10.0)
 
         profile = self.profile_path
+        lock_timeout = min(self.timeout_seconds, 30.0)
         with self._send_lock:
-            with _profile_file_lock(profile) if profile is not None else contextmanager(lambda: (yield))():
-                try:
+            try:
+                with _profile_file_lock(profile, timeout_seconds=lock_timeout) if profile is not None else contextmanager(lambda: (yield))():
                     return _run_async(_with_timeout)
-                except TelegramForwardError as exc:
-                    raise TelegramForwardError(sanitize_tg_error(exc)) from None
-                except Exception as exc:
-                    raise TelegramForwardError(sanitize_tg_error(exc)) from None
+            except TelegramForwardError as exc:
+                raise TelegramForwardError(sanitize_tg_error(exc)) from None
+            except Exception as exc:
+                raise TelegramForwardError(sanitize_tg_error(exc)) from None
 
 
 def resolve_tg_transport(settings: Any) -> str:
@@ -743,7 +810,7 @@ def build_telegram_forwarder(settings: Any) -> Any:
             profile_dir=getattr(settings, "tg_web_profile_dir", ""),
             target=settings.tg_admin_target,
             web_url=getattr(settings, "tg_web_url", "https://web.telegram.org/k/"),
-            timeout_seconds=settings.tg_timeout_seconds,
+            timeout_seconds=max(30.0, float(settings.tg_timeout_seconds or 45.0)),
         )
     return TelegramWarrantyForwarder(
         enabled=settings.tg_warranty_enabled,

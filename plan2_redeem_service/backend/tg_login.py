@@ -11,6 +11,7 @@ from typing import Optional
 
 from .config import Settings
 from .telegram_forwarder import (
+    NUMERIC_PEER_RE,
     PlaywrightTelegramWebForwarder,
     TelegramForwardError,
     TelegramWarrantyForwarder,
@@ -66,6 +67,9 @@ def _verify_only(args: argparse.Namespace) -> int:
             missing.append("PLAN2_TG_ADMIN_TARGET")
         if missing:
             print(f"配置不完整，缺少: {', '.join(missing)}", file=sys.stderr)
+            return 1
+        if not NUMERIC_PEER_RE.match(target):
+            print("web 模式要求 PLAN2_TG_ADMIN_TARGET 必须为纯数字 peerId（防错发保护）", file=sys.stderr)
             return 1
         forwarder = PlaywrightTelegramWebForwarder(
             enabled=True,
@@ -238,6 +242,14 @@ def main(argv: Optional[list[str]] = None) -> int:
 
     if args.verify_only:
         return _verify_only(args)
+    settings = Settings.from_env()
+    if args.transport is not None:
+        settings.tg_transport = args.transport.strip().lower() or "auto"
+    if args.profile_dir is not None:
+        settings.tg_web_profile_dir = args.profile_dir.strip()
+    if resolve_tg_transport(settings) == "web":
+        print("web 模式使用持久化浏览器 Profile（PLAN2_TG_WEB_PROFILE_DIR），此 CLI 仅支持 --verify-only 只读校验。", file=sys.stderr)
+        return 1
     return _interactive_login(args)
 
 
