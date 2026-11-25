@@ -90,10 +90,13 @@ class Settings:
     channel16688_restock_interval_seconds: int = 900
     channel16688_restock_rules_json: str = ""
     tg_warranty_enabled: bool = False
+    tg_transport: str = "auto"
     tg_api_id: int = 0
     tg_api_hash: str = field(default="", repr=False)
     tg_session: str = field(default="", repr=False)
     tg_admin_target: str = ""
+    tg_web_profile_dir: str = ""
+    tg_web_url: str = "https://web.telegram.org/k/"
     tg_timeout_seconds: float = 20.0
 
     @classmethod
@@ -121,6 +124,7 @@ class Settings:
             "channel16688_restock_enabled": _parse_bool,
             "channel16688_restock_interval_seconds": int,
             "tg_warranty_enabled": _parse_bool,
+            "tg_transport": lambda value: (str(value).strip().lower() if value is not None else "") or "auto",
             "tg_api_id": _parse_int_or_default(0),
             "tg_timeout_seconds": _parse_float_or_default(20.0),
         }
@@ -152,4 +156,6 @@ class Settings:
         Path(self.storage_dir).expanduser().mkdir(parents=True, exist_ok=True)
         if self.execution_mode not in {"dry_run", "live"}:
             raise ValueError("execution_mode must be dry_run or live")
+        if (self.tg_transport or "auto").strip().lower() not in {"auto", "telethon", "web"}:
+            raise ValueError("tg_transport must be auto, telethon, or web")
 

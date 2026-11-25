@@ -11,10 +11,12 @@ from typing import Optional
 
 from .config import Settings
 from .telegram_forwarder import (
+    PlaywrightTelegramWebForwarder,
     TelegramForwardError,
     TelegramWarrantyForwarder,
     _resolve_entity,
     _safe_disconnect,
+    resolve_tg_transport,
     sanitize_tg_error,
 )
 
@@ -39,10 +41,46 @@ def _load_dotenv_file(env_path: Path) -> None:
 
 def _verify_only(args: argparse.Namespace) -> int:
     settings = Settings.from_env()
+    if args.transport is not None:
+        settings.tg_transport = args.transport.strip().lower() or "auto"
+    if args.profile_dir is not None:
+        settings.tg_web_profile_dir = args.profile_dir.strip()
     api_id = args.api_id if args.api_id is not None else settings.tg_api_id
     api_hash = (args.api_hash if args.api_hash is not None else settings.tg_api_hash).strip()
     session = settings.tg_session.strip()
     target = (args.target if args.target is not None else settings.tg_admin_target).strip()
+    settings.tg_api_id = api_id
+    settings.tg_api_hash = api_hash
+    settings.tg_admin_target = target
+
+    transport = resolve_tg_transport(settings)
+    if transport == "web":
+        profile_dir = settings.tg_web_profile_dir.strip()
+        missing = []
+        if not profile_dir:
+            missing.append("PLAN2_TG_WEB_PROFILE_DIR")
+        elif not Path(profile_dir).expanduser().is_dir():
+            print(f"Telegram Web Profile 目录不存在: {profile_dir}", file=sys.stderr)
+            return 1
+        if not target:
+            missing.append("PLAN2_TG_ADMIN_TARGET")
+        if missing:
+            print(f"配置不完整，缺少: {', '.join(missing)}", file=sys.stderr)
+            return 1
+        forwarder = PlaywrightTelegramWebForwarder(
+            enabled=True,
+            profile_dir=profile_dir,
+            target=target,
+            web_url=settings.tg_web_url,
+            timeout_seconds=settings.tg_timeout_seconds,
+        )
+        try:
+            result = forwarder.verify_connection()
+        except TelegramForwardError as exc:
+            print(f"Telegram Web 只读连接检查失败: {exc}", file=sys.stderr)
+            return 1
+        print(json.dumps(result, ensure_ascii=False, indent=2))
+        return 0 if result.get("ok") else 1
 
     missing = []
     if api_id <= 0:
@@ -183,6 +221,13 @@ def main(argv: Optional[list[str]] = None) -> int:
         default=".env",
         help="可选 .env 文件路径（默认读取当前目录下的 .env，不覆盖已显式设置的环境变量）",
     )
+    parser.add_argument(
+        "--transport",
+        choices=("auto", "telethon", "web"),
+        default=None,
+        help="覆盖 PLAN2_TG_TRANSPORT（auto / telethon / web）",
+    )
+    parser.add_argument("--profile-dir", type=str, default=None, help="覆盖 PLAN2_TG_WEB_PROFILE_DIR")
     parser.add_argument("--api-id", type=int, default=None, help="覆盖 PLAN2_TG_API_ID")
     parser.add_argument("--api-hash", type=str, default=None, help="覆盖 PLAN2_TG_API_HASH")
     parser.add_argument("--target", type=str, default=None, help="覆盖 PLAN2_TG_ADMIN_TARGET")

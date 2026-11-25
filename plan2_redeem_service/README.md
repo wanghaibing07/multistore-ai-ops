@@ -48,13 +48,16 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 1
 
 ### Telegram 保修自动报备配置（可选）
 
-独享整组（`ultra_exclusive_admin`）支持免截图提交保修邮箱后，通过 Telethon 自动私聊向 Canboso 管理员报备；失败时自动邮件告警并可在管理后台重试。相关环境变量：
+独享整组（`ultra_exclusive_admin`）支持免截图提交保修邮箱后，通过 Telegram 自动私聊向 Canboso 管理员报备（支持 `telethon` MTProto 与 `web` Playwright Telegram Web K 持久化会话两种通道）；失败时自动邮件告警并可在管理后台重试。相关环境变量：
 
 - `PLAN2_TG_WARRANTY_ENABLED`：`true` / `false`（默认 `false`）
-- `PLAN2_TG_API_ID`、`PLAN2_TG_API_HASH`：Telegram 应用凭据（留空不影响服务启动）
+- `PLAN2_TG_TRANSPORT`：`auto` / `telethon` / `web`（默认 `auto`；填写 Telethon 三件套时优先 `telethon`，否则若配置了 `PLAN2_TG_WEB_PROFILE_DIR` 自动使用 `web`）
+- `PLAN2_TG_API_ID`、`PLAN2_TG_API_HASH`：Telegram 应用凭据（`telethon` 模式使用，留空不影响服务启动）
 - `PLAN2_TG_SESSION`：Telethon `StringSession`（严格保存在 `.env`，严禁写入仓库或日志）
+- `PLAN2_TG_WEB_PROFILE_DIR`：`web` 模式使用的 Chromium 持久化 Profile 目录（如 `./data/tg_web_profile`，权限应为 `700`）
+- `PLAN2_TG_WEB_URL`：`web` 模式入口（默认 `https://web.telegram.org/k/`）
 - `PLAN2_TG_ADMIN_TARGET`：管理员目标（支持纯数字 `peerId` 或 `@username`）
-- `PLAN2_TG_TIMEOUT_SECONDS`：发送超时秒数（默认 `20`）
+- `PLAN2_TG_TIMEOUT_SECONDS`：发送超时秒数（默认 `20`，`web` 模式建议设为 `45`）
 
 获取 `StringSession` 与只读校验目标的辅助命令（不会发送测试消息）：
 

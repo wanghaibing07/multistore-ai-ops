@@ -1,11 +1,20 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager, contextmanager
 import inspect
+import os
+from pathlib import Path
 import re
+import tempfile
 import threading
 import time
-from typing import Any, Callable, Coroutine, Iterable, Optional
+from typing import Any, AsyncIterator, Callable, Coroutine, Iterable, Iterator, Optional
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - Windows
+    fcntl = None
 
 from .db import now_iso
 
@@ -107,6 +116,8 @@ async def _resolve_entity(client: Any, target_text: str) -> Any:
 
 
 class DryRunTelegramForwarder:
+    transport = "dry_run"
+
     def __init__(self, enabled: bool = False, target: str = ""):
         self.enabled = bool(enabled)
         self.target = str(target or "")
@@ -143,6 +154,8 @@ class DryRunTelegramForwarder:
 
 
 class TelegramWarrantyForwarder:
+    transport = "telethon"
+
     def __init__(
         self,
         enabled: bool,
@@ -276,3 +289,470 @@ class TelegramWarrantyForwarder:
             raise TelegramForwardError(sanitize_tg_error(exc, self._secrets())) from None
         except Exception as exc:
             raise TelegramForwardError(sanitize_tg_error(exc, self._secrets())) from None
+
+
+@contextmanager
+def _profile_file_lock(profile_dir: Path) -> Iterator[None]:
+    if fcntl is None or not profile_dir.is_dir():
+        yield
+        return
+    lock_path = profile_dir / ".plan2_tg_web.lock"
+    handle = open(lock_path, "a+", encoding="utf-8")
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        try:
+            handle.close()
+        except Exception:
+            pass
+
+
+def _build_playwright_env() -> dict[str, str]:
+    env = os.environ.copy()
+    tmp_dir = tempfile.gettempdir()
+    home = env.get("HOME", "")
+    if not home or not os.path.isdir(home) or not os.access(home, os.W_OK):
+        env["HOME"] = tmp_dir
+    for key, subdir in (("XDG_CONFIG_HOME", ".config"), ("XDG_CACHE_HOME", ".cache")):
+        current = env.get(key, "")
+        if not current or not os.path.isdir(current) or not os.access(current, os.W_OK):
+            env[key] = os.path.join(tmp_dir, subdir)
+    return env
+
+
+class PlaywrightTelegramWebForwarder:
+    transport = "web"
+
+    def __init__(
+        self,
+        enabled: bool,
+        profile_dir: str,
+        target: str,
+        web_url: str = "https://web.telegram.org/k/",
+        timeout_seconds: float = 45.0,
+        min_interval_seconds: float = 1.5,
+        *,
+        page_factory: Optional[Callable[[], Any]] = None,
+    ):
+        self.enabled = bool(enabled)
+        self.profile_dir = str(profile_dir or "").strip()
+        self.target = str(target or "")
+        self.web_url = (str(web_url or "").strip() or "https://web.telegram.org/k/").rstrip("/") + "/"
+        self.timeout_seconds = max(5.0, float(timeout_seconds or 45.0))
+        self.min_interval_seconds = max(0.0, float(min_interval_seconds))
+        self._page_factory = page_factory
+        self._send_lock = threading.Lock()
+        self._last_send_monotonic: Optional[float] = None
+
+    @property
+    def target_configured(self) -> bool:
+        return bool(self.target.strip())
+
+    @property
+    def profile_path(self) -> Optional[Path]:
+        if not self.profile_dir:
+            return None
+        return Path(self.profile_dir).expanduser()
+
+    @property
+    def is_ready(self) -> bool:
+        profile = self.profile_path
+        return bool(
+            self.enabled
+            and self.target.strip()
+            and profile is not None
+            and profile.is_dir()
+        )
+
+    @asynccontextmanager
+    async def _open_page(self) -> AsyncIterator[Any]:
+        if self._page_factory is not None:
+            async with self._page_factory() as page:
+                yield page
+            return
+        profile = self.profile_path
+        if profile is None or not profile.is_dir():
+            raise TelegramForwardError("Telegram Web profile directory does not exist")
+        from playwright.async_api import async_playwright
+
+        env = _build_playwright_env()
+        async with async_playwright() as playwright:
+            context = await playwright.chromium.launch_persistent_context(
+                str(profile),
+                headless=True,
+                viewport={"width": 1280, "height": 900},
+                args=["--no-sandbox", "--disable-dev-shm-usage", "--disable-gpu"],
+                env=env,
+            )
+            try:
+                page = context.pages[0] if context.pages else await context.new_page()
+                yield page
+            finally:
+                try:
+                    await asyncio.wait_for(context.close(), timeout=5.0)
+                except Exception:
+                    pass
+
+    async def _open_target_chat(self, page: Any, deadline: float) -> dict[str, Any]:
+        cleaned = self.target.strip()
+        if not cleaned:
+            raise TelegramForwardError("Telegram admin target is empty")
+
+        nav_timeout_ms = max(5000, int(min(30.0, max(5.0, deadline - time.monotonic())) * 1000))
+        await page.goto(self.web_url, wait_until="domcontentloaded", timeout=nav_timeout_ms)
+
+        logged_in = False
+        me_id: Any = None
+        while time.monotonic() < deadline:
+            auth_state = await page.evaluate(
+                """() => {
+                    const keys = Object.keys(localStorage);
+                    const hasAuth = keys.some(k => /user_auth|account1|dc\\d+_auth_key/i.test(k));
+                    const pageChats = document.querySelector('#page-chats');
+                    const inChats = !!pageChats && getComputedStyle(pageChats).display !== 'none';
+                    const authPages = document.querySelector('#auth-pages');
+                    const authVisible = !!authPages && getComputedStyle(authPages).display !== 'none';
+                    const hasLoginPrompt = authVisible && (
+                        !!document.querySelector('.page-signQR, .page-sign, .input-field-phone') ||
+                        Array.from(document.querySelectorAll('button')).some(b => /LOG IN BY PHONE NUMBER/i.test(b.innerText || ''))
+                    );
+                    let parsedMeId = null;
+                    for (const key of ['user_auth', 'account1']) {
+                        const raw = localStorage.getItem(key);
+                        if (!raw) continue;
+                        try {
+                            const data = JSON.parse(raw);
+                            if (data && (data.id || data.userId)) {
+                                parsedMeId = data.id || data.userId;
+                                break;
+                            }
+                        } catch {}
+                    }
+                    return { hasAuth, inChats, authVisible, hasLoginPrompt, meId: parsedMeId };
+                }"""
+            )
+            if auth_state.get("hasLoginPrompt") and not auth_state.get("hasAuth"):
+                raise TelegramForwardError("Telegram Web session is not logged in")
+            if auth_state.get("inChats") and auth_state.get("hasAuth") and not auth_state.get("authVisible"):
+                logged_in = True
+                me_id = auth_state.get("meId")
+                break
+            await page.wait_for_timeout(400)
+
+        if not logged_in:
+            raise TelegramForwardError("Telegram Web session did not reach chat list before timeout")
+
+        chatlist_deadline = min(deadline, time.monotonic() + 8.0)
+        while time.monotonic() < chatlist_deadline:
+            has_items = await page.evaluate("() => !!document.querySelector('.chatlist a.chatlist-chat')")
+            if has_items:
+                break
+            await page.wait_for_timeout(300)
+
+        is_numeric = bool(NUMERIC_PEER_RE.match(cleaned))
+        username_norm = cleaned.lstrip("@").strip().lower()
+        hash_triggered = False
+
+        if is_numeric:
+            clicked = await page.evaluate(
+                """(peerId) => {
+                    const el = document.querySelector(`.chatlist a.chatlist-chat[data-peer-id="${peerId}"]`)
+                        || document.querySelector(`.chatlist [data-peer-id="${peerId}"]`);
+                    if (el) {
+                        el.click();
+                        return true;
+                    }
+                    return false;
+                }""",
+                cleaned,
+            )
+            if not clicked:
+                await page.evaluate("(peerId) => { window.location.hash = '#' + peerId; }", cleaned)
+                hash_triggered = True
+        else:
+            await page.evaluate("(uname) => { window.location.hash = '#@' + uname; }", username_norm)
+            hash_triggered = True
+
+        click_fallback_at = time.monotonic() + 3.5
+        while time.monotonic() < deadline:
+            chat_state = await page.evaluate(
+                """() => {
+                    const topPeer = document.querySelector('.chat.active .topbar .peer-title, .chat.active .chat-info .peer-title');
+                    const composer = document.querySelector('.chat.active .input-message-input[contenteditable="true"]');
+                    const rect = composer ? composer.getBoundingClientRect() : null;
+                    return {
+                        hash: (location.hash || '').trim(),
+                        peerId: topPeer ? (topPeer.getAttribute('data-peer-id') || '').trim() : '',
+                        peerTitle: topPeer ? (topPeer.innerText || '').trim().slice(0, 80) : '',
+                        composerVisible: Boolean(rect && rect.width > 0 && rect.height > 0),
+                    };
+                }"""
+            )
+            active_peer_id = str(chat_state.get("peerId") or "")
+            active_hash = str(chat_state.get("hash") or "").lower()
+            composer_visible = bool(chat_state.get("composerVisible"))
+
+            if is_numeric:
+                if active_peer_id == cleaned and composer_visible:
+                    return {
+                        "me_id": me_id,
+                        "target_id": active_peer_id,
+                        "target_title": str(chat_state.get("peerTitle") or ""),
+                        "composer_ready": True,
+                    }
+                if not hash_triggered and time.monotonic() >= click_fallback_at:
+                    await page.evaluate("(peerId) => { window.location.hash = '#' + peerId; }", cleaned)
+                    hash_triggered = True
+            else:
+                if active_peer_id and active_hash == f"#@{username_norm}" and composer_visible:
+                    return {
+                        "me_id": me_id,
+                        "target_id": active_peer_id,
+                        "target_title": str(chat_state.get("peerTitle") or ""),
+                        "composer_ready": True,
+                    }
+
+            await page.wait_for_timeout(300)
+
+        raise TelegramForwardError("Telegram Web target chat could not be opened or peer mismatch")
+
+    async def _send_on_page(self, page: Any, text: str, deadline: float) -> dict[str, Any]:
+        chat_info = await self._open_target_chat(page, deadline)
+        expected_peer_id = str(chat_info["target_id"])
+
+        before_max_mid = int(
+            await page.evaluate(
+                """() => {
+                    let maxMid = 0;
+                    for (const el of document.querySelectorAll('.chat.active .bubble.is-out[data-mid]')) {
+                        const raw = (el.getAttribute('data-mid') || '').trim();
+                        if (/^\\d+$/.test(raw)) {
+                            const num = Number(raw);
+                            if (Number.isSafeInteger(num) && num > maxMid) maxMid = num;
+                        }
+                    }
+                    return maxMid;
+                }"""
+            )
+            or 0
+        )
+
+        current_peer_id = str(
+            await page.evaluate(
+                "() => (document.querySelector('.chat.active .topbar .peer-title, .chat.active .chat-info .peer-title')?.getAttribute('data-peer-id') || '').trim()"
+            )
+            or ""
+        )
+        if current_peer_id != expected_peer_id:
+            raise TelegramForwardError("Active Telegram Web chat peer mismatch before send")
+
+        composer = page.locator('.chat.active .input-message-input[contenteditable="true"]').first
+        await composer.click()
+        await page.keyboard.press("Control+A")
+        await page.keyboard.press("Backspace")
+
+        normalized_text = text.replace("\r\n", "\n").replace("\r", "\n")
+        lines = normalized_text.split("\n")
+        for idx, line in enumerate(lines):
+            if idx > 0:
+                await page.keyboard.press("Shift+Enter")
+            if line:
+                await page.keyboard.insert_text(line)
+        await page.wait_for_timeout(250)
+
+        send_ready = await page.evaluate(
+            """(expectedPeer) => {
+                const topPeer = document.querySelector('.chat.active .topbar .peer-title, .chat.active .chat-info .peer-title');
+                const box = document.querySelector('.chat.active .input-message-input[contenteditable="true"]');
+                const btn = document.querySelector('.chat.active button.btn-send');
+                let maxMid = 0;
+                for (const el of document.querySelectorAll('.chat.active .bubble.is-out[data-mid]')) {
+                    const raw = (el.getAttribute('data-mid') || '').trim();
+                    if (/^\\d+$/.test(raw)) {
+                        const num = Number(raw);
+                        if (Number.isSafeInteger(num) && num > maxMid) maxMid = num;
+                    }
+                }
+                return {
+                    peerMatch: (topPeer?.getAttribute('data-peer-id') || '').trim() === expectedPeer,
+                    textLen: box ? (box.innerText || '').trim().length : 0,
+                    btnReady: Boolean(btn && !btn.disabled && btn.classList.contains('send')),
+                    maxMid,
+                };
+            }""",
+            expected_peer_id,
+        )
+        if not send_ready.get("peerMatch"):
+            raise TelegramForwardError("Active Telegram Web chat peer mismatch before click")
+        if not send_ready.get("textLen") or not send_ready.get("btnReady"):
+            raise TelegramForwardError("Telegram Web composer or send button is not ready")
+        before_max_mid = max(before_max_mid, int(send_ready.get("maxMid") or 0))
+        required_tokens = [re.sub(r"\s+", " ", line).strip() for line in lines if line.strip()]
+
+        await page.locator(".chat.active button.btn-send").first.click()
+
+        confirm_deadline = max(deadline, time.monotonic() + 12.0)
+        while time.monotonic() < confirm_deadline:
+            status = await page.evaluate(
+                """(payload) => {
+                    const minMid = Number(payload?.minMid || 0);
+                    const requiredTokens = Array.isArray(payload?.requiredTokens) ? payload.requiredTokens : [];
+                    const bubbles = Array.from(document.querySelectorAll('.chat.active .bubble.is-out[data-mid]'));
+                    let confirmedMid = 0;
+                    let hasError = false;
+                    for (const el of bubbles) {
+                        const raw = (el.getAttribute('data-mid') || '').trim();
+                        const isSending = el.classList.contains('is-sending');
+                        const isError = el.classList.contains('is-error');
+                        if (isError) {
+                            const num = Number(raw);
+                            if (!Number.isFinite(num) || num > minMid) hasError = true;
+                        }
+                        if (/^\\d+$/.test(raw) && !isSending && !isError) {
+                            const num = Number(raw);
+                            if (Number.isSafeInteger(num) && num > minMid && num > confirmedMid) {
+                                const bodyText = ((el.querySelector('.message')?.innerText || el.innerText || '').replace(/\\s+/g, ' ')).trim();
+                                const tokensOk = requiredTokens.every((token) => bodyText.includes(token));
+                                if (tokensOk) {
+                                    confirmedMid = num;
+                                }
+                            }
+                        }
+                    }
+                    const box = document.querySelector('.chat.active .input-message-input[contenteditable="true"]');
+                    return {
+                        confirmedMid,
+                        hasError,
+                        remainingDraftLen: box ? (box.innerText || '').trim().length : 0,
+                    };
+                }""",
+                {"minMid": before_max_mid, "requiredTokens": required_tokens},
+            )
+            if status.get("hasError"):
+                raise TelegramForwardError("Telegram Web failed to deliver message")
+            confirmed_mid = int(status.get("confirmedMid") or 0)
+            if confirmed_mid > before_max_mid:
+                await page.wait_for_timeout(800)
+                return {
+                    "message_id": confirmed_mid,
+                    "sent_at": now_iso(),
+                    "target": self.target.strip(),
+                }
+            await page.wait_for_timeout(300)
+
+        raise TelegramForwardError("Timed out waiting for Telegram Web message confirmation")
+
+    def send_text(self, text: str) -> dict[str, Any]:
+        if not self.is_ready:
+            raise TelegramForwardError("Telegram Web warranty forwarder is not configured")
+
+        async def _do_send() -> dict[str, Any]:
+            deadline = time.monotonic() + self.timeout_seconds
+            async with self._open_page() as page:
+                return await self._send_on_page(page, text, deadline)
+
+        async def _with_timeout() -> dict[str, Any]:
+            return await asyncio.wait_for(_do_send(), timeout=self.timeout_seconds + 15.0)
+
+        profile = self.profile_path
+        with self._send_lock:
+            with _profile_file_lock(profile) if profile is not None else contextmanager(lambda: (yield))():
+                if self._last_send_monotonic is not None and self.min_interval_seconds > 0:
+                    elapsed = time.monotonic() - self._last_send_monotonic
+                    wait_seconds = self.min_interval_seconds - elapsed
+                    if wait_seconds > 0:
+                        time.sleep(wait_seconds)
+                try:
+                    return _run_async(_with_timeout)
+                except TelegramForwardError as exc:
+                    raise TelegramForwardError(sanitize_tg_error(exc)) from None
+                except Exception as exc:
+                    raise TelegramForwardError(sanitize_tg_error(exc)) from None
+                finally:
+                    self._last_send_monotonic = time.monotonic()
+
+    def verify_connection(self) -> dict[str, Any]:
+        if not self.is_ready:
+            return {
+                "ok": False,
+                "mode": "live",
+                "transport": "web",
+                "target": self.target.strip(),
+                "error": "Telegram Web warranty forwarder is not configured",
+            }
+
+        async def _do_verify() -> dict[str, Any]:
+            deadline = time.monotonic() + self.timeout_seconds
+            async with self._open_page() as page:
+                chat_info = await self._open_target_chat(page, deadline)
+                return {
+                    "ok": True,
+                    "mode": "live",
+                    "transport": "web",
+                    "target": self.target.strip(),
+                    "me_id": chat_info.get("me_id"),
+                    "target_id": chat_info.get("target_id"),
+                    "target_title": chat_info.get("target_title"),
+                    "composer_ready": bool(chat_info.get("composer_ready")),
+                }
+
+        async def _with_timeout() -> dict[str, Any]:
+            return await asyncio.wait_for(_do_verify(), timeout=self.timeout_seconds + 10.0)
+
+        profile = self.profile_path
+        with self._send_lock:
+            with _profile_file_lock(profile) if profile is not None else contextmanager(lambda: (yield))():
+                try:
+                    return _run_async(_with_timeout)
+                except TelegramForwardError as exc:
+                    raise TelegramForwardError(sanitize_tg_error(exc)) from None
+                except Exception as exc:
+                    raise TelegramForwardError(sanitize_tg_error(exc)) from None
+
+
+def resolve_tg_transport(settings: Any) -> str:
+    configured = str(getattr(settings, "tg_transport", "auto") or "auto").strip().lower()
+    if configured in {"telethon", "web"}:
+        return configured
+    if configured != "auto":
+        raise ValueError("tg_transport must be auto, telethon, or web")
+    has_telethon = bool(
+        int(getattr(settings, "tg_api_id", 0) or 0) > 0
+        and str(getattr(settings, "tg_api_hash", "") or "").strip()
+        and str(getattr(settings, "tg_session", "") or "").strip()
+    )
+    if has_telethon:
+        return "telethon"
+    if str(getattr(settings, "tg_web_profile_dir", "") or "").strip():
+        return "web"
+    return "telethon"
+
+
+def build_telegram_forwarder(settings: Any) -> Any:
+    if getattr(settings, "execution_mode", "dry_run") == "dry_run":
+        return DryRunTelegramForwarder(
+            enabled=settings.tg_warranty_enabled,
+            target=settings.tg_admin_target,
+        )
+    transport = resolve_tg_transport(settings)
+    if transport == "web":
+        return PlaywrightTelegramWebForwarder(
+            enabled=settings.tg_warranty_enabled,
+            profile_dir=getattr(settings, "tg_web_profile_dir", ""),
+            target=settings.tg_admin_target,
+            web_url=getattr(settings, "tg_web_url", "https://web.telegram.org/k/"),
+            timeout_seconds=settings.tg_timeout_seconds,
+        )
+    return TelegramWarrantyForwarder(
+        enabled=settings.tg_warranty_enabled,
+        api_id=settings.tg_api_id,
+        api_hash=settings.tg_api_hash,
+        session=settings.tg_session,
+        target=settings.tg_admin_target,
+        timeout_seconds=settings.tg_timeout_seconds,
+    )

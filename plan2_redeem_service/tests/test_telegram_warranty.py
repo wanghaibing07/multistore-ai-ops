@@ -16,8 +16,11 @@ from backend.gateways import DryRunCanboso
 from backend.service import Mailer, format_warranty_forward_template
 from backend.telegram_forwarder import (
     DryRunTelegramForwarder,
+    PlaywrightTelegramWebForwarder,
     TelegramForwardError,
     TelegramWarrantyForwarder,
+    build_telegram_forwarder,
+    resolve_tg_transport,
     sanitize_tg_error,
 )
 from tests.conftest import Fake16688
@@ -638,3 +641,304 @@ def test_tg_login_verify_only_cli(tmp_path: Path, monkeypatch, capsys):
     assert '"ok": true' in captured_ok.out
     assert "dummy_hash_for_cli_test" not in captured_ok.out
     assert "dummy_session_for_cli_test" not in captured_ok.out
+
+
+class _FakeKeyboard:
+    def __init__(self, page: "_FakeWebPage") -> None:
+        self.page = page
+        self.events: list[tuple[str, str]] = []
+
+    async def press(self, key: str) -> None:
+        self.events.append(("press", key))
+        if key == "Backspace":
+            self.page.composer_text = ""
+        elif key == "Shift+Enter":
+            self.page.composer_text += "\n"
+
+    async def insert_text(self, text: str) -> None:
+        self.events.append(("insert_text", text))
+        self.page.composer_text += text
+
+
+class _FakeLocator:
+    def __init__(self, page: "_FakeWebPage", selector: str) -> None:
+        self.page = page
+        self.selector = selector
+
+    @property
+    def first(self) -> "_FakeLocator":
+        return self
+
+    async def click(self) -> None:
+        self.page.clicks.append(self.selector)
+        if "btn-send" in self.selector:
+            self.page.sent_payloads.append(self.page.composer_text)
+            self.page.composer_text = ""
+            self.page.send_clicked = True
+
+
+class _FakeWebPage:
+    def __init__(
+        self,
+        *,
+        logged_in: bool = True,
+        target_peer: str = "998877",
+        active_peer: str = "998877",
+        before_mid: int = 11550,
+        confirmed_mid: int = 11565,
+        delivery_error: bool = False,
+        mismatch_before_click: bool = False,
+    ) -> None:
+        self.logged_in = logged_in
+        self.target_peer = target_peer
+        self.active_peer = active_peer
+        self.before_mid = before_mid
+        self.confirmed_mid = confirmed_mid
+        self.delivery_error = delivery_error
+        self.mismatch_before_click = mismatch_before_click
+        self.composer_text = ""
+        self.clicks: list[str] = []
+        self.sent_payloads: list[str] = []
+        self.send_clicked = False
+        self.poll_after_send = 0
+        self.keyboard = _FakeKeyboard(self)
+
+    async def goto(self, url: str, **kwargs: Any) -> None:
+        self.last_url = url
+
+    async def wait_for_timeout(self, ms: int) -> None:
+        return None
+
+    def locator(self, selector: str) -> _FakeLocator:
+        return _FakeLocator(self, selector)
+
+    async def evaluate(self, script: str, arg: Any = None) -> Any:
+        if "hasLoginPrompt" in script:
+            return {
+                "hasAuth": self.logged_in,
+                "inChats": self.logged_in,
+                "authVisible": not self.logged_in,
+                "hasLoginPrompt": not self.logged_in,
+                "meId": 100 if self.logged_in else None,
+            }
+        if ".chatlist a.chatlist-chat')" in script:
+            return True
+        if "el.click()" in script:
+            return True
+        if "window.location.hash" in script:
+            return None
+        if "composerVisible" in script:
+            return {
+                "hash": f"#{self.active_peer}",
+                "peerId": self.active_peer,
+                "peerTitle": "Admin Peer",
+                "composerVisible": True,
+            }
+        if "btnReady:" in script:
+            return {
+                "peerMatch": (not self.mismatch_before_click) and (self.active_peer == arg),
+                "textLen": len(self.composer_text.strip()),
+                "btnReady": bool(self.composer_text.strip()),
+                "maxMid": self.before_mid,
+            }
+        if "let maxMid = 0;" in script:
+            return self.before_mid
+        if "peer-title')?.getAttribute('data-peer-id')" in script:
+            return self.active_peer
+        if "confirmedMid" in script:
+            self.poll_after_send += 1
+            assert isinstance(arg, dict)
+            assert int(arg.get("minMid", -1)) == self.before_mid
+            assert isinstance(arg.get("requiredTokens"), list) and len(arg["requiredTokens"]) >= 1
+            if self.delivery_error:
+                return {"confirmedMid": 0, "hasError": True, "remainingDraftLen": 0}
+            if self.poll_after_send == 1:
+                return {"confirmedMid": 0, "hasError": False, "remainingDraftLen": 0}
+            return {
+                "confirmedMid": self.confirmed_mid if self.send_clicked else 0,
+                "hasError": False,
+                "remainingDraftLen": 0,
+            }
+        raise AssertionError(f"Unexpected evaluate script: {script[:80]}")
+
+
+def _page_ctx_factory(page: _FakeWebPage):
+    class _Ctx:
+        async def __aenter__(self) -> _FakeWebPage:
+            return page
+
+        async def __aexit__(self, exc_type, exc, tb) -> None:
+            return None
+
+    return _Ctx
+
+
+def test_build_telegram_forwarder_transport_selection(tmp_path: Path):
+    profile_dir = tmp_path / "tg_web_profile"
+    profile_dir.mkdir()
+
+    dry_settings = Settings(
+        execution_mode="dry_run",
+        tg_warranty_enabled=True,
+        tg_transport="web",
+        tg_web_profile_dir=str(profile_dir),
+        tg_admin_target="998877",
+    )
+    assert isinstance(build_telegram_forwarder(dry_settings), DryRunTelegramForwarder)
+
+    auto_web_settings = Settings(
+        execution_mode="live",
+        tg_warranty_enabled=True,
+        tg_transport="auto",
+        tg_web_profile_dir=str(profile_dir),
+        tg_admin_target="998877",
+        tg_timeout_seconds=45.0,
+    )
+    assert resolve_tg_transport(auto_web_settings) == "web"
+    web_fwd = build_telegram_forwarder(auto_web_settings)
+    assert isinstance(web_fwd, PlaywrightTelegramWebForwarder)
+    assert web_fwd.is_ready is True
+
+    auto_telethon_settings = Settings(
+        execution_mode="live",
+        tg_warranty_enabled=True,
+        tg_transport="auto",
+        tg_api_id=123456,
+        tg_api_hash="hash_value",
+        tg_session="session_value",
+        tg_web_profile_dir=str(profile_dir),
+        tg_admin_target="998877",
+    )
+    assert resolve_tg_transport(auto_telethon_settings) == "telethon"
+    assert isinstance(build_telegram_forwarder(auto_telethon_settings), TelegramWarrantyForwarder)
+
+    missing_profile_fwd = PlaywrightTelegramWebForwarder(
+        enabled=True,
+        profile_dir=str(tmp_path / "does_not_exist"),
+        target="998877",
+    )
+    assert missing_profile_fwd.is_ready is False
+
+
+def test_playwright_web_forwarder_send_verify_and_guards(tmp_path: Path):
+    profile_dir = tmp_path / "tg_web_profile"
+    profile_dir.mkdir()
+
+    ok_page = _FakeWebPage(before_mid=11550, confirmed_mid=11588)
+    fwd = PlaywrightTelegramWebForwarder(
+        enabled=True,
+        profile_dir=str(profile_dir),
+        target="998877",
+        timeout_seconds=10.0,
+        min_interval_seconds=0.0,
+        page_factory=_page_ctx_factory(ok_page),
+    )
+
+    verified = fwd.verify_connection()
+    assert verified["ok"] is True
+    assert verified["transport"] == "web"
+    assert verified["target_id"] == "998877"
+    assert ok_page.sent_payloads == []
+
+    vn_text = format_warranty_forward_template("CAN-9901", "buyer.demo@gmail.com")
+    sent = fwd.send_text(vn_text)
+    assert sent["message_id"] == 11588
+    assert sent["target"] == "998877"
+    assert ok_page.sent_payloads == [vn_text]
+    assert ("press", "Shift+Enter") in ok_page.keyboard.events
+
+    logged_out_fwd = PlaywrightTelegramWebForwarder(
+        enabled=True,
+        profile_dir=str(profile_dir),
+        target="998877",
+        timeout_seconds=5.0,
+        min_interval_seconds=0.0,
+        page_factory=_page_ctx_factory(_FakeWebPage(logged_in=False)),
+    )
+    with pytest.raises(TelegramForwardError, match="not logged in"):
+        logged_out_fwd.verify_connection()
+
+    mismatch_page = _FakeWebPage(mismatch_before_click=True)
+    mismatch_fwd = PlaywrightTelegramWebForwarder(
+        enabled=True,
+        profile_dir=str(profile_dir),
+        target="998877",
+        timeout_seconds=5.0,
+        min_interval_seconds=0.0,
+        page_factory=_page_ctx_factory(mismatch_page),
+    )
+    with pytest.raises(TelegramForwardError, match="peer mismatch"):
+        mismatch_fwd.send_text("test")
+    assert mismatch_page.sent_payloads == []
+
+    err_fwd = PlaywrightTelegramWebForwarder(
+        enabled=True,
+        profile_dir=str(profile_dir),
+        target="998877",
+        timeout_seconds=5.0,
+        min_interval_seconds=0.0,
+        page_factory=_page_ctx_factory(_FakeWebPage(delivery_error=True)),
+    )
+    with pytest.raises(TelegramForwardError, match="failed to deliver"):
+        err_fwd.send_text("test")
+
+
+def test_tg_login_verify_only_web_transport(tmp_path: Path, monkeypatch, capsys):
+    from backend import tg_login
+
+    tg_keys = (
+        "PLAN2_CONFIG_FILE",
+        "PLAN2_TG_WARRANTY_ENABLED",
+        "PLAN2_TG_TRANSPORT",
+        "PLAN2_TG_API_ID",
+        "PLAN2_TG_API_HASH",
+        "PLAN2_TG_SESSION",
+        "PLAN2_TG_WEB_PROFILE_DIR",
+        "PLAN2_TG_WEB_URL",
+        "PLAN2_TG_ADMIN_TARGET",
+        "PLAN2_TG_TIMEOUT_SECONDS",
+    )
+    for key in tg_keys:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(tg_login.os, "environ", tg_login.os.environ.copy())
+
+    profile_dir = tmp_path / "tg_web_profile"
+    profile_dir.mkdir()
+
+    missing_env = tmp_path / "web_missing.env"
+    missing_env.write_text(
+        "PLAN2_TG_TRANSPORT=web\n"
+        f"PLAN2_TG_WEB_PROFILE_DIR={tmp_path / 'absent'}\n"
+        "PLAN2_TG_ADMIN_TARGET=998877\n",
+        encoding="utf-8",
+    )
+    assert tg_login.main(["--verify-only", "--env-file", str(missing_env)]) == 1
+    assert "不存在" in capsys.readouterr().err
+
+    tg_login.os.environ.pop("PLAN2_TG_WEB_PROFILE_DIR", None)
+
+    valid_env = tmp_path / "web_valid.env"
+    valid_env.write_text(
+        "PLAN2_TG_TRANSPORT=web\n"
+        f"PLAN2_TG_WEB_PROFILE_DIR={profile_dir}\n"
+        "PLAN2_TG_ADMIN_TARGET=998877\n",
+        encoding="utf-8",
+    )
+
+    def fake_web_verify(self):
+        return {
+            "ok": True,
+            "mode": "live",
+            "transport": "web",
+            "target": self.target,
+            "me_id": 100,
+            "target_id": "998877",
+            "target_title": "Admin",
+            "composer_ready": True,
+        }
+
+    monkeypatch.setattr(PlaywrightTelegramWebForwarder, "verify_connection", fake_web_verify)
+    assert tg_login.main(["--verify-only", "--env-file", str(valid_env)]) == 0
+    out = capsys.readouterr().out
+    assert '"transport": "web"' in out
+    assert '"ok": true' in out

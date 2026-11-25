@@ -18,9 +18,12 @@ smtp_from: merchant@example.com
 merchant_email: merchant@example.com
 poll_interval_seconds: 1200
 tg_warranty_enabled: false
+tg_transport: auto
 tg_api_id: 0
 tg_api_hash: ""
 tg_session: ""
 tg_admin_target: ""
+tg_web_profile_dir: ""
+tg_web_url: https://web.telegram.org/k/
 tg_timeout_seconds: 20
 

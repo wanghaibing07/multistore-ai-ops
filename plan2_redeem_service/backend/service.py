@@ -33,7 +33,7 @@ from .agiso import (
 from .config import Settings
 from .db import Ledger, now_iso
 from .gateways import UpstreamError, UpstreamTimeout, parse_env_channel16688_restock_rules
-from .telegram_forwarder import DryRunTelegramForwarder, TelegramWarrantyForwarder, sanitize_tg_error
+from .telegram_forwarder import build_telegram_forwarder, sanitize_tg_error
 
 
 logger = logging.getLogger(__name__)
@@ -146,20 +146,8 @@ class Service:
         self.ledger, self.settings, self.canboso, self.channel, self.mailer, self.agiso = ledger, settings, canboso, channel, mailer, agiso
         if tg_forwarder is not None:
             self.tg_forwarder = tg_forwarder
-        elif settings.execution_mode == "dry_run":
-            self.tg_forwarder = DryRunTelegramForwarder(
-                enabled=settings.tg_warranty_enabled,
-                target=settings.tg_admin_target,
-            )
         else:
-            self.tg_forwarder = TelegramWarrantyForwarder(
-                enabled=settings.tg_warranty_enabled,
-                api_id=settings.tg_api_id,
-                api_hash=settings.tg_api_hash,
-                session=settings.tg_session,
-                target=settings.tg_admin_target,
-                timeout_seconds=settings.tg_timeout_seconds,
-            )
+            self.tg_forwarder = build_telegram_forwarder(settings)
         self._restock_lock = threading.Lock()
         self._channel16688_restock_lock = threading.Lock()
         self._warranty_locks_guard = threading.Lock()
