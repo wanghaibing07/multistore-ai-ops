@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { AlertCircle, Check, Copy } from "lucide-react";
 import { copyToClipboard } from "../utils/format";
+import { CastoriceIcon } from "./CastoriceIcon";
 import { useToast } from "./ToastProvider";
 
 interface CopyButtonProps {
@@ -16,7 +16,7 @@ interface CopyButtonProps {
 export function CopyButton({
   text,
   label = "复制",
-  copiedLabel = "已复制",
+  copiedLabel = "✓ 已复制",
   toastMessage = "已复制到剪贴板",
   variant = "secondary",
   size = "sm",
@@ -64,11 +64,11 @@ export function CopyButton({
   return (
     <button type="button" className={classNames} onClick={handleCopy}>
       {state === "success" ? (
-        <Check size={15} />
+        <CastoriceIcon name="check" size={15} />
       ) : state === "error" ? (
-        <AlertCircle size={15} />
+        <CastoriceIcon name="alert" size={15} />
       ) : (
-        <Copy size={15} />
+        <CastoriceIcon name="paste" size={15} />
       )}
       <span>{state === "success" ? copiedLabel : state === "error" ? "复制失败" : label}</span>
     </button>

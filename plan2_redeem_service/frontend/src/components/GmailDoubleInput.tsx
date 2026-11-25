@@ -1,6 +1,6 @@
 import { useId, useState } from "react";
-import { AlertTriangle, CheckCircle2, ShieldAlert } from "lucide-react";
 import { validateGmailInput } from "../utils/validation";
+import { CastoriceIcon } from "./CastoriceIcon";
 
 interface GmailDoubleInputProps {
   email: string;
@@ -34,7 +34,7 @@ export function GmailDoubleInput({
   return (
     <div className="stack">
       <div className="callout callout-warning callout-strong">
-        <AlertTriangle size={18} className="callout-icon" />
+        <CastoriceIcon name="alert" size={19} className="callout-icon" />
         <div>{warningText}</div>
       </div>
 
@@ -68,7 +68,7 @@ export function GmailDoubleInput({
         />
         {showPrimaryError ? (
           <div id={primaryErrorId} className="field-error" role="alert">
-            <ShieldAlert size={14} />
+            <CastoriceIcon name="alert" size={15} />
             <span>{check.error}</span>
             {check.suggestion ? (
               <button
@@ -83,7 +83,7 @@ export function GmailDoubleInput({
         ) : null}
         {check.valid ? (
           <div className="field-ok">
-            <CheckCircle2 size={14} />
+            <CastoriceIcon name="check" size={15} />
             <span>格式没问题，核对一遍就能提交</span>
           </div>
         ) : null}

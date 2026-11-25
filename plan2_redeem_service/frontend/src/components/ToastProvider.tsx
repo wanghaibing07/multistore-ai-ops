@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useState, type ReactNode } from "react";
-import { AlertCircle, CheckCircle2, Info } from "lucide-react";
+import { CastoriceIcon } from "./CastoriceIcon";
 
 type ToastTone = "info" | "success" | "error";
 
@@ -44,11 +44,11 @@ export function ToastProvider({ children }: { children: ReactNode }) {
             }`}
           >
             {item.tone === "success" ? (
-              <CheckCircle2 size={16} className="toast-icon-success" />
+              <CastoriceIcon name="check" size={17} className="toast-icon-success" />
             ) : item.tone === "error" ? (
-              <AlertCircle size={16} className="toast-icon-error" />
+              <CastoriceIcon name="alert" size={17} className="toast-icon-error" />
             ) : (
-              <Info size={16} className="toast-icon-info" />
+              <CastoriceIcon name="emblem" size={18} className="toast-icon-info" />
             )}
             <span>{item.message}</span>
           </div>

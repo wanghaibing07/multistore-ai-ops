@@ -13,6 +13,8 @@ export function BuyerWallpaper({ variant = "hero" }: BuyerWallpaperProps) {
   const [reducedMotion, setReducedMotion] = useState(false);
   const [webglActive, setWebglActive] = useState(false);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const posterRef = useRef<HTMLImageElement | null>(null);
+  const particleCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
     if (typeof window === "undefined" || typeof window.matchMedia !== "function") {
@@ -40,7 +42,8 @@ export function BuyerWallpaper({ variant = "hero" }: BuyerWallpaperProps) {
     }
   }, [reducedMotion, videoFailed]);
 
-  const enableWebGL = variant === "hero" && !reducedMotion;
+  const enableAmbient = !reducedMotion;
+  const enableWebGL = !reducedMotion;
 
   return (
     <div
@@ -66,18 +69,23 @@ export function BuyerWallpaper({ variant = "hero" }: BuyerWallpaperProps) {
           />
         ) : (
           <img
+            ref={posterRef}
             src={WALLPAPER_POSTER_URL}
             alt=""
             className={`buyer-wallpaper-poster ${enableWebGL && webglActive ? "is-webgl-source" : ""}`}
           />
         )}
 
-        {enableWebGL ? (
+        {enableAmbient ? (
           <BuyerAmbientFX
             videoRef={videoRef}
+            posterRef={posterRef}
+            particleCanvasRef={particleCanvasRef}
             posterUrl={WALLPAPER_POSTER_URL}
             videoFailed={videoFailed}
             reducedMotion={reducedMotion}
+            enableWebGL={enableWebGL}
+            variant={variant}
             onWebGLStateChange={setWebglActive}
           />
         ) : null}
@@ -85,6 +93,14 @@ export function BuyerWallpaper({ variant = "hero" }: BuyerWallpaperProps) {
 
       <div className="buyer-wallpaper-glow" />
       <div className="buyer-wallpaper-scrim" />
+      {enableAmbient ? (
+        <canvas
+          ref={particleCanvasRef}
+          className="buyer-wallpaper-particles"
+          style={{ zIndex: 5 }}
+          aria-hidden="true"
+        />
+      ) : null}
     </div>
   );
 }

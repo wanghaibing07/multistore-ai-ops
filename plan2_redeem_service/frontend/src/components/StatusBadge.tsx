@@ -10,13 +10,15 @@ export function ToneBadge({
   label,
   tone,
   pulse = false,
+  shimmer = false,
 }: {
   label: string;
   tone: Tone;
   pulse?: boolean;
+  shimmer?: boolean;
 }) {
   return (
-    <span className={`badge badge-${tone}`}>
+    <span className={`badge badge-${tone}${shimmer ? " badge-shimmer" : ""}`}>
       <span className={pulse ? "badge-dot badge-dot-pulse" : "badge-dot"} aria-hidden="true" />
       <span>{label}</span>
     </span>

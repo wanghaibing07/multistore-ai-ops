@@ -1,22 +1,14 @@
-import { useCallback, useEffect, useRef, useState, type ChangeEvent, type FormEvent } from "react";
-import { Link, useParams } from "react-router-dom";
 import {
-  AlertCircle,
-  ArrowLeft,
-  Check,
-  CheckCircle2,
-  Circle,
-  Clock,
-  ExternalLink,
-  ImagePlus,
-  Loader2,
-  MailCheck,
-  RefreshCw,
-  ShieldCheck,
-  TicketCheck,
-  Trash2,
-  UploadCloud,
-} from "lucide-react";
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type CSSProperties,
+  type ChangeEvent,
+  type FormEvent,
+  type MouseEvent,
+} from "react";
+import { Link, useLocation, useNavigate, useParams } from "react-router-dom";
 import {
   ApiError,
   getPublicCode,
@@ -25,6 +17,9 @@ import {
   submitPublicWarranty,
 } from "../api/client";
 import { BuyerWallpaper } from "../components/BuyerWallpaper";
+import { CastoriceIcon } from "../components/CastoriceIcon";
+import { CastoriceWaitingStage } from "../components/CastoriceWaitingStage";
+import { ChibiSticker } from "../components/ChibiSticker";
 import { CopyButton } from "../components/CopyButton";
 import { GmailDoubleInput } from "../components/GmailDoubleInput";
 import { ToneBadge } from "../components/StatusBadge";
@@ -38,8 +33,17 @@ import {
   type Tone,
 } from "../utils/format";
 import { validateGmailInput, validateWarrantyScreenshot } from "../utils/validation";
+import { runRedeemViewTransition } from "../utils/viewTransition";
 
 const AUTO_POLL_INTERVAL_MS = 30_000;
+
+interface RedeemRouteState {
+  prefetchedRecord?: PublicCodeResponse;
+}
+
+function staggerStyle(index: number): CSSProperties {
+  return { "--stagger-idx": index } as CSSProperties;
+}
 
 function resolveStepIndex(productType: ProductType, status: CodeStatus, warrantySubmitted: boolean): number {
   if (productType === "slot") {
@@ -106,11 +110,20 @@ function getBuyerWarrantyBadgeMeta(status: WarrantyStatus | undefined): { label:
 
 export function RedeemPage() {
   const { code: rawCode } = useParams<{ code: string }>();
+  const location = useLocation();
+  const navigate = useNavigate();
   const code = (rawCode || "").trim().toUpperCase();
   const { pushToast } = useToast();
 
-  const [record, setRecord] = useState<PublicCodeResponse | null>(null);
-  const [loading, setLoading] = useState(true);
+  const routeState = (location.state as RedeemRouteState | null) ?? null;
+  const prefetchedForCode =
+    routeState?.prefetchedRecord &&
+    routeState.prefetchedRecord.code.trim().toUpperCase() === code
+      ? routeState.prefetchedRecord
+      : null;
+
+  const [record, setRecord] = useState<PublicCodeResponse | null>(() => prefetchedForCode);
+  const [loading, setLoading] = useState(() => !prefetchedForCode);
   const [notFoundMessage, setNotFoundMessage] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -173,8 +186,30 @@ export function RedeemPage() {
     setRedeemError(null);
     setWarrantyError(null);
     setEditingWarranty(false);
+    if (prefetchedForCode && prefetchedForCode.code.trim().toUpperCase() === code) {
+      setRecord(prefetchedForCode);
+      setLoading(false);
+      setLoadError(null);
+      setNotFoundMessage(null);
+      return;
+    }
     void fetchRecord(false);
-  }, [fetchRecord]);
+  }, [code, fetchRecord, prefetchedForCode]);
+
+  const handleBackHome = (event: MouseEvent<HTMLAnchorElement>) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.altKey ||
+      event.ctrlKey ||
+      event.shiftKey
+    ) {
+      return;
+    }
+    event.preventDefault();
+    runRedeemViewTransition(() => navigate("/"), "back");
+  };
 
   useEffect(() => {
     if (
@@ -412,6 +447,7 @@ export function RedeemPage() {
   );
   const buyerStatusMeta = record ? getBuyerStatusMeta(record) : null;
   const buyerWarrantyBadge = getBuyerWarrantyBadgeMeta(record?.warranty?.status);
+  const hasMobileGmailDock = Boolean(record && !isExclusive && record.status === "completed");
   const exclusiveWarrantyNotice = (
     <div className="inset-panel stack-sm">
       <strong style={{ fontSize: 13.5 }}>质保与须知</strong>
@@ -431,24 +467,24 @@ export function RedeemPage() {
   );
 
   return (
-    <div className="buyer-page">
+    <div className={`buyer-page ${hasMobileGmailDock ? "buyer-page--has-sticky-cta" : ""}`}>
       <BuyerWallpaper variant="detail" />
       <div className="buyer-container">
         <header className="buyer-topbar">
-          <Link to="/" className="brand-lockup">
+          <Link to="/" className="brand-lockup" onClick={handleBackHome}>
             <span className="brand-mark" aria-hidden="true">
-              <TicketCheck size={18} />
+              <CastoriceIcon name="emblem" size={30} />
             </span>
-            <span>Google AI Ultra 20x 自助提货</span>
+            <span className="brand-lockup-title">Google AI Ultra 20x 自助提货</span>
           </Link>
-          <Link to="/" className="btn btn-ghost btn-sm">
-            <ArrowLeft size={15} />
+          <Link to="/" className="btn btn-ghost btn-sm buyer-back-btn" onClick={handleBackHome}>
+            <CastoriceIcon name="arrow-left" size={15} />
             <span>换个兑换码</span>
           </Link>
         </header>
 
         {loading ? (
-          <section className="card stack" aria-label="正在加载兑换码信息">
+          <section className="card stack redeem-card-morph" aria-label="正在加载兑换码信息">
             <div className="row-between">
               <div className="skeleton" style={{ width: 96, height: 26 }} />
               <div className="skeleton" style={{ width: 84, height: 26 }} />
@@ -458,31 +494,38 @@ export function RedeemPage() {
             <div className="skeleton" style={{ width: "100%", height: 140 }} />
           </section>
         ) : notFoundMessage ? (
-          <section className="card stack" style={{ textAlign: "center", padding: "36px 24px" }}>
-            <AlertCircle size={36} style={{ color: "var(--down)", margin: "0 auto" }} />
+          <section
+            className="card stack redeem-card-morph"
+            style={{ textAlign: "center", padding: "36px 24px" }}
+          >
+            <CastoriceIcon name="alert" size={40} style={{ margin: "0 auto" }} />
             <div>
               <h1 className="card-title">未找到该兑换码</h1>
               <p className="card-subtitle">{notFoundMessage}</p>
             </div>
             <div className="row" style={{ justifyContent: "center" }}>
-              <Link to="/" className="btn btn-primary">
+              <Link to="/" className="btn btn-primary" onClick={handleBackHome}>
+                <CastoriceIcon name="arrow-left" size={16} />
                 返回重新输入
               </Link>
             </div>
           </section>
         ) : loadError ? (
-          <section className="card stack" style={{ textAlign: "center", padding: "36px 24px" }}>
-            <AlertCircle size={36} style={{ color: "var(--down)", margin: "0 auto" }} />
+          <section
+            className="card stack redeem-card-morph"
+            style={{ textAlign: "center", padding: "36px 24px" }}
+          >
+            <CastoriceIcon name="alert" size={40} style={{ margin: "0 auto" }} />
             <div>
               <h1 className="card-title">暂时无法加载订单</h1>
               <p className="card-subtitle">{loadError}</p>
             </div>
             <div className="row" style={{ justifyContent: "center" }}>
               <button type="button" className="btn btn-primary" onClick={() => void fetchRecord(false)}>
-                <RefreshCw size={15} />
+                <CastoriceIcon name="refresh" size={15} />
                 <span>重新加载</span>
               </button>
-              <Link to="/" className="btn btn-secondary">
+              <Link to="/" className="btn btn-secondary" onClick={handleBackHome}>
                 返回首页
               </Link>
             </div>
@@ -490,8 +533,14 @@ export function RedeemPage() {
         ) : record ? (
           <>
             {/* Voucher Summary Card */}
-            <section className="card stack">
-              <div className="voucher-head">
+            <section className="card stack voucher-summary-card redeem-card-morph">
+              <ChibiSticker
+                variant="mail"
+                springEntrance
+                bubbleText="收件箱没看到的话，记得翻翻垃圾箱或推广分类 ✨"
+              />
+
+              <div className="voucher-head voucher-head--with-sticker redeem-stagger-block" style={staggerStyle(0)}>
                 <div className="row-between">
                   <div className="row" style={{ gap: 8 }}>
                     <span className="badge badge-accent">{getChannelLabel(record.channel)}订单</span>
@@ -507,6 +556,7 @@ export function RedeemPage() {
                         label={buyerStatusMeta.label}
                         tone={buyerStatusMeta.tone}
                         pulse={Boolean(buyerStatusMeta.pulse)}
+                        shimmer={record.status === "completed"}
                       />
                     ) : null}
                   </div>
@@ -516,29 +566,45 @@ export function RedeemPage() {
                 </h1>
               </div>
 
-              <div className="voucher-meta-bar">
+              <div className="voucher-meta-bar redeem-stagger-block" style={staggerStyle(1)}>
                 <div className="voucher-code-pill">
-                  <span>兑换码</span>
+                  <span className="voucher-code-label">兑换码</span>
                   <span className="voucher-code-value">{record.code}</span>
                 </div>
-                <CopyButton text={record.code} label="复制兑换码" toastMessage="兑换码已复制" />
+                <CopyButton
+                  text={record.code}
+                  label="复制兑换码"
+                  copiedLabel="✓ 已复制"
+                  toastMessage="兑换码已复制"
+                />
               </div>
 
               {record.status !== "revoked" && record.status !== "needs_manual_review" ? (
-                <ol className="stepper" aria-label="提货进度">
+                <ol className="stepper redeem-stagger-block" style={staggerStyle(2)} aria-label="提货进度">
                   {steps.map((label, idx) => {
                     const isDone = idx < activeStep || (record.status === "completed" && idx <= activeStep);
                     const isCurrent = !isDone && idx === activeStep;
+                    const showSprite = idx === activeStep;
                     return (
                       <li
                         key={label}
-                        className={`stepper-item ${isDone ? "is-done" : ""}`}
+                        className={`stepper-item ${isDone ? "is-done" : ""} ${showSprite ? "has-sprite" : ""}`}
                         aria-current={isCurrent ? "step" : undefined}
                       >
                         <span className="stepper-num" aria-hidden="true">
-                          {isDone ? <Check size={12} /> : idx + 1}
+                          {isDone ? <CastoriceIcon name="check" size={13} /> : idx + 1}
                         </span>
                         <span className="stepper-label">{label}</span>
+                        {showSprite ? (
+                          <img
+                            src="/assets/stickers/pixel-sprite.png"
+                            alt=""
+                            aria-hidden="true"
+                            decoding="async"
+                            draggable={false}
+                            className="stepper-sprite"
+                          />
+                        ) : null}
                       </li>
                     );
                   })}
@@ -546,11 +612,17 @@ export function RedeemPage() {
               ) : null}
             </section>
 
+            <CastoriceWaitingStage
+              record={record}
+              autoPollIntervalMs={AUTO_POLL_INTERVAL_MS}
+              refreshing={refreshing}
+            />
+
             {/* Revoked */}
             {record.status === "revoked" ? (
-              <section className="card stack">
+              <section className="card stack redeem-stagger-block" style={staggerStyle(3)}>
                 <div className="callout callout-danger">
-                  <AlertCircle size={18} className="callout-icon" />
+                  <CastoriceIcon name="alert" size={19} className="callout-icon" />
                   <div>
                     <strong>这个兑换码已经作废了</strong>
                     <div style={{ marginTop: 4 }}>
@@ -564,9 +636,9 @@ export function RedeemPage() {
 
             {/* Needs Manual Review (never leaks internal USD/balance details) */}
             {record.status === "needs_manual_review" ? (
-              <section className="card stack">
+              <section className="card stack redeem-stagger-block" style={staggerStyle(3)}>
                 <div className="callout callout-warning">
-                  <Clock size={18} className="callout-icon" />
+                  <CastoriceIcon name="refresh" size={18} className="callout-icon" />
                   <div>
                     <strong>客服正在人工处理这单</strong>
                     <div style={{ marginTop: 4 }}>
@@ -592,7 +664,7 @@ export function RedeemPage() {
                     className="btn btn-secondary btn-sm"
                     onClick={() => void fetchRecord(false)}
                   >
-                    <RefreshCw size={15} />
+                    <CastoriceIcon name="refresh" size={15} />
                     <span>刷一下状态</span>
                   </button>
                 </div>
@@ -603,7 +675,7 @@ export function RedeemPage() {
                 FLOW A: SHARED SLOT (ultra_shared_slot)
                =============================================================== */}
             {!isExclusive && record.status === "unused" ? (
-              <section className="card stack">
+              <section className="card stack redeem-stagger-block" style={staggerStyle(3)}>
                 <div>
                   <h2 className="card-title">填你收家庭组邀请的 Gmail</h2>
                   <p className="card-subtitle">
@@ -622,7 +694,7 @@ export function RedeemPage() {
                     <div className="check-card-body">
                       <strong>这个 Gmail 现在没在别的 Google 家庭组里</strong>，而且近 12 个月没频繁换过组（可点{" "}
                       <a href="https://g.co/yourfamily" target="_blank" rel="noreferrer">
-                        g.co/yourfamily <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />
+                        g.co/yourfamily <CastoriceIcon name="external" size={13} className="inline-ext-icon" />
                       </a>{" "}
                       看一眼）。
                     </div>
@@ -643,7 +715,7 @@ export function RedeemPage() {
                         rel="noreferrer"
                       >
                         payments.google.com/gp/w/home/settings{" "}
-                        <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />
+                        <CastoriceIcon name="external" size={13} className="inline-ext-icon" />
                       </a>{" "}
                       关闭现有付款资料，避免拉进家庭组时提示地区不符）。
                     </div>
@@ -678,11 +750,19 @@ export function RedeemPage() {
                     <div className="presubmit-title">提交前看一眼</div>
                     <ul className="presubmit-list">
                       <li className={`presubmit-item ${preflightReady ? "is-pass" : ""}`}>
-                        {preflightReady ? <CheckCircle2 size={14} /> : <Circle size={14} />}
+                        {preflightReady ? (
+                          <CastoriceIcon name="check" size={15} />
+                        ) : (
+                          <span className="presubmit-dot" aria-hidden="true" />
+                        )}
                         <span>两项确认已勾选</span>
                       </li>
                       <li className={`presubmit-item ${slotEmailCheck.valid ? "is-pass" : ""}`}>
-                        {slotEmailCheck.valid ? <CheckCircle2 size={14} /> : <Circle size={14} />}
+                        {slotEmailCheck.valid ? (
+                          <CastoriceIcon name="check" size={15} />
+                        ) : (
+                          <span className="presubmit-dot" aria-hidden="true" />
+                        )}
                         <span>Gmail 拼写格式没问题</span>
                       </li>
                     </ul>
@@ -690,7 +770,7 @@ export function RedeemPage() {
 
                   {redeemError ? (
                     <div className="callout callout-danger" role="alert">
-                      <AlertCircle size={17} className="callout-icon" />
+                      <CastoriceIcon name="alert" size={18} className="callout-icon" />
                       <div>{redeemError}</div>
                     </div>
                   ) : null}
@@ -703,7 +783,7 @@ export function RedeemPage() {
                   >
                     {submittingRedeem ? (
                       <>
-                        <Loader2 size={17} className="spin" />
+                        <CastoriceIcon name="refresh" size={17} spin />
                         <span>正在提交...</span>
                       </>
                     ) : (
@@ -719,9 +799,9 @@ export function RedeemPage() {
             (record.status === "waiting_fulfillment" ||
               record.status === "validating" ||
               record.status === "purchasing") ? (
-              <section className="card stack">
+              <section className="card stack redeem-stagger-block" style={staggerStyle(3)}>
                 <div className="callout callout-info">
-                  <Clock size={18} className="callout-icon" />
+                  <CastoriceIcon name="refresh" size={18} className="callout-icon" />
                   <div>
                     <strong>已经排上队了，等发邀请就行</strong>
                     <div style={{ marginTop: 4 }}>
@@ -758,7 +838,7 @@ export function RedeemPage() {
                     aria-busy={refreshing}
                     onClick={() => void handleManualRefresh()}
                   >
-                    <RefreshCw size={15} className={refreshing ? "spin" : ""} />
+                    <CastoriceIcon name="refresh" size={15} spin={refreshing} />
                     <span>
                       {refreshing
                         ? "正在查..."
@@ -773,9 +853,9 @@ export function RedeemPage() {
 
             {/* Shared Slot: Completed */}
             {!isExclusive && record.status === "completed" ? (
-              <section className="card stack">
+              <section className="card stack redeem-stagger-block" style={staggerStyle(3)}>
                 <div className="callout callout-success">
-                  <MailCheck size={19} className="callout-icon" />
+                  <CastoriceIcon name="mail" size={20} className="callout-icon" />
                   <div>
                     <strong>家庭组邀请发出来了，快去 Gmail 查收</strong>
                     <div style={{ marginTop: 4 }}>
@@ -787,7 +867,7 @@ export function RedeemPage() {
                 <div className="kv-grid">
                   <div className="kv-item">
                     <div className="kv-label">收邀请的 Gmail</div>
-                    <div className="kv-value mono">{record.buyer_email_masked || "-"}</div>
+                    <div className="kv-value mono kv-value-email">{record.buyer_email_masked || "-"}</div>
                   </div>
                   <div className="kv-item">
                     <div className="kv-label">发邀请时间</div>
@@ -804,15 +884,16 @@ export function RedeemPage() {
                   </ol>
                 </div>
 
-                <div className="row">
+                <div className="row redeem-desktop-gmail-cta">
                   <a
                     href="https://mail.google.com"
                     target="_blank"
                     rel="noreferrer"
                     className="btn btn-primary btn-block"
                   >
+                    <CastoriceIcon name="mail" size={17} />
                     <span>去 Gmail 收邀请</span>
-                    <ExternalLink size={15} />
+                    <CastoriceIcon name="external" size={15} />
                   </a>
                 </div>
               </section>
@@ -822,7 +903,7 @@ export function RedeemPage() {
                 FLOW B: EXCLUSIVE ADMIN (ultra_exclusive_admin)
                =============================================================== */}
             {isExclusive && record.status === "unused" ? (
-              <section className="card stack">
+              <section className="card stack redeem-stagger-block" style={staggerStyle(3)}>
                 <div>
                   <h2 className="card-title">先领商店套餐邮箱</h2>
                   <p className="card-subtitle">
@@ -854,7 +935,7 @@ export function RedeemPage() {
                     <div className="check-card-body">
                       <strong>我准备好了当管理员的稳定主力 Gmail</strong>，且现在没在别的家庭组里（点{" "}
                       <a href="https://g.co/yourfamily" target="_blank" rel="noreferrer">
-                        g.co/yourfamily <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />
+                        g.co/yourfamily <CastoriceIcon name="external" size={13} className="inline-ext-icon" />
                       </a>{" "}
                       检查并退出原有家庭组）。
                     </div>
@@ -875,7 +956,7 @@ export function RedeemPage() {
                         rel="noreferrer"
                       >
                         payments.google.com/gp/w/home/settings{" "}
-                        <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />
+                        <CastoriceIcon name="external" size={13} className="inline-ext-icon" />
                       </a>{" "}
                       关闭现有付款资料，避免建组或邀请受地区限制）。
                     </div>
@@ -898,7 +979,7 @@ export function RedeemPage() {
 
                 {redeemError ? (
                   <div className="callout callout-danger" role="alert">
-                    <AlertCircle size={17} className="callout-icon" />
+                    <CastoriceIcon name="alert" size={18} className="callout-icon" />
                     <div>{redeemError}</div>
                   </div>
                 ) : null}
@@ -912,12 +993,12 @@ export function RedeemPage() {
                   >
                     {submittingRedeem ? (
                       <>
-                        <Loader2 size={17} className="spin" />
+                        <CastoriceIcon name="refresh" size={17} spin />
                         <span>正在领商店邮箱...</span>
                       </>
                     ) : (
                       <>
-                        <ShieldCheck size={18} />
+                        <CastoriceIcon name="check" size={18} />
                         <span>准备好了，马上领商店邮箱</span>
                       </>
                     )}
@@ -930,7 +1011,7 @@ export function RedeemPage() {
             {isExclusive &&
             (record.status === "delivered_pending_warranty" || record.status === "completed") ? (
               <>
-                <section className="card stack">
+                <section className="card stack redeem-stagger-block" style={staggerStyle(3)}>
                   <div className="row-between">
                     <h2 className="card-title">第 1 步：把商店套餐邮箱拉进家庭组</h2>
                     {record.delivery?.delivered_at ? (
@@ -958,7 +1039,7 @@ export function RedeemPage() {
                     </div>
                   ) : (
                     <div className="callout callout-info">
-                      <ShieldCheck size={17} className="callout-icon" />
+                      <CastoriceIcon name="check" size={18} className="callout-icon" />
                       <div>商店邮箱已发出，如果没显示出来请刷新页面或联系客服。</div>
                     </div>
                   )}
@@ -988,7 +1069,7 @@ export function RedeemPage() {
                       <li>
                         用你自己的<strong>主力 Gmail</strong> 打开{" "}
                         <a href="https://g.co/yourfamily" target="_blank" rel="noreferrer">
-                          g.co/yourfamily <ExternalLink size={12} style={{ verticalAlign: "-1px" }} />
+                          g.co/yourfamily <CastoriceIcon name="external" size={13} className="inline-ext-icon" />
                         </a>{" "}
                         建好 Google 家庭组。
                       </li>
@@ -1003,7 +1084,7 @@ export function RedeemPage() {
                 </section>
 
                 {/* Warranty Section */}
-                <section className="card stack">
+                <section className="card stack redeem-stagger-block" style={staggerStyle(4)}>
                   <div className="row-between">
                     <div style={{ flex: "1 1 240px", minWidth: 0 }}>
                       <h2 className="card-title">第 3 步：提交保修信息</h2>
@@ -1017,7 +1098,7 @@ export function RedeemPage() {
                   {warrantySubmitted && !editingWarranty ? (
                     <div className="stack">
                       <div className={`callout ${warrantyLocked ? "callout-success" : "callout-info"}`}>
-                        <CheckCircle2 size={18} className="callout-icon" />
+                        <CastoriceIcon name="check" size={19} className="callout-icon" />
                         <div>
                           <strong>
                             {warrantyLocked
@@ -1080,7 +1161,7 @@ export function RedeemPage() {
 
                       {warrantyUsesStoreEmail ? (
                         <div className="callout callout-danger" role="alert">
-                          <AlertCircle size={17} className="callout-icon" />
+                          <CastoriceIcon name="alert" size={18} className="callout-icon" />
                           <div>你填成了上面的商店套餐邮箱，请改成你自己的主力 Gmail。</div>
                         </div>
                       ) : null}
@@ -1124,7 +1205,7 @@ export function RedeemPage() {
                                     disabled={submittingWarranty}
                                     onClick={clearScreenshot}
                                   >
-                                    <Trash2 size={14} />
+                                    <CastoriceIcon name="alert" size={14} />
                                     <span>移除</span>
                                   </button>
                                 </div>
@@ -1137,7 +1218,7 @@ export function RedeemPage() {
                               disabled={submittingWarranty}
                               onClick={() => fileInputRef.current?.click()}
                             >
-                              <ImagePlus size={26} className="upload-icon" />
+                              <CastoriceIcon name="mail" size={28} className="upload-icon" />
                               <span style={{ fontWeight: 600, fontSize: 14.5 }}>
                                 点这里上传家庭组邀请截图
                               </span>
@@ -1167,7 +1248,7 @@ export function RedeemPage() {
 
                       {warrantyError ? (
                         <div className="callout callout-danger" role="alert">
-                          <AlertCircle size={17} className="callout-icon" />
+                          <CastoriceIcon name="alert" size={18} className="callout-icon" />
                           <div>{warrantyError}</div>
                         </div>
                       ) : null}
@@ -1196,12 +1277,12 @@ export function RedeemPage() {
                         >
                           {submittingWarranty ? (
                             <>
-                              <Loader2 size={17} className="spin" />
+                              <CastoriceIcon name="refresh" size={17} spin />
                               <span>正在上传...</span>
                             </>
                           ) : (
                             <>
-                              <UploadCloud size={18} />
+                              <CastoriceIcon name="check" size={18} />
                               <span>提交保修信息</span>
                             </>
                           )}
@@ -1220,9 +1301,26 @@ export function RedeemPage() {
         <footer className="footer-links">
           <span>Google AI Ultra 20x 自助提货</span>
           <span aria-hidden="true">·</span>
-          <Link to="/">返回首页</Link>
+          <Link to="/" onClick={handleBackHome}>
+            返回首页
+          </Link>
         </footer>
       </div>
+
+      {hasMobileGmailDock ? (
+        <div className="redeem-mobile-sticky-dock">
+          <a
+            href="https://mail.google.com"
+            target="_blank"
+            rel="noreferrer"
+            className="btn btn-primary btn-lg btn-block"
+          >
+            <CastoriceIcon name="mail" size={18} />
+            <span>去 Gmail 收邀请</span>
+            <CastoriceIcon name="external" size={15} />
+          </a>
+        </div>
+      ) : null}
     </div>
   );
 }

@@ -140,6 +140,7 @@
   display: flex;
   flex-direction: column;
   overflow-x: clip;
+  background-color: #f4eef9;
   color-scheme: light;
 }
 
@@ -257,6 +258,7 @@
 /* Airy Morning-Light Frosted Glass Redeem Card */
 .zzz-glass-card {
   position: relative;
+  overflow: visible;
   padding: 30px 28px 24px;
   border-radius: 22px;
   background: linear-gradient(
@@ -298,6 +300,7 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  padding-right: 94px;
 }
 
 .zzz-hero-title {
@@ -345,23 +348,25 @@
   color: #2c233f;
 }
 
-.zzz-field-label svg {
-  color: #9333ea;
-  flex: 0 0 auto;
-}
-
 .zzz-input-row {
   display: flex;
   flex-direction: column;
   gap: 12px;
 }
 
+.zzz-input-box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+}
+
 .zzz-input {
   width: 100%;
-  min-height: 48px;
-  padding: 0 15px;
+  min-height: 50px;
+  padding: 0 94px 0 15px;
   border-radius: 13px;
-  font-size: 14.5px;
+  font-size: 16px;
   color: #1e182b;
   background: rgba(255, 255, 255, 0.84);
   border: 1px solid rgba(154, 114, 214, 0.28);
@@ -397,7 +402,63 @@
   box-shadow: 0 0 0 3px rgba(225, 29, 72, 0.14);
 }
 
+.zzz-paste-btn {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
+  height: 36px;
+  padding: 0 11px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12.5px;
+  font-weight: 700;
+  color: #6b21a8;
+  background: linear-gradient(
+    135deg,
+    rgba(246, 237, 255, 0.96) 0%,
+    rgba(253, 238, 249, 0.92) 100%
+  );
+  border: 1px solid rgba(168, 85, 247, 0.28);
+  box-shadow:
+    0 4px 10px -4px rgba(108, 66, 168, 0.18),
+    inset 0 1px 0 rgba(255, 255, 255, 0.92);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background-color 140ms var(--ease-mech),
+    border-color 140ms var(--ease-mech),
+    transform 140ms var(--ease-mech),
+    box-shadow 140ms var(--ease-mech);
+}
+
+.zzz-paste-btn:hover:not(:disabled) {
+  border-color: rgba(168, 85, 247, 0.48);
+  box-shadow:
+    0 6px 14px -4px rgba(126, 34, 206, 0.24),
+    inset 0 1px 0 #ffffff;
+}
+
+.zzz-paste-btn:active:not(:disabled) {
+  transform: translateY(-50%) scale(0.97);
+}
+
+.zzz-paste-btn:focus-visible {
+  outline: 2px solid #9333ea;
+  outline-offset: 2px;
+}
+
+.zzz-paste-btn.is-pasted {
+  color: #047857;
+  background: rgba(220, 252, 235, 0.96);
+  border-color: rgba(16, 185, 129, 0.36);
+}
+
 .zzz-submit-btn {
+  position: relative;
+  overflow: hidden;
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -442,6 +503,39 @@
   outline-offset: 2px;
 }
 
+.zzz-submit-btn::after {
+  content: "";
+  position: absolute;
+  top: -20%;
+  bottom: -20%;
+  left: -35%;
+  width: 44%;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 244, 255, 0.72) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  transform: translateX(-160%) skewX(-24deg);
+  pointer-events: none;
+  opacity: 0;
+}
+
+.zzz-submit-btn.is-bursting::after {
+  animation: submit-shimmer-sweep 420ms cubic-bezier(0.22, 1, 0.36, 1) forwards;
+}
+
+@keyframes submit-shimmer-sweep {
+  0% {
+    opacity: 0.95;
+    transform: translateX(-120%) skewX(-24deg);
+  }
+  100% {
+    opacity: 0;
+    transform: translateX(380%) skewX(-24deg);
+  }
+}
+
 .zzz-field-error {
   font-size: 13px;
   line-height: 1.5;
@@ -467,6 +561,10 @@
    ========================================================================= */
 .buyer-page {
   color-scheme: light;
+  overflow-x: clip;
+  background-color: #f4eef9;
+  background-image: none;
+  --page: #f4eef9;
   --ink-1: #1e182b;
   --ink-2: #3a3150;
   --ink-3: #5a516e;
@@ -534,9 +632,14 @@
 }
 
 .buyer-page .brand-mark {
-  background: linear-gradient(135deg, #a855f7 0%, #ec4899 100%);
-  color: #ffffff;
-  border-color: rgba(255, 255, 255, 0.45);
+  width: 34px;
+  height: 34px;
+  clip-path: none;
+  border-radius: 50%;
+  background: transparent;
+  border: 0;
+  box-shadow: none;
+  padding: 0;
 }
 
 .buyer-page .brand-name {
@@ -695,6 +798,11 @@
   color: #0c4a6e;
 }
 
+.buyer-page .callout {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .buyer-page .callout-warning {
   background: rgba(255, 249, 224, 0.92);
   border-color: rgba(217, 119, 6, 0.28);
@@ -719,7 +827,27 @@
 }
 
 .buyer-page .footer-links {
-  color: #4b4161;
+  background: rgba(255, 255, 255, 0.80);
+  border: 1px solid rgba(255, 255, 255, 0.92);
+  box-shadow:
+    0 12px 28px rgba(96, 68, 138, 0.12),
+    inset 0 1px 0 rgba(255, 255, 255, 0.96);
+  backdrop-filter: blur(20px) saturate(160%);
+  -webkit-backdrop-filter: blur(20px) saturate(160%);
+  color: #241b35;
+  font-weight: 600;
+  padding: 8px 18px;
+}
+
+.buyer-page .footer-links a {
+  color: #7e22ce;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.buyer-page .footer-links a:hover {
+  color: #6b21a8;
+  text-decoration: underline;
 }
 
 .buyer-page .skeleton {
@@ -733,66 +861,679 @@
 }
 
 /* =========================================================================
+   Castorice Custom Icons, Die-Cut Stickers, tsParticles Layer & Transitions
+   ========================================================================= */
+.castorice-icon {
+  display: inline-block;
+  object-fit: contain;
+  flex: 0 0 auto;
+  vertical-align: middle;
+  user-select: none;
+  -webkit-user-drag: none;
+  filter: drop-shadow(0 1px 3px rgba(104, 62, 164, 0.18));
+}
+
+.castorice-icon--flip-x {
+  transform: scaleX(-1);
+}
+
+.castorice-icon--external {
+  transform: rotate(-38deg);
+}
+
+.inline-ext-icon {
+  vertical-align: -2px;
+  margin-left: 1px;
+}
+
+.presubmit-dot {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(138, 102, 196, 0.42);
+  background: rgba(255, 255, 255, 0.78);
+  flex: 0 0 auto;
+}
+
+.castorice-burst-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  pointer-events: none;
+  overflow: hidden;
+}
+
+.castorice-burst-layer canvas {
+  width: 100% !important;
+  height: 100% !important;
+  display: block;
+  pointer-events: none !important;
+}
+
+/* Die-Cut Q-Version Chibi Stickers & Speech Bubble */
+.buyer-page .voucher-summary-card {
+  position: relative;
+  overflow: visible;
+}
+
+.voucher-head--with-sticker {
+  padding-right: 96px;
+}
+
+.chibi-sticker {
+  position: absolute;
+  z-index: 8;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.chibi-sticker--peek {
+  top: -44px;
+  right: 16px;
+}
+
+.chibi-sticker--mail {
+  top: -30px;
+  right: 16px;
+}
+
+.chibi-sticker-btn {
+  appearance: none;
+  border: 0;
+  padding: 0;
+  margin: 0;
+  background: transparent;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 20px;
+  transition: transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.chibi-sticker-btn:hover {
+  transform: translateY(-3px) scale(1.04);
+}
+
+.chibi-sticker-btn:active {
+  transform: translateY(0) scale(0.97);
+}
+
+.chibi-sticker-btn:focus-visible {
+  outline: 2px solid #a855f7;
+  outline-offset: 3px;
+}
+
+.chibi-sticker-img {
+  display: block;
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-drag: none;
+  filter: drop-shadow(0 8px 16px rgba(88, 50, 142, 0.22));
+}
+
+.chibi-sticker--peek .chibi-sticker-img {
+  width: 96px;
+  height: 96px;
+}
+
+.chibi-sticker--mail .chibi-sticker-img {
+  width: 90px;
+  height: 90px;
+}
+
+.chibi-sticker.is-wiggling .chibi-sticker-img {
+  animation: chibi-peek-wiggle 480ms ease-in-out;
+}
+
+.chibi-sticker.is-spring-in {
+  animation: chibi-mail-spring 520ms cubic-bezier(0.34, 1.56, 0.64, 1) 160ms backwards;
+}
+
+@keyframes chibi-peek-wiggle {
+  0% { transform: rotate(0deg) translateY(0); }
+  25% { transform: rotate(-6deg) translateY(-3px); }
+  55% { transform: rotate(5deg) translateY(-2px); }
+  80% { transform: rotate(-2.5deg) translateY(-1px); }
+  100% { transform: rotate(0deg) translateY(0); }
+}
+
+@keyframes chibi-mail-spring {
+  0% {
+    opacity: 0;
+    transform: translate3d(0, -18px, 0) scale(0.72) rotate(8deg);
+  }
+  100% {
+    opacity: 1;
+    transform: translate3d(0, 0, 0) scale(1) rotate(0deg);
+  }
+}
+
+.chibi-speech-bubble {
+  position: absolute;
+  z-index: 24;
+  width: max-content;
+  max-width: min(238px, calc(100vw - 44px));
+  padding: 9px 13px;
+  border-radius: 14px;
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.45;
+  color: #261c3a;
+  background: linear-gradient(
+    145deg,
+    rgba(255, 255, 255, 0.94) 0%,
+    rgba(249, 241, 255, 0.92) 100%
+  );
+  border: 1px solid rgba(192, 132, 252, 0.42);
+  box-shadow:
+    0 14px 28px -10px rgba(88, 50, 142, 0.26),
+    inset 0 1px 0 #ffffff;
+  backdrop-filter: blur(18px) saturate(160%);
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  opacity: 0;
+  pointer-events: none;
+  transition:
+    opacity 180ms ease-out,
+    transform 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.chibi-sticker--peek .chibi-speech-bubble {
+  bottom: calc(100% + 4px);
+  right: 0;
+  transform: translateY(6px) scale(0.95);
+  transform-origin: bottom right;
+}
+
+.chibi-sticker--mail .chibi-speech-bubble {
+  top: calc(100% + 4px);
+  right: 0;
+  transform: translateY(-6px) scale(0.95);
+  transform-origin: top right;
+}
+
+.chibi-speech-bubble.is-visible {
+  opacity: 1;
+  pointer-events: auto;
+  transform: translateY(0) scale(1);
+}
+
+/* Stepper Pixel Sprite & Completed Shimmer Badge */
+.buyer-page .stepper-item {
+  position: relative;
+}
+
+.stepper-sprite {
+  width: 28px;
+  height: 28px;
+  object-fit: contain;
+  margin-left: auto;
+  flex: 0 0 auto;
+  pointer-events: none;
+  user-select: none;
+  filter: drop-shadow(0 3px 8px rgba(192, 132, 252, 0.45));
+  animation: pixel-sprite-float 2.2s ease-in-out infinite;
+}
+
+@keyframes pixel-sprite-float {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-3.5px);
+  }
+}
+
+.badge-shimmer {
+  position: relative;
+  overflow: hidden;
+}
+
+.badge-shimmer::after {
+  content: "";
+  position: absolute;
+  top: -30%;
+  bottom: -30%;
+  left: -40%;
+  width: 45%;
+  background: linear-gradient(
+    90deg,
+    rgba(255, 255, 255, 0) 0%,
+    rgba(255, 255, 255, 0.82) 50%,
+    rgba(255, 255, 255, 0) 100%
+  );
+  transform: translateX(-160%) skewX(-22deg);
+  pointer-events: none;
+  animation: badge-highlight-sweep 720ms cubic-bezier(0.22, 1, 0.36, 1) 280ms 1 backwards;
+}
+
+@keyframes badge-highlight-sweep {
+  0% {
+    transform: translateX(-140%) skewX(-22deg);
+  }
+  100% {
+    transform: translateX(380%) skewX(-22deg);
+  }
+}
+
+/* View Transition Shared Card Morph & Staggered Detail Blocks */
+.redeem-card-morph {
+  view-transition-name: redeem-card;
+}
+
+::view-transition-group(redeem-card) {
+  animation-duration: 480ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+::view-transition-old(redeem-card),
+::view-transition-new(redeem-card) {
+  border-radius: 20px;
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: 380ms;
+  animation-timing-function: ease-out;
+}
+
+html[data-vt-direction="back"]::view-transition-group(redeem-card),
+html[data-vt-direction="back"]::view-transition-old(root),
+html[data-vt-direction="back"]::view-transition-new(root) {
+  animation-duration: 400ms;
+  animation-timing-function: cubic-bezier(0.32, 0.72, 0, 1);
+}
+
+html[data-vt-fallback] .redeem-card-morph {
+  animation: vt-soft-fade 240ms ease-out backwards;
+}
+
+@keyframes vt-soft-fade {
+  from { opacity: 0.84; }
+  to { opacity: 1; }
+}
+
+.redeem-stagger-block {
+  animation: redeem-block-rise 380ms cubic-bezier(0.22, 1, 0.36, 1) calc(var(--stagger-idx, 0) * 50ms) backwards;
+}
+
+@keyframes redeem-block-rise {
+  from {
+    opacity: 0;
+    transform: translate3d(0, 10px, 0);
+  }
+  to {
+    opacity: 1;
+    transform: translate3d(0, 0, 0);
+  }
+}
+
+/* Mobile Sticky Gmail CTA Dock (hidden on desktop) */
+.redeem-mobile-sticky-dock {
+  display: none;
+}
+
+/* =========================================================================
    Responsive (Mobile 390x844 & Tablet)
    ========================================================================= */
-@media (max-width: 768px) {
+@media (max-width: 767px) {
   .buyer-wallpaper--hero .buyer-wallpaper-video,
   .buyer-wallpaper--hero .buyer-wallpaper-poster {
-    object-position: 54% 16%;
+    object-position: 43% 14%;
   }
 
   .buyer-wallpaper--hero .buyer-wallpaper-scrim {
     background:
       linear-gradient(
         180deg,
-        rgba(255, 252, 248, 0.14) 0%,
-        rgba(255, 255, 255, 0) 34%,
-        rgba(248, 243, 254, 0.22) 68%,
-        rgba(246, 239, 255, 0.42) 100%
+        rgba(255, 252, 248, 0.08) 0%,
+        rgba(255, 255, 255, 0) 42%,
+        rgba(248, 242, 255, 0.24) 60%,
+        rgba(244, 236, 255, 0.46) 100%
       );
   }
 
+  .zzz-home {
+    min-height: 100dvh;
+    height: 100dvh;
+    overflow-x: clip;
+    overflow-y: auto;
+  }
+
   .zzz-shell {
-    padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+    min-height: 100dvh;
+    padding: max(12px, env(safe-area-inset-top)) 0 0;
+    justify-content: space-between;
+  }
+
+  .zzz-topbar {
+    padding: 0 14px;
+  }
+
+  .zzz-brand {
+    gap: 8px;
+    padding: 5px 12px 5px 7px;
+    border-radius: 999px;
+  }
+
+  .zzz-brand-emblem {
+    width: 26px;
+    height: 26px;
+  }
+
+  .zzz-brand-title {
+    font-size: 12.5px;
+  }
+
+  .zzz-brand-sub {
+    font-size: 10.5px;
   }
 
   .zzz-stage {
+    flex: 1 0 auto;
     align-items: flex-end;
     justify-content: center;
-    padding: 150px 0 8px;
+    padding: 40dvh 0 0;
   }
 
   .zzz-hero-stack {
     max-width: 100%;
+    width: 100%;
   }
 
   .zzz-glass-card {
-    padding: 22px 18px 18px;
-    border-radius: 18px;
-    gap: 16px;
+    padding: 22px 18px max(20px, calc(16px + env(safe-area-inset-bottom)));
+    border-radius: 24px 24px 0 0;
+    border-bottom: 0;
+    gap: 14px;
     background: linear-gradient(
       158deg,
-      rgba(255, 255, 255, 0.76) 0%,
-      rgba(248, 242, 255, 0.70) 100%
+      rgba(255, 255, 255, 0.84) 0%,
+      rgba(248, 242, 255, 0.78) 100%
     );
+    box-shadow:
+      0 -18px 42px -14px rgba(76, 48, 124, 0.24),
+      inset 0 1px 0 rgba(255, 255, 255, 0.96);
+  }
+
+  .zzz-heading-block {
+    padding-right: 76px;
+    gap: 5px;
   }
 
   .zzz-hero-title {
-    font-size: 26px;
+    font-size: 24px;
   }
 
   .zzz-hero-subhead {
-    font-size: 16.5px;
+    font-size: 15.5px;
   }
 
   .zzz-hero-lead {
+    font-size: 13px;
+    line-height: 1.5;
+  }
+
+  .zzz-input {
+    min-height: 48px;
+    font-size: 16px;
+    padding: 0 88px 0 13px;
+  }
+
+  .zzz-submit-btn {
+    min-height: 48px;
+    font-size: 15.5px;
+  }
+
+  .zzz-card-note {
+    padding-top: 11px;
+    font-size: 12px;
+  }
+
+  .chibi-sticker--peek {
+    top: -42px;
+    right: 14px;
+  }
+
+  .chibi-sticker--peek .chibi-sticker-img {
+    width: 78px;
+    height: 78px;
+  }
+
+  /* Mobile Detail Page Single-Hand Polish */
+  .buyer-page {
+    padding: 12px max(12px, env(safe-area-inset-right)) max(32px, env(safe-area-inset-bottom)) max(12px, env(safe-area-inset-left));
+  }
+
+  .buyer-page--has-sticky-cta {
+    padding-bottom: calc(96px + env(safe-area-inset-bottom));
+  }
+
+  .buyer-page .buyer-container {
+    gap: 12px;
+  }
+
+  .buyer-page .buyer-topbar {
+    min-height: 44px;
+    padding: 5px 8px 5px 10px;
+    border-radius: 999px;
+    gap: 8px;
+    flex-wrap: nowrap;
+  }
+
+  .buyer-page .brand-lockup {
+    gap: 7px;
     font-size: 13.5px;
+    min-width: 0;
+    flex: 1 1 auto;
+  }
+
+  .buyer-page .brand-lockup-title {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .buyer-page .brand-mark {
+    width: 26px;
+    height: 26px;
+  }
+
+  .buyer-page .brand-mark .castorice-icon {
+    width: 26px !important;
+    height: 26px !important;
+  }
+
+  .buyer-page .buyer-back-btn {
+    flex: 0 0 auto;
+    height: 32px;
+    padding: 0 11px;
+    border-radius: 999px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .buyer-page .voucher-summary-card {
+    margin-top: 8px;
+  }
+
+  .voucher-head--with-sticker {
+    padding-right: 72px;
+  }
+
+  .chibi-sticker--mail {
+    top: -22px;
+    right: 10px;
+  }
+
+  .chibi-sticker--mail .chibi-sticker-img {
+    width: 72px;
+    height: 72px;
+  }
+
+  .buyer-page .voucher-meta-bar {
+    flex-wrap: nowrap;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 9px 11px;
+  }
+
+  .buyer-page .voucher-code-pill {
+    flex: 1 1 auto;
+    min-width: 0;
+    gap: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+  }
+
+  .buyer-page .voucher-code-label {
+    flex: 0 0 auto;
+    font-size: 12px;
+  }
+
+  .buyer-page .voucher-code-value {
+    font-size: 13px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .buyer-page .voucher-meta-bar > .btn {
+    flex: 0 0 auto;
+    white-space: nowrap;
+    height: 32px;
+    padding: 0 10px;
+    font-size: 12px;
+  }
+
+  .buyer-page .stepper {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    padding-top: 6px;
+  }
+
+  .buyer-page .stepper-item {
+    padding: 8px 7px;
+    gap: 5px;
+    font-size: 11.5px;
+  }
+
+  .buyer-page .stepper-num {
+    width: 19px;
+    height: 19px;
+    font-size: 10.5px;
+  }
+
+  .stepper-sprite {
+    position: absolute;
+    top: -11px;
+    right: 4px;
+    width: 22px;
+    height: 22px;
+    margin-left: 0;
+  }
+
+  .redeem-desktop-gmail-cta {
+    display: none;
+  }
+
+  .redeem-mobile-sticky-dock {
+    display: block;
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 40;
+    padding: 10px 14px calc(10px + env(safe-area-inset-bottom));
+    background: linear-gradient(
+      180deg,
+      rgba(251, 247, 255, 0.82) 0%,
+      rgba(246, 239, 255, 0.95) 100%
+    );
+    border-top: 1px solid rgba(255, 255, 255, 0.90);
+    box-shadow: 0 -10px 28px rgba(76, 48, 124, 0.14);
+    backdrop-filter: blur(18px) saturate(155%);
+    -webkit-backdrop-filter: blur(18px) saturate(155%);
+  }
+
+  .redeem-mobile-sticky-dock .btn {
+    min-height: 48px;
+    font-size: 15.5px;
+  }
+}
+
+@media (max-width: 767px) and (max-height: 720px) {
+  .zzz-stage {
+    padding-top: 43dvh;
+  }
+
+  .zzz-glass-card {
+    padding: 15px 16px max(12px, calc(10px + env(safe-area-inset-bottom)));
+    gap: 10px;
+  }
+
+  .zzz-heading-block {
+    gap: 3px;
+  }
+
+  .zzz-hero-title {
+    font-size: 21px;
+  }
+
+  .zzz-hero-subhead {
+    font-size: 14.5px;
+  }
+
+  .zzz-hero-lead {
+    font-size: 12.5px;
+    line-height: 1.4;
+  }
+
+  .zzz-form {
+    gap: 9px;
+  }
+
+  .zzz-card-note {
+    padding-top: 8px;
+    font-size: 11.5px;
+  }
+}
+
+@media (max-width: 479px) {
+  .buyer-page .kv-grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  .buyer-page .kv-item {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 11px;
+    min-width: 0;
+  }
+
+  .buyer-page .kv-label {
+    flex: 0 0 auto;
+    font-size: 12px;
+  }
+
+  .buyer-page .kv-value {
+    min-width: 0;
+    font-size: 13px;
+    text-align: right;
+    overflow-wrap: anywhere;
+    word-break: break-all;
   }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .buyer-wallpaper-webgl,
-  .buyer-wallpaper-particles {
+  .buyer-wallpaper-particles,
+  .castorice-burst-layer {
     display: none !important;
   }
 
@@ -803,7 +1544,23 @@
 
   .zzz-brand,
   .zzz-input,
-  .zzz-submit-btn {
+  .zzz-submit-btn,
+  .zzz-paste-btn,
+  .chibi-sticker-btn,
+  .chibi-speech-bubble {
     transition: none;
+  }
+
+  .stepper-sprite,
+  .redeem-stagger-block,
+  .chibi-sticker.is-spring-in,
+  .chibi-sticker.is-wiggling .chibi-sticker-img,
+  .badge-shimmer::after,
+  .zzz-submit-btn.is-bursting::after {
+    animation: none !important;
+  }
+
+  html[data-vt-fallback] .redeem-card-morph {
+    animation: vt-soft-fade 200ms ease-out !important;
   }
 }
