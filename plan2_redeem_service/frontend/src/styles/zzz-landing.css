@@ -881,6 +881,10 @@
   transform: rotate(-38deg);
 }
 
+.castorice-icon--down {
+  transform: rotate(90deg);
+}
+
 .inline-ext-icon {
   vertical-align: -2px;
   margin-left: 1px;

@@ -1,15 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
-import {
-  AlertCircle,
-  ChevronLeft,
-  ChevronRight,
-  Clock,
-  Inbox,
-  Loader2,
-  RefreshCw,
-  Search,
-} from "lucide-react";
 import { ApiError, listAdminCodes } from "../../api/client";
+import { CastoriceIcon } from "../../components/CastoriceIcon";
 import { OrderDisplayStatusBadge } from "../../components/StatusBadge";
 import type { AdminCodeListResponse, AdminCodeSummary, AdminOrderStatusFilter } from "../../types/api";
 import {
@@ -255,7 +246,7 @@ export function AdminOrdersPage({
             aria-busy={loading}
             onClick={() => void fetchList()}
           >
-            {loading ? <Loader2 size={14} className="spin" /> : <RefreshCw size={14} />}
+            <CastoriceIcon name="refresh" size={16} spin={loading} />
             <span>刷新</span>
           </button>
         </div>
@@ -323,7 +314,7 @@ export function AdminOrdersPage({
           </select>
 
           <button type="submit" className="btn btn-primary">
-            <Search size={15} />
+            <CastoriceIcon name="admin-ledger" size={19} />
             <span>筛选</span>
           </button>
         </form>
@@ -331,7 +322,7 @@ export function AdminOrdersPage({
 
       {error && (
         <div className="callout callout-danger" role="alert">
-          <AlertCircle size={18} className="callout-icon" aria-hidden="true" />
+          <CastoriceIcon name="alert" size={20} className="callout-icon" />
           <div>{error}</div>
         </div>
       )}
@@ -345,7 +336,7 @@ export function AdminOrdersPage({
         </div>
       ) : items.length === 0 ? (
         <div className="card stack" style={{ alignItems: "center", textAlign: "center", padding: "36px 20px" }}>
-          <Inbox size={28} style={{ color: "var(--ink-3)" }} aria-hidden="true" />
+          <CastoriceIcon name="admin-wait" size={64} />
           <h2 className="card-title" style={{ fontSize: 16 }}>
             当前条件下暂无订单记录
           </h2>
@@ -431,7 +422,7 @@ export function AdminOrdersPage({
                         />
                         {item.is_overdue_24h && (
                           <span className="badge badge-danger">
-                            <Clock size={12} aria-hidden="true" />
+                            <CastoriceIcon name="admin-alert" size={16} />
                             <span>超 24 小时</span>
                           </span>
                         )}
@@ -516,7 +507,7 @@ export function AdminOrdersPage({
                   disabled={page <= 1 || loading}
                   onClick={() => setPage((prev) => Math.max(1, prev - 1))}
                 >
-                  <ChevronLeft size={15} />
+                  <CastoriceIcon name="arrow-left" size={16} />
                   <span>上一页</span>
                 </button>
                 <button
@@ -526,7 +517,7 @@ export function AdminOrdersPage({
                   onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
                 >
                   <span>下一页</span>
-                  <ChevronRight size={15} />
+                  <CastoriceIcon name="arrow-right" size={16} />
                 </button>
               </div>
             </div>

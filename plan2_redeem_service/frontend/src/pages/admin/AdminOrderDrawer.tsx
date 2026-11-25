@@ -1,18 +1,5 @@
 import { useCallback, useEffect, useId, useState } from "react";
 import {
-  AlertTriangle,
-  Ban,
-  CheckCircle2,
-  Image as ImageIcon,
-  Loader2,
-  Maximize2,
-  RefreshCw,
-  RotateCcw,
-  Send,
-  ShieldCheck,
-  X,
-} from "lucide-react";
-import {
   ackAdminWarranty,
   ApiError,
   fetchAdminWarrantyScreenshot,
@@ -22,6 +9,7 @@ import {
   retryAdminCode,
   revokeAdminCode,
 } from "../../api/client";
+import { CastoriceIcon } from "../../components/CastoriceIcon";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { CopyButton } from "../../components/CopyButton";
 import { OrderDisplayStatusBadge, WarrantyStatusBadge } from "../../components/StatusBadge";
@@ -366,7 +354,7 @@ export function AdminOrderDrawer({
               aria-label="关闭订单详情"
               onClick={onClose}
             >
-              <X size={18} />
+              <CastoriceIcon name="close" size={19} />
             </button>
           </header>
 
@@ -379,7 +367,7 @@ export function AdminOrderDrawer({
               </div>
             ) : error ? (
               <div className="callout callout-danger" role="alert">
-                <AlertTriangle size={18} className="callout-icon" aria-hidden="true" />
+                <CastoriceIcon name="alert" size={20} className="callout-icon" />
                 <div className="stack-sm">
                   <span>{error}</span>
                   <button type="button" className="btn btn-secondary btn-sm" onClick={() => void loadDetail()}>
@@ -391,7 +379,7 @@ export function AdminOrderDrawer({
               <>
                 {(detail.last_error_code || detail.last_error_message) && (
                   <div className="callout callout-danger" role="alert">
-                    <AlertTriangle size={18} className="callout-icon" aria-hidden="true" />
+                    <CastoriceIcon name="admin-alert" size={24} className="callout-icon" />
                     <div>
                       <strong>异常提醒：</strong>
                       {formatOrderErrorMessage(detail.last_error_code, detail.last_error_message)}
@@ -624,7 +612,7 @@ export function AdminOrderDrawer({
                   <section className="inset-panel stack-sm" aria-label="保修登记与官方报备">
                     <div className="row-between">
                       <div className="row" style={{ gap: 8 }}>
-                        <ShieldCheck size={16} style={{ color: "var(--accent)" }} aria-hidden="true" />
+                        <CastoriceIcon name="admin-brand" size={22} />
                         <strong style={{ fontSize: 14 }}>保修登记与官方报备</strong>
                       </div>
                       <WarrantyStatusBadge status={warranty.status} />
@@ -648,7 +636,7 @@ export function AdminOrderDrawer({
 
                     {warranty.status === "registered_upstream" ? (
                       <div className="callout callout-success" role="status">
-                        <CheckCircle2 size={17} className="callout-icon" aria-hidden="true" />
+                        <CastoriceIcon name="check" size={19} className="callout-icon" />
                         <div>
                           <div>
                             已于{" "}
@@ -683,7 +671,7 @@ export function AdminOrderDrawer({
                       <>
                         {isTgForwardFailed && (
                           <div className="callout callout-danger" role="alert">
-                            <AlertTriangle size={17} className="callout-icon" aria-hidden="true" />
+                            <CastoriceIcon name="admin-alert" size={24} className="callout-icon" />
                             <div>
                               <strong>Telegram 自动报备失败</strong>
                               <div style={{ marginTop: 4, fontSize: 12.5, wordBreak: "break-word" }}>
@@ -706,7 +694,7 @@ export function AdminOrderDrawer({
                       <div className="stack-sm">
                         <div className="row-between" style={{ fontSize: 13, color: "var(--ink-3)" }}>
                           <span className="row" style={{ gap: 6 }}>
-                            <ImageIcon size={14} aria-hidden="true" />
+                            <CastoriceIcon name="admin-ledger" size={18} />
                             <span>历史保修截图</span>
                           </span>
                           {screenshotUrl && (
@@ -715,7 +703,7 @@ export function AdminOrderDrawer({
                               className="btn btn-ghost btn-sm"
                               onClick={() => setScreenshotZoomOpen(true)}
                             >
-                              <Maximize2 size={13} />
+                              <CastoriceIcon name="external" size={15} />
                               <span>点击放大</span>
                             </button>
                           )}
@@ -782,12 +770,12 @@ export function AdminOrderDrawer({
                           >
                             {forwarding ? (
                               <>
-                                <Loader2 size={15} className="spin" />
+                                <CastoriceIcon name="refresh" size={17} spin />
                                 <span>正在重发 TG 报备...</span>
                               </>
                             ) : (
                               <>
-                                <Send size={15} />
+                                <CastoriceIcon name="mail" size={17} />
                                 <span>重发 TG 报备</span>
                               </>
                             )}
@@ -810,12 +798,12 @@ export function AdminOrderDrawer({
                         >
                           {acking ? (
                             <>
-                              <Loader2 size={15} className="spin" />
+                              <CastoriceIcon name="refresh" size={17} spin />
                               <span>保存中...</span>
                             </>
                           ) : (
                             <>
-                              <CheckCircle2 size={15} />
+                              <CastoriceIcon name="check" size={17} />
                               <span>我已发给官方报备</span>
                             </>
                           )}
@@ -840,11 +828,7 @@ export function AdminOrderDrawer({
                             aria-busy={polling}
                             onClick={() => void handlePoll()}
                           >
-                            {polling ? (
-                              <Loader2 size={15} className="spin" />
-                            ) : (
-                              <RefreshCw size={15} />
-                            )}
+                            <CastoriceIcon name="refresh" size={17} spin={polling} />
                             <span>立即查一次上游进度</span>
                           </button>
                         )}
@@ -855,7 +839,7 @@ export function AdminOrderDrawer({
                             className="btn btn-danger"
                             onClick={() => setRevokeConfirmOpen(true)}
                           >
-                            <Ban size={15} />
+                            <CastoriceIcon name="admin-alert" size={19} />
                             <span>作废这个兑换码</span>
                           </button>
                         )}
@@ -890,7 +874,7 @@ export function AdminOrderDrawer({
                           className="btn btn-warm btn-block"
                           onClick={() => setRetryConfirmOpen(true)}
                         >
-                          <RotateCcw size={15} />
+                          <CastoriceIcon name="retry" size={17} />
                           <span>
                             {overridePriceLimit ? "按当前进价放行并重下" : "重新向上游下单"}
                           </span>
@@ -961,7 +945,7 @@ export function AdminOrderDrawer({
               className="btn btn-secondary btn-sm"
               onClick={() => setScreenshotZoomOpen(false)}
             >
-              <X size={15} />
+              <CastoriceIcon name="close" size={16} />
               <span>关闭大图</span>
             </button>
             <img

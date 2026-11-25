@@ -1,13 +1,5 @@
 import { useState } from "react";
-import {
-  AlertTriangle,
-  ArrowUpRight,
-  Clock,
-  Loader2,
-  RefreshCw,
-  ShieldAlert,
-  Wallet,
-} from "lucide-react";
+import { CastoriceIcon } from "../../components/CastoriceIcon";
 import type { AdminOrderStatusFilter, AdminOverviewResponse } from "../../types/api";
 import { formatDateTime, formatUsd, getSkuShortLabel } from "../../utils/format";
 
@@ -143,7 +135,7 @@ export function AdminOverviewPage({
             aria-busy={refreshing}
             onClick={handleRefresh}
           >
-            {refreshing ? <Loader2 size={15} className="spin" /> : <RefreshCw size={15} />}
+            <CastoriceIcon name="refresh" size={17} spin={refreshing} />
             <span>刷新余额与进价</span>
           </button>
         </div>
@@ -151,7 +143,7 @@ export function AdminOverviewPage({
 
       {canboso.is_low_balance && (
         <div className="callout callout-danger" role="alert">
-          <ShieldAlert size={18} className="callout-icon" aria-hidden="true" />
+          <CastoriceIcon name="admin-alert" size={26} className="callout-icon" />
           <div>
             <strong>上游余额偏低：</strong>当前余额 {formatUsd(canboso.balance_usd)}，低于提醒线{" "}
             {formatUsd(canboso.low_balance_threshold_usd)}。余额不够时新单会自动转到「需人工处理」并给你发邮件。
@@ -161,7 +153,7 @@ export function AdminOverviewPage({
 
       {canboso.error && (
         <div className="callout callout-warning" role="alert">
-          <AlertTriangle size={18} className="callout-icon" aria-hidden="true" />
+          <CastoriceIcon name="alert" size={20} className="callout-icon" />
           <div>
             <strong>查上游进价失败：</strong>
             {canboso.error}
@@ -174,7 +166,7 @@ export function AdminOverviewPage({
           <div className="row-between">
             <div className="row" style={{ gap: 8 }}>
               <span className="ops-icon-badge" aria-hidden="true">
-                <Wallet size={15} />
+                <CastoriceIcon name="admin-wallet" size={28} />
               </span>
               <h2 className="card-title" style={{ fontSize: 15 }}>
                 Canboso 账户余额
@@ -328,7 +320,7 @@ export function AdminOverviewPage({
         <div className="admin-section-bar">
           <h2 className="admin-section-title">订单处理进度</h2>
           <span className="admin-section-hint">
-            <Clock size={13} aria-hidden="true" />
+            <CastoriceIcon name="admin-wait" size={19} />
             <span>每 20 分钟自动查进度 · 点卡片看明细</span>
           </span>
         </div>
@@ -351,7 +343,7 @@ export function AdminOverviewPage({
             >
               <div className="kpi-card-top">
                 <span className="kpi-label">{item.label}</span>
-                <ArrowUpRight size={14} className="kpi-arrow" aria-hidden="true" />
+                <CastoriceIcon name="external" size={16} className="kpi-arrow" />
               </div>
               <span className="kpi-value tabular">{item.value}</span>
               <span className="kpi-meta">{item.meta}</span>

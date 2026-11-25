@@ -1,6 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
-import { CheckCircle2, Loader2, Mail, Save, Sliders } from "lucide-react";
 import { ApiError, sendAdminTestEmail, updateAdminSku } from "../../api/client";
+import { CastoriceIcon } from "../../components/CastoriceIcon";
 import { useToast } from "../../components/ToastProvider";
 import type { AdminOverviewResponse, AdminSkuStatus, SkuKey } from "../../types/api";
 import { formatUsd, getSkuShortLabel } from "../../utils/format";
@@ -121,7 +121,7 @@ export function AdminSettingsPage({
             >
               <div className="row-between">
                 <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
-                  <Sliders size={17} style={{ color: "var(--accent)" }} aria-hidden="true" />
+                  <CastoriceIcon name="admin-settings" size={24} />
                   <span
                     className={`sku-tag ${
                       isExclusive ? "sku-tag-exclusive" : "sku-tag-shared"
@@ -202,12 +202,12 @@ export function AdminSettingsPage({
               >
                 {saving ? (
                   <>
-                    <Loader2 size={15} className="spin" />
+                    <CastoriceIcon name="refresh" size={17} spin />
                     <span>保存中...</span>
                   </>
                 ) : (
                   <>
-                    <Save size={15} />
+                    <CastoriceIcon name="admin-happy" size={19} />
                     <span>保存这项设置</span>
                   </>
                 )}
@@ -220,7 +220,7 @@ export function AdminSettingsPage({
       <section className="card stack" aria-label="异常提醒邮件测试">
         <div className="row-between">
           <div className="row">
-            <Mail size={18} style={{ color: "var(--accent-2)" }} aria-hidden="true" />
+            <CastoriceIcon name="chibi-mail" size={28} />
             <div>
               <h2 className="card-title">商家邮件通知测试</h2>
               <p className="card-subtitle">
@@ -235,14 +235,14 @@ export function AdminSettingsPage({
             aria-busy={sendingEmail}
             onClick={() => void handleSendTestEmail()}
           >
-            {sendingEmail ? <Loader2 size={15} className="spin" /> : <Mail size={15} />}
+            <CastoriceIcon name={sendingEmail ? "refresh" : "mail"} size={17} spin={sendingEmail} />
             <span>发送测试邮件</span>
           </button>
         </div>
 
         {emailResult && (
           <div className="callout callout-success" role="status">
-            <CheckCircle2 size={17} className="callout-icon" aria-hidden="true" />
+            <CastoriceIcon name="check" size={19} className="callout-icon" />
             <div>{emailResult}</div>
           </div>
         )}

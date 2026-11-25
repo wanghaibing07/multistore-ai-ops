@@ -1,6 +1,6 @@
 import { useId, useState, type FormEvent } from "react";
-import { AlertCircle, Download, Layers, Loader2, Send, TicketPlus } from "lucide-react";
 import { ApiError, batchAdminCodes, issueAdminCode } from "../../api/client";
+import { CastoriceIcon } from "../../components/CastoriceIcon";
 import { CopyButton } from "../../components/CopyButton";
 import { useToast } from "../../components/ToastProvider";
 import type {
@@ -164,7 +164,7 @@ export function AdminIssuePage({
       <div className="admin-two-col">
         <section className="card stack" aria-label="单笔发码">
           <div className="row">
-            <Send size={18} style={{ color: "var(--accent)" }} aria-hidden="true" />
+            <CastoriceIcon name="admin-craft" size={28} />
             <div>
               <h2 className="card-title">单笔发码（淘宝 / 手动发货）</h2>
               <p className="card-subtitle">生成 1 个一次性兑换码，并自动生成可直接发给买家的旺旺话术</p>
@@ -246,7 +246,7 @@ export function AdminIssuePage({
 
             {singleError && (
               <p className="field-error" role="alert">
-                <AlertCircle size={14} aria-hidden="true" />
+                <CastoriceIcon name="alert" size={16} />
                 <span>{singleError}</span>
               </p>
             )}
@@ -259,12 +259,12 @@ export function AdminIssuePage({
             >
               {singleLoading ? (
                 <>
-                  <Loader2 size={15} className="spin" />
+                  <CastoriceIcon name="refresh" size={17} spin />
                   <span>生成中...</span>
                 </>
               ) : (
                 <>
-                  <TicketPlus size={15} />
+                  <CastoriceIcon name="voucher" size={18} />
                   <span>生成兑换码和旺旺话术</span>
                 </>
               )}
@@ -314,7 +314,7 @@ export function AdminIssuePage({
 
         <section className="card stack" aria-label="批量制码">
           <div className="row">
-            <Layers size={18} style={{ color: "var(--accent-2)" }} aria-hidden="true" />
+            <CastoriceIcon name="admin-settings" size={28} />
             <div>
               <h2 className="card-title">批量制码（16688 上货 / 提前备码）</h2>
               <p className="card-subtitle">一次最多生成 200 个兑换码，买家提货时才向上游下单，支持导出 TXT</p>
@@ -413,7 +413,7 @@ export function AdminIssuePage({
 
             {batchError && (
               <p className="field-error" role="alert">
-                <AlertCircle size={14} aria-hidden="true" />
+                <CastoriceIcon name="alert" size={16} />
                 <span>{batchError}</span>
               </p>
             )}
@@ -426,12 +426,12 @@ export function AdminIssuePage({
             >
               {batchLoading ? (
                 <>
-                  <Loader2 size={15} className="spin" />
+                  <CastoriceIcon name="refresh" size={17} spin />
                   <span>批量生成中...</span>
                 </>
               ) : (
                 <>
-                  <Layers size={15} />
+                  <CastoriceIcon name="admin-settings" size={19} />
                   <span>批量生成兑换码</span>
                 </>
               )}
@@ -487,7 +487,7 @@ export function AdminIssuePage({
                     pushToast("已导出 TXT 文件", "success");
                   }}
                 >
-                  <Download size={14} />
+                  <CastoriceIcon name="download" size={16} />
                   <span>下载 TXT</span>
                 </button>
               </div>

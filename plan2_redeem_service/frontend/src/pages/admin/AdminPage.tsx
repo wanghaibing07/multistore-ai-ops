@@ -1,19 +1,11 @@
 import { useCallback, useEffect, useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
-  ArrowLeft,
-  ClipboardList,
-  LayoutDashboard,
-  LogOut,
-  ShieldCheck,
-  Sliders,
-  TicketPlus,
-} from "lucide-react";
-import {
   ApiError,
   getAdminOverview,
   refreshAdminUpstream,
 } from "../../api/client";
+import { CastoriceIcon, type CastoriceIconName } from "../../components/CastoriceIcon";
 import { useToast } from "../../components/ToastProvider";
 import type { AdminOrderStatusFilter, AdminOverviewResponse } from "../../types/api";
 import "../../styles/admin-glass.css";
@@ -228,18 +220,18 @@ export function AdminPage() {
   const navItems: Array<{
     id: AdminTab;
     label: string;
-    icon: typeof LayoutDashboard;
+    icon: CastoriceIconName;
     count?: number;
   }> = [
-    { id: "overview", label: "总览", icon: LayoutDashboard },
-    { id: "issue", label: "发兑换码", icon: TicketPlus },
+    { id: "overview", label: "总览", icon: "admin-overview" },
+    { id: "issue", label: "发兑换码", icon: "admin-craft" },
     {
       id: "orders",
       label: "订单和保修",
-      icon: ClipboardList,
+      icon: "admin-ledger",
       count: manualAttentionCount,
     },
-    { id: "settings", label: "价格与设置", icon: Sliders },
+    { id: "settings", label: "价格与设置", icon: "admin-settings" },
   ];
 
   return (
@@ -254,7 +246,7 @@ export function AdminPage() {
             onClick={() => setActiveTab("overview")}
           >
             <span className="admin-rail-mark" aria-hidden="true">
-              <ShieldCheck size={18} />
+              <CastoriceIcon name="admin-brand" size={32} />
             </span>
             <div>
               <div className="admin-rail-title">Ultra 20x 商家台</div>
@@ -270,14 +262,13 @@ export function AdminPage() {
               aria-label="退出后台登录"
               onClick={() => clearSession("已退出商家后台")}
             >
-              <LogOut size={15} />
+              <CastoriceIcon name="admin-bye" size={20} />
             </button>
           </div>
         </div>
 
         <nav className="admin-rail-nav" aria-label="商家后台导航">
           {navItems.map((navItem) => {
-            const IconComponent = navItem.icon;
             const isActive = activeTab === navItem.id;
             return (
               <button
@@ -288,7 +279,7 @@ export function AdminPage() {
                 onClick={() => switchTab(navItem.id)}
               >
                 <span className="rail-nav-left">
-                  <IconComponent size={16} aria-hidden="true" />
+                  <CastoriceIcon name={navItem.icon} size={22} />
                   <span>{navItem.label}</span>
                 </span>
                 {navItem.count !== undefined && navItem.count > 0 && (
@@ -304,7 +295,7 @@ export function AdminPage() {
         <div className="admin-rail-footer">
           <Link to="/" className="rail-nav-btn">
             <span className="rail-nav-left">
-              <ArrowLeft size={15} aria-hidden="true" />
+              <CastoriceIcon name="arrow-left" size={18} />
               <span>返回买家页</span>
             </span>
           </Link>
@@ -314,7 +305,7 @@ export function AdminPage() {
             onClick={() => clearSession("已退出商家后台")}
           >
             <span className="rail-nav-left">
-              <LogOut size={15} aria-hidden="true" />
+              <CastoriceIcon name="admin-bye" size={20} />
               <span>退出登录</span>
             </span>
           </button>

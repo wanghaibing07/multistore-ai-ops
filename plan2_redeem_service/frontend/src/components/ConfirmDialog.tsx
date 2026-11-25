@@ -1,5 +1,5 @@
 import { useEffect, useId, useRef, type ReactNode } from "react";
-import { AlertTriangle, Loader2, X } from "lucide-react";
+import { CastoriceIcon } from "./CastoriceIcon";
 
 interface ConfirmDialogProps {
   open: boolean;
@@ -89,9 +89,10 @@ export function ConfirmDialog({
       <div className="dialog-body">
         <div className="dialog-header">
           <div className="dialog-title-row">
-            <AlertTriangle
-              size={20}
-              style={{ color: confirmVariant === "danger" ? "var(--down)" : "var(--warn)", flex: "0 0 auto" }}
+            <CastoriceIcon
+              name={confirmVariant === "danger" ? "admin-alert" : "alert"}
+              size={confirmVariant === "danger" ? 26 : 22}
+              style={{ flex: "0 0 auto" }}
             />
             <h3 id={titleId} className="card-title" style={{ fontSize: 16.5 }}>
               {title}
@@ -104,7 +105,7 @@ export function ConfirmDialog({
             disabled={busy}
             onClick={() => dialogRef.current?.close()}
           >
-            <X size={18} />
+            <CastoriceIcon name="close" size={19} />
           </button>
         </div>
 
@@ -131,7 +132,7 @@ export function ConfirmDialog({
           >
             {busy ? (
               <>
-                <Loader2 size={15} className="spin" />
+                <CastoriceIcon name="refresh" size={16} spin />
                 <span>处理中...</span>
               </>
             ) : (

@@ -1,7 +1,7 @@
 import { useId, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link } from "react-router-dom";
-import { AlertCircle, ArrowLeft, Eye, EyeOff, Loader2, ShieldCheck } from "lucide-react";
 import { ApiError, getAdminOverview } from "../../api/client";
+import { CastoriceIcon } from "../../components/CastoriceIcon";
 import type { AdminOverviewResponse } from "../../types/api";
 import { isImeComposing } from "../../utils/ime";
 import "../../styles/admin-glass.css";
@@ -55,7 +55,7 @@ export function AdminLoginPage({ onAuthenticated, embeddedBackdrop = false }: Ad
       <div className="login-card stack">
         <div className="row-between">
           <Link to="/" className="btn btn-ghost btn-sm">
-            <ArrowLeft size={15} />
+            <CastoriceIcon name="arrow-left" size={17} />
             <span>返回买家提货页</span>
           </Link>
         </div>
@@ -63,7 +63,7 @@ export function AdminLoginPage({ onAuthenticated, embeddedBackdrop = false }: Ad
         <form className="card admin-login-panel stack" onSubmit={handleSubmit} noValidate>
           <div className="admin-login-head">
             <span className="admin-login-emblem" aria-hidden="true">
-              <ShieldCheck size={18} />
+              <CastoriceIcon name="admin-brand" size={42} />
             </span>
             <div>
               <h1 className="card-title">商家后台登录</h1>
@@ -98,14 +98,15 @@ export function AdminLoginPage({ onAuthenticated, embeddedBackdrop = false }: Ad
                 type="button"
                 className="input-action-btn"
                 aria-label={showToken ? "隐藏口令" : "显示口令"}
+                title={showToken ? "隐藏口令" : "显示口令"}
                 onClick={() => setShowToken((prev) => !prev)}
               >
-                {showToken ? <EyeOff size={16} /> : <Eye size={16} />}
+                <CastoriceIcon name={showToken ? "admin-happy" : "chibi-peek"} size={24} />
               </button>
             </div>
             {error && (
               <p id={errorId} className="field-error" role="alert">
-                <AlertCircle size={14} aria-hidden="true" />
+                <CastoriceIcon name="alert" size={16} />
                 <span>{error}</span>
               </p>
             )}
@@ -119,7 +120,7 @@ export function AdminLoginPage({ onAuthenticated, embeddedBackdrop = false }: Ad
           >
             {submitting ? (
               <>
-                <Loader2 size={16} className="spin" />
+                <CastoriceIcon name="refresh" size={17} spin />
                 <span>正在验证口令...</span>
               </>
             ) : (
