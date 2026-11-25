@@ -72,21 +72,76 @@ def test_shared_redeem_and_poll_completion(components):
         assert mailer.sent == []
 
 
-def test_gmail_domain_is_required(components):
+def test_any_valid_email_domain_is_accepted_for_redeem_and_warranty(components):
     app, _, _, _, _ = components
     with client(app) as c:
-        code = issue(c)
-        response = c.post(f"/api/v1/public/codes/{code}/redeem", json={"buyer_email": "buyer@example.com", "buyer_email_confirm": "buyer@example.com", "preflight_confirmed": True})
-        assert response.status_code == 422
-        assert response.json()["error_code"] == "INVALID_EMAIL"
+        valid_emails = [
+            ("buyer@example.com", "bu***@example.com"),
+            ("123456789@qq.com", "12***@qq.com"),
+            ("User.Name+tag@Outlook.com", "us***@outlook.com"),
+            ("admin@sub.company.co.uk", "ad***@sub.company.co.uk"),
+            ("buyer@googlemail.com", "bu***@googlemail.com"),
+        ]
+        for raw_email, expected_masked in valid_emails:
+            code = issue(c)
+            response = c.post(
+                f"/api/v1/public/codes/{code}/redeem",
+                json={"buyer_email": raw_email, "buyer_email_confirm": raw_email, "preflight_confirmed": True},
+            )
+            assert response.status_code == 200, raw_email
+            body = response.json()
+            assert body["buyer_email_masked"] == expected_masked
+            assert raw_email.lower() not in str(body)
+            assert app.state.ledger.get_code(code)["buyer_email"] == raw_email.lower()
+
+        exclusive_code = issue(c, sku="ultra_exclusive_admin")
+        delivered = c.post(f"/api/v1/public/codes/{exclusive_code}/redeem", json={"preflight_confirmed": True})
+        assert delivered.status_code == 200
+        warranty_resp = c.post(
+            f"/api/v1/public/codes/{exclusive_code}/warranty",
+            data={"admin_email": "Owner@163.com", "admin_email_confirm": "owner@163.com", "note": "non-gmail"},
+            files={"screenshot": ("proof.png", b"png-bytes", "image/png")},
+        )
+        assert warranty_resp.status_code == 200
+        assert warranty_resp.json()["warranty"]["admin_email_masked"] == "ow***@163.com"
+        assert app.state.ledger.get_code(exclusive_code)["buyer_email"] == "owner@163.com"
 
 
-def test_googlemail_domain_is_accepted(components):
+def test_invalid_email_syntax_is_rejected_for_redeem_and_warranty(components):
     app, _, _, _, _ = components
+    invalid_emails = [
+        "   ",
+        "not-an-email",
+        "buyer@localhost",
+        "a..b@qq.com",
+        ".a@qq.com",
+        "a.@qq.com",
+        "buyer@-bad.com",
+        "buyer@bad-.com",
+        "buyer@bad.1",
+        "buyer @qq.com",
+        "buyer@xn--bad-",
+    ]
     with client(app) as c:
-        code = issue(c)
-        response = c.post(f"/api/v1/public/codes/{code}/redeem", json={"buyer_email": "buyer@googlemail.com", "buyer_email_confirm": "buyer@googlemail.com", "preflight_confirmed": True})
-        assert response.status_code == 200
+        slot_code = issue(c)
+        for bad_email in ["", *invalid_emails]:
+            response = c.post(
+                f"/api/v1/public/codes/{slot_code}/redeem",
+                json={"buyer_email": bad_email, "buyer_email_confirm": bad_email, "preflight_confirmed": True},
+            )
+            assert response.status_code == 422, bad_email
+            assert response.json()["error_code"] == "INVALID_EMAIL"
+
+        exclusive_code = issue(c, sku="ultra_exclusive_admin")
+        assert c.post(f"/api/v1/public/codes/{exclusive_code}/redeem", json={"preflight_confirmed": True}).status_code == 200
+        for bad_email in invalid_emails:
+            response = c.post(
+                f"/api/v1/public/codes/{exclusive_code}/warranty",
+                data={"admin_email": bad_email, "note": "invalid"},
+                files={"screenshot": ("proof.png", b"png-bytes", "image/png")},
+            )
+            assert response.status_code == 422, bad_email
+            assert response.json()["error_code"] == "INVALID_EMAIL"
 
 
 def test_concurrent_double_spend_only_one_charge(components):

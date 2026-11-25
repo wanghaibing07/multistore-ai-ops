@@ -24,7 +24,7 @@ function getSkuIssueHint(skuKey: SkuKey): string {
   if (skuKey === "ultra_exclusive_admin") {
     return "独享整组：买家提货立刻拿到商店套餐邮箱，拉进自己的家庭组后再交主邮箱和截图登记保修。";
   }
-  return "共享车位：买家提货时填自己的 Gmail，系统自动向上游下单排队拉人，每 20 分钟自动查一次进度。";
+  return "共享车位：买家提货时填自己的邮箱，系统自动向上游下单排队拉人，每 20 分钟自动查一次进度。";
 }
 
 export function AdminIssuePage({

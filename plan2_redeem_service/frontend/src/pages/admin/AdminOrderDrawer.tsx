@@ -390,7 +390,7 @@ export function AdminOrderDrawer({
                     {isExclusive ? (
                       <>
                         <div className="kv-item">
-                          <span className="kv-label">买家主 Gmail</span>
+                          <span className="kv-label">买家主邮箱</span>
                           <div className="row-between" style={{ gap: 6 }}>
                             <span
                               className={`kv-value ${exclusiveBuyerEmail ? "mono" : "muted"}`}
@@ -402,7 +402,7 @@ export function AdminOrderDrawer({
                               <CopyButton
                                 text={exclusiveBuyerCopyText}
                                 label="复制"
-                                toastMessage="已复制买家主 Gmail"
+                                toastMessage="已复制买家主邮箱"
                                 variant="ghost"
                               />
                             )}
@@ -430,7 +430,7 @@ export function AdminOrderDrawer({
                       </>
                     ) : (
                       <div className="kv-item">
-                        <span className="kv-label">买家 Gmail</span>
+                        <span className="kv-label">买家邮箱</span>
                         <div className="row-between" style={{ gap: 6 }}>
                           <span
                             className={`kv-value ${sharedBuyerEmail ? "mono" : "muted"}`}
@@ -442,7 +442,7 @@ export function AdminOrderDrawer({
                             <CopyButton
                               text={sharedBuyerCopyText}
                               label="复制"
-                              toastMessage="已复制买家 Gmail"
+                              toastMessage="已复制买家邮箱"
                               variant="ghost"
                             />
                           )}
@@ -566,7 +566,7 @@ export function AdminOrderDrawer({
 
                     <div className="kv-grid">
                       <div className="kv-item">
-                        <span className="kv-label">买家主 Gmail</span>
+                        <span className="kv-label">买家主邮箱</span>
                         <span className="kv-value mono">
                           {detail.warranty.admin_email || "待买家提交"}
                         </span>

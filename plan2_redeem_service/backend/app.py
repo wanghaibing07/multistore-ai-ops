@@ -330,8 +330,8 @@ def create_app(
                 "CODE_REVOKED": "这个兑换码已作废，有问题请联系客服",
                 "CONCURRENT_IN_PROGRESS": "正在处理中，请等几秒刷新看看",
                 "ORDER_NOT_ELIGIBLE": "这笔订单暂时领不了，请确认已付款且没退款",
-                "INVALID_EMAIL": "请填正确的 Gmail 邮箱（如 xxx@gmail.com）",
-                "EMAIL_MISMATCH": "两次填的 Gmail 不一样，请核对后再提交",
+                "INVALID_EMAIL": "请填正确的邮箱地址（支持 Gmail、QQ、163、Outlook 等）",
+                "EMAIL_MISMATCH": "两次填的邮箱不一样，请核对后再提交",
                 "PREFLIGHT_REQUIRED": "请先勾选上面的确认项再提交",
             }
             return error(err_code, messages.get(err_code, "现在暂时处理不了，请稍后再试或联系客服"), status_for(err_code))
@@ -370,8 +370,8 @@ def create_app(
             messages = {
                 "CODE_NOT_FOUND": "没找到这个兑换码，请核对后重试",
                 "WARRANTY_LOCKED": "保修已经登记完，不能再改了，有变化请联系客服",
-                "INVALID_EMAIL": "请填正确的 Gmail 邮箱（如 xxx@gmail.com）",
-                "EMAIL_MISMATCH": "两次填的 Gmail 不一样，请核对后再提交",
+                "INVALID_EMAIL": "请填正确的邮箱地址（支持 Gmail、QQ、163、Outlook 等）",
+                "EMAIL_MISMATCH": "两次填的邮箱不一样，请核对后再提交",
                 "INVALID_SCREENSHOT_TYPE": "截图只支持 JPG、PNG 或 WEBP 格式",
                 "SCREENSHOT_TOO_LARGE": "截图太大了，请传 5MB 以内的图片",
                 "SCREENSHOT_EMPTY": "截图文件是空的，请重新上传",

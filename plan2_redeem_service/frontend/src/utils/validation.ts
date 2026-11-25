@@ -21,9 +21,9 @@ const GMAIL_DOMAIN_TYPOS = new Set([
   "googlemal.com",
 ]);
 
-const VALID_GMAIL_DOMAINS = new Set(["gmail.com", "googlemail.com"]);
-
-const LOCAL_PART_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._+-]{0,62}[A-Za-z0-9])?$/;
+const LOCAL_PART_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9._%+-]{0,62}[A-Za-z0-9])?$/;
+const DOMAIN_PATTERN =
+  /^(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+(?:[A-Za-z]{2,63}|xn--[A-Za-z0-9](?:[A-Za-z0-9-]{0,57}[A-Za-z0-9])?)$/;
 
 export interface GmailValidationResult {
   valid: boolean;
@@ -35,7 +35,7 @@ export interface GmailValidationResult {
 export function validateGmailInput(raw: string): GmailValidationResult {
   const trimmed = raw.trim();
   if (!trimmed) {
-    return { valid: false, normalized: "", error: "请先填一下你的 Gmail 邮箱" };
+    return { valid: false, normalized: "", error: "请先填一下你的邮箱" };
   }
   if (/\s/.test(trimmed)) {
     return {
@@ -57,7 +57,7 @@ export function validateGmailInput(raw: string): GmailValidationResult {
     return {
       valid: false,
       normalized: trimmed,
-      error: "邮箱格式不对，应该像 yourname@gmail.com 这样",
+      error: "邮箱格式不对，应该像 name@example.com 这样",
     };
   }
 
@@ -65,6 +65,13 @@ export function validateGmailInput(raw: string): GmailValidationResult {
   const domainPart = parts[1].toLowerCase();
   const normalized = `${localPart}@${domainPart}`;
 
+  if (normalized.length > 254) {
+    return {
+      valid: false,
+      normalized,
+      error: "邮箱地址太长了，请核对后再提交",
+    };
+  }
   if (localPart.includes("..")) {
     return {
       valid: false,
@@ -89,11 +96,11 @@ export function validateGmailInput(raw: string): GmailValidationResult {
     };
   }
 
-  if (!VALID_GMAIL_DOMAINS.has(domainPart)) {
+  if (!DOMAIN_PATTERN.test(domainPart)) {
     return {
       valid: false,
       normalized,
-      error: "只能填 @gmail.com 邮箱，QQ、163、Outlook 那些收不到家庭组邀请",
+      error: "邮箱域名格式不对，检查一下 @ 后面的内容",
     };
   }
 

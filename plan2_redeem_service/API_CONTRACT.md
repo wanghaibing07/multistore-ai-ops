@@ -36,7 +36,7 @@
 - `revoked`：兑换码已作废（退款、投诉或商家手动作废）
 
 ### 2.4 保修状态 (`warranty.status`，仅 `ultra_exclusive_admin`)
-- `pending`：等待买家提交主 Gmail + 邀请截图
+- `pending`：等待买家提交主邮箱 + 邀请截图
 - `submitted`：买家已提交保修信息，已发邮件通知商家
 - `registered_upstream`：商家已在后台标记“已向 Canboso 管理员报备”
 
@@ -122,7 +122,7 @@
   "preflight_confirmed": true
 }
 ```
-- 说明：`buyer_email_confirm` 为选填兼容字段（`string | null`）；不传或传空字符串时跳过二次邮箱比对，仅在显式传了非空值且与 `buyer_email` 不一致时返回 `422 EMAIL_MISMATCH`。
+- 说明：`buyer_email` 接受任意合法域名邮箱（不限于 `@gmail.com`）；`buyer_email_confirm` 为选填兼容字段（`string | null`），不传或传空字符串时跳过二次邮箱比对，仅在显式传了非空值且与 `buyer_email` 不一致时返回 `422 EMAIL_MISMATCH`。
 - 请求体（`ultra_exclusive_admin`）：
 ```json
 {
@@ -146,7 +146,7 @@
 `POST /api/v1/public/codes/{code}/warranty`
 
 - `Content-Type: multipart/form-data`
-  - `admin_email`：必填，合法 Gmail（提交后会同步写入 `codes.buyer_email` 与 `codes.buyer_email_masked`；公网接口仍只返回脱敏值）
+  - `admin_email`：必填，合法邮箱，支持 Gmail 及其他常见/自定义域名邮箱（提交后会同步写入 `codes.buyer_email` 与 `codes.buyer_email_masked`；公网接口仍只返回脱敏值）
   - `admin_email_confirm`：选填（向后兼容）；不传或传空时跳过二次比对，仅在显式传了非空值且与 `admin_email` 不一致时返回 `422 EMAIL_MISMATCH`
   - `screenshot`：必填，图片文件（`image/jpeg`, `image/png`, `image/webp`，最大 5MB）
   - `note`：选填，最多 300 字

@@ -36,7 +36,23 @@ from .gateways import UpstreamError, UpstreamTimeout
 
 logger = logging.getLogger(__name__)
 
-EMAIL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._%+-]*@(gmail\.com|googlemail\.com)$", re.IGNORECASE)
+EMAIL_RE = re.compile(
+    r"^[A-Za-z0-9](?:[A-Za-z0-9._%+-]{0,62}[A-Za-z0-9])?@"
+    r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
+    r"(?:[A-Za-z]{2,63}|xn--[A-Za-z0-9](?:[A-Za-z0-9-]{0,57}[A-Za-z0-9])?)\Z",
+    re.IGNORECASE,
+)
+
+
+def is_valid_email(value: str) -> bool:
+    if not value or len(value) > 254 or "@" not in value:
+        return False
+    local_part, _ = value.split("@", 1)
+    if ".." in local_part:
+        return False
+    return bool(EMAIL_RE.match(value))
+
+
 IN_STOCK_SQL = "status='unused' AND COALESCE(TRIM(external_order_id), '') = ''"
 DISPATCHED_UNUSED_SQL = "status='unused' AND COALESCE(TRIM(external_order_id), '') <> ''"
 PENDING_WARRANTY_ACK_SQL = (
@@ -263,7 +279,7 @@ class Service:
         normalized: Optional[str] = None
         if sku["product_type"] == "slot":
             normalized = (buyer_email or "").strip().lower()
-            if not EMAIL_RE.match(normalized):
+            if not is_valid_email(normalized):
                 return {}, "INVALID_EMAIL"
             if confirm is not None and confirm.strip() != "" and normalized != confirm.strip().lower():
                 return {}, "EMAIL_MISMATCH"
@@ -465,7 +481,7 @@ class Service:
         if old_warranty.get("status") == "registered_upstream":
             return {}, "WARRANTY_LOCKED"
         email = admin_email.strip().lower()
-        if not EMAIL_RE.match(email):
+        if not is_valid_email(email):
             return {}, "INVALID_EMAIL"
         if confirm is not None and confirm.strip() != "" and email != confirm.strip().lower():
             return {}, "EMAIL_MISMATCH"

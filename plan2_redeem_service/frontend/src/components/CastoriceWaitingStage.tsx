@@ -27,7 +27,7 @@ const MINI_BUTTERFLY_ASSET = "/assets/waiting/mini-butterfly-glow.png";
 const TEA_REASSURANCE_TIPS = [
   "你的邮箱已经提交成功，正在排队拉你进 Google 家庭组，不用重复操作",
   "一般 2-6 小时内发邀请，最晚 24 小时；关掉页面也会继续排，收藏本页随时看进度",
-  "发出邀请后页面会自动变绿提醒，记得留意 Gmail 收件箱与垃圾箱哦",
+  "发出邀请后页面会自动变绿提醒，记得留意邮箱收件箱与垃圾箱哦",
 ] as const;
 
 const POKE_HEALING_LINES = [
