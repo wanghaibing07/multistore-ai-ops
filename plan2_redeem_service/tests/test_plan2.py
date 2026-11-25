@@ -644,10 +644,10 @@ def test_vietnamese_forward_template_and_legacy_exclusive_compat_and_search(comp
         assert war.status_code == 200
         expected_new = format_warranty_forward_template(new_order, "new.owner@gmail.com")
         assert expected_new == (
-            "Chào shop ạ, em gửi thông tin đăng ký bảo hành gói Family:\n"
+            "Chào shop ạ, em gửi thông tin đăng ký bảo hành gói Family nhé:\n"
             f"- Mã đơn: {new_order}\n"
             "- Gmail chủ nhóm: new.owner@gmail.com\n"
-            "Em đã mời tài khoản shop vào nhóm và gửi kèm ảnh xác nhận, nhờ shop ghi nhận bảo hành giúp em ạ. Cảm ơn shop!"
+            "Em đã mời tài khoản shop vào nhóm rồi ạ, nhờ shop ghi nhận bảo hành giúp em nhé. Em cảm ơn shop nhiều ạ!"
         )
         new_detail = c.get(f"/api/v1/admin/codes/{new_code}", headers=ADMIN).json()
         assert new_detail["warranty"]["forward_template"] == expected_new
@@ -785,7 +785,7 @@ def test_issue_wangwang_message_contains_link_and_code_for_both_skus(components)
             "【3 步开通（很简单）】\n"
             "1. 点上面的提货链接，立刻领到我们给的会员邮箱。\n"
             "2. 用你自己的常用 Gmail 建一个 Google 家庭组，把这个会员邮箱拉进去；对方同意后你就开通 Ultra 会员了，自己还能再拉 4 个人一起用。\n"
-            "3. 发完邀请后，记得回到这个提货页上传一张「已发出邀请」的截图，用来登记 30 天质保（一般 2-6 小时内处理，最晚 24 小时，没超过 24 小时不用催）。\n"
+            "3. 发完邀请后，记得回到这个提货页填写你当组长的常用邮箱，系统会自动为你登记 30 天质保（免传截图；如果遇延迟一般 2-6 小时内处理，最晚 24 小时）。\n"
             "\n"
             "【质保和退换说明】\n"
             "1. 千万别踢掉我们给的会员邮箱！踢掉就会立刻掉会员，而且没法保修。\n"

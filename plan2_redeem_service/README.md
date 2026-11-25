@@ -1,6 +1,6 @@
 # Plan 2 自助提货与履约服务
 
-后端使用 Python 3.12、FastAPI、Uvicorn、SQLite WAL、httpx 和 SMTP，接口契约见同目录的 `API_CONTRACT.md`。
+后端使用 Python 3.12、FastAPI、Uvicorn、SQLite WAL、httpx、Telethon 和 SMTP，接口契约见同目录的 `API_CONTRACT.md`。
 
 ## 本机开发
 
@@ -45,6 +45,23 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 1
 ## 配置项
 
 `PLAN2_CONFIG_FILE` 可选，指向 YAML 配置文件。环境变量会覆盖 YAML 中的同名字段。`PLAN2_DB_PATH` 指向 SQLite 文件，`PLAN2_STORAGE_DIR` 保存不公开的保修截图，`PLAN2_PUBLIC_BASE_URL` 用于生成提货链接。`PLAN2_ADMIN_TOKEN` 保护所有 `/api/v1/admin/*` 接口。`PLAN2_CANBOSO_API_SECRET` 填 Canboso buyer key，`PLAN2_CANBOSO_BASE_URL` 默认使用 `https://canboso.com`。16688 的 `PLAN2_CHANNEL16688_API_KEY` 对应 Open API 的 `app_id`。SMTP 配置控制商家告警和履约通知。`PLAN2_POLL_INTERVAL_SECONDS` 控制后台上游轮询间隔，默认 1200 秒，代码下限为 10 秒。
+
+### Telegram 保修自动报备配置（可选）
+
+独享整组（`ultra_exclusive_admin`）支持免截图提交保修邮箱后，通过 Telethon 自动私聊向 Canboso 管理员报备；失败时自动邮件告警并可在管理后台重试。相关环境变量：
+
+- `PLAN2_TG_WARRANTY_ENABLED`：`true` / `false`（默认 `false`）
+- `PLAN2_TG_API_ID`、`PLAN2_TG_API_HASH`：Telegram 应用凭据（留空不影响服务启动）
+- `PLAN2_TG_SESSION`：Telethon `StringSession`（严格保存在 `.env`，严禁写入仓库或日志）
+- `PLAN2_TG_ADMIN_TARGET`：管理员目标（支持纯数字 `peerId` 或 `@username`）
+- `PLAN2_TG_TIMEOUT_SECONDS`：发送超时秒数（默认 `20`）
+
+获取 `StringSession` 与只读校验目标的辅助命令（不会发送测试消息）：
+
+```powershell
+python -m backend.tg_login
+python -m backend.tg_login --verify-only
+```
 
 ## 验证
 

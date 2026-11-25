@@ -135,27 +135,3 @@ export function extractRedeemCode(rawInput: string): string {
 
   return cleaned.toUpperCase();
 }
-
-const ALLOWED_IMAGE_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
-const MAX_WARRANTY_FILE_BYTES = 5 * 1024 * 1024;
-
-export interface FileValidationResult {
-  valid: boolean;
-  error?: string;
-}
-
-export function validateWarrantyScreenshot(file: File | null): FileValidationResult {
-  if (!file) {
-    return { valid: false, error: "请上传邀请确认截图" };
-  }
-  if (!ALLOWED_IMAGE_TYPES.has(file.type)) {
-    return { valid: false, error: "只支持 JPG、PNG 或 WebP 图片" };
-  }
-  if (file.size <= 0) {
-    return { valid: false, error: "这张图片是空的，换一张重新选" };
-  }
-  if (file.size > MAX_WARRANTY_FILE_BYTES) {
-    return { valid: false, error: "图片太大了，请传 5MB 以内的截图" };
-  }
-  return { valid: true };
-}

@@ -1,10 +1,8 @@
 import {
   useCallback,
   useEffect,
-  useRef,
   useState,
   type CSSProperties,
-  type ChangeEvent,
   type FormEvent,
   type MouseEvent,
 } from "react";
@@ -32,7 +30,7 @@ import {
   getSkuShortLabel,
   type Tone,
 } from "../utils/format";
-import { validateGmailInput, validateWarrantyScreenshot } from "../utils/validation";
+import { validateGmailInput } from "../utils/validation";
 import { runRedeemViewTransition } from "../utils/viewTransition";
 
 const AUTO_POLL_INTERVAL_MS = 30_000;
@@ -65,14 +63,14 @@ function getBuyerStatusMeta(record: PublicCodeResponse): { label: string; tone: 
       return { label: "正在出货", tone: "info", pulse: true };
     }
     if (record.status === "delivered_pending_warranty") {
-      return { label: "已领邮箱 · 待传截图登记质保", tone: "info" };
+      return { label: "已领邮箱 · 待填主邮箱登记质保", tone: "info" };
     }
     if (record.status === "completed") {
       if (record.warranty?.status === "registered_upstream") {
-        return { label: "已完成 · 质保已登记", tone: "success" };
+        return { label: "已完成 · 质保已报备", tone: "success" };
       }
       if (record.warranty?.status === "submitted") {
-        return { label: "已传截图 · 等客服登记", tone: "warning" };
+        return { label: "保修邮箱已登记 · 报备中", tone: "warning" };
       }
       return { label: "已完成", tone: "success" };
     }
@@ -87,7 +85,7 @@ function getBuyerStatusMeta(record: PublicCodeResponse): { label: string; tone: 
     case "waiting_fulfillment":
       return { label: "排队拉人中", tone: "warning", pulse: true };
     case "delivered_pending_warranty":
-      return { label: "已领邮箱 · 待传截图登记质保", tone: "info" };
+      return { label: "已领邮箱 · 待填主邮箱登记质保", tone: "info" };
     case "completed":
       return { label: "邀请已发出", tone: "success" };
     case "needs_manual_review":
@@ -100,11 +98,11 @@ function getBuyerStatusMeta(record: PublicCodeResponse): { label: string; tone: 
 function getBuyerWarrantyBadgeMeta(status: WarrantyStatus | undefined): { label: string; tone: Tone } {
   switch (status) {
     case "submitted":
-      return { label: "已传截图 · 等客服登记", tone: "warning" };
+      return { label: "邮箱已登记 · 报备中", tone: "warning" };
     case "registered_upstream":
-      return { label: "30 天质保已登记", tone: "success" };
+      return { label: "30 天质保已报备", tone: "success" };
     default:
-      return { label: "待登记质保", tone: "warning" };
+      return { label: "待填主邮箱", tone: "warning" };
   }
 }
 
@@ -142,11 +140,8 @@ export function RedeemPage() {
   const [editingWarranty, setEditingWarranty] = useState(false);
   const [adminEmail, setAdminEmail] = useState("");
   const [warrantyNote, setWarrantyNote] = useState("");
-  const [screenshotFile, setScreenshotFile] = useState<File | null>(null);
-  const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
   const [warrantyError, setWarrantyError] = useState<string | null>(null);
   const [submittingWarranty, setSubmittingWarranty] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const fetchRecord = useCallback(
     async (silent = false) => {
@@ -186,6 +181,8 @@ export function RedeemPage() {
     setCheckExclusiveRule(false);
     setBuyerEmail("");
     setRedeemError(null);
+    setAdminEmail("");
+    setWarrantyNote("");
     setWarrantyError(null);
     setEditingWarranty(false);
     if (prefetchedForCode && prefetchedForCode.code.trim().toUpperCase() === code) {
@@ -248,14 +245,6 @@ export function RedeemPage() {
     }, 1000);
     return () => window.clearInterval(timer);
   }, [cooldownLeft]);
-
-  useEffect(() => {
-    return () => {
-      if (screenshotPreview) {
-        URL.revokeObjectURL(screenshotPreview);
-      }
-    };
-  }, [screenshotPreview]);
 
   const isExclusive = record?.product_type === "account";
   const slotEmailCheck = validateGmailInput(buyerEmail);
@@ -350,33 +339,6 @@ export function RedeemPage() {
     }
   };
 
-  const handleSelectScreenshot = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0] || null;
-    if (!file) return;
-    const check = validateWarrantyScreenshot(file);
-    if (!check.valid) {
-      setWarrantyError(check.error || "图片不符合要求");
-      return;
-    }
-    setWarrantyError(null);
-    if (screenshotPreview) {
-      URL.revokeObjectURL(screenshotPreview);
-    }
-    setScreenshotFile(file);
-    setScreenshotPreview(URL.createObjectURL(file));
-  };
-
-  const clearScreenshot = () => {
-    if (screenshotPreview) {
-      URL.revokeObjectURL(screenshotPreview);
-    }
-    setScreenshotFile(null);
-    setScreenshotPreview(null);
-    if (fileInputRef.current) {
-      fileInputRef.current.value = "";
-    }
-  };
-
   const warrantyEmailCheck = validateGmailInput(adminEmail);
   const storeEmail =
     record && isExclusive && record.delivery
@@ -400,25 +362,22 @@ export function RedeemPage() {
       setWarrantyError(warrantyEmailCheck.error || "请检查一下常用邮箱拼写对不对。");
       return;
     }
-    const fileCheck = validateWarrantyScreenshot(screenshotFile);
-    if (!fileCheck.valid || !screenshotFile) {
-      setWarrantyError(fileCheck.error || "请先上传家庭组邀请截图。");
-      return;
-    }
 
     setSubmittingWarranty(true);
     try {
-      const formData = new FormData();
-      formData.append("admin_email", warrantyEmailCheck.normalized);
-      formData.append("screenshot", screenshotFile);
-      if (warrantyNote.trim()) {
-        formData.append("note", warrantyNote.trim());
-      }
-      const updated = await submitPublicWarranty(code, formData);
+      const trimmedNote = warrantyNote.trim();
+      const updated = await submitPublicWarranty(code, {
+        admin_email: warrantyEmailCheck.normalized,
+        admin_email_confirm: warrantyEmailCheck.normalized,
+        ...(trimmedNote ? { note: trimmedNote } : {}),
+      });
       setRecord(updated);
       setEditingWarranty(false);
-      clearScreenshot();
-      pushToast("保修交好了，已通知商家去官方报备", "success");
+      if (updated.warranty?.status === "registered_upstream") {
+        pushToast("30 天质保已自动完成官方报备", "success");
+      } else {
+        pushToast("保修邮箱已登记，系统正在帮你向官方报备", "success");
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : "保修提交没成功，请稍后再试。";
       setWarrantyError(message);
@@ -433,7 +392,7 @@ export function RedeemPage() {
   const warrantyLocked = record?.warranty?.status === "registered_upstream";
   const activeStep = record ? resolveStepIndex(record.product_type, record.status, warrantySubmitted) : 0;
   const steps = isExclusive
-    ? ["领邮箱", "建组邀请", "交保修"]
+    ? ["领邮箱", "建组邀请", "登记质保"]
     : ["填邮箱", "排队拉人", "收邀请"];
 
   const accountCredentials =
@@ -931,7 +890,7 @@ export function RedeemPage() {
                 <div>
                   <h2 className="card-title">先领会员邮箱</h2>
                   <p className="card-subtitle">
-                    独享整组是你自己当家庭组组长：先点下面领一个我们给的会员邮箱（商店邮箱），再用你自己的常用邮箱建家庭组把它拉进去，最后回来传一张截图登记 30 天质保就行。
+                    独享整组是你自己当家庭组组长：先点下面领一个我们给的会员邮箱（商店邮箱），再用你自己的常用邮箱建家庭组把它拉进去，最后回来填你的主邮箱登记 30 天质保就行（免截图）。
                   </p>
                 </div>
 
@@ -943,7 +902,7 @@ export function RedeemPage() {
                       用你自己的<strong>常用邮箱</strong>建一个 Google 家庭组，把这个会员邮箱拉进去；对方同意后你就开通 Ultra 会员了，<strong>自己还能再拉 4 个人</strong>一起用。
                     </li>
                     <li>
-                      截一张「已发出邀请」的图，回到本页填你的常用邮箱并上传截图登记 30 天质保，一般 <strong>2-6 小时内处理，最晚 24 小时，没超时不用催</strong>。
+                      发完邀请后回到本页，填写<strong>你自己的常用主邮箱</strong>即可一键登记 30 天质保（免截图，系统会自动向官方报备；如需人工跟进一般 <strong>2-6 小时内完成，最晚 24 小时</strong>）。
                     </li>
                   </ol>
                 </div>
@@ -994,7 +953,7 @@ export function RedeemPage() {
                       onChange={(event) => setCheckExclusiveRule(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>我已看清使用和售后规则</strong>：把我们给的会员邮箱拉进家庭组后千万别踢掉（踢掉会立刻掉会员且没法保修），发完邀请记得回来传截图登记质保；领完邮箱后，不是商品本身问题不支持全额退款，因为自己原因导致用不了/掉会员，补救或换号收 <strong>79.9 元手续费</strong>（不保证一定能恢复）。
+                      <strong>我已看清使用和售后规则</strong>：把我们给的会员邮箱拉进家庭组后千万别踢掉（踢掉会立刻掉会员且没法保修），发完邀请记得回来填主邮箱登记质保；领完邮箱后，不是商品本身问题不支持全额退款，因为自己原因导致用不了/掉会员，补救或换号收 <strong>79.9 元手续费</strong>（不保证一定能恢复）。
                     </div>
                   </label>
                 </div>
@@ -1101,7 +1060,7 @@ export function RedeemPage() {
                         在家庭组里点「发送邀请」，把上面复制的<strong>会员邮箱</strong>粘进去发邀请；对方同意后你就开通 Ultra 会员了，<strong>自己还能再拉 4 个人</strong>一起用。
                       </li>
                       <li>
-                        截一张「已发出邀请」的页面图，回到下面填<strong>你自己的常用邮箱</strong>并传图登记 30 天质保（一般 <strong>2-6 小时内处理，最晚 24 小时，没超时不用催</strong>）。
+                        发完邀请后，在下面填写<strong>你自己的常用主邮箱</strong>登记 30 天质保即可（无需截图，系统会自动向官方报备；如需人工处理一般 <strong>2-6 小时内完成，最晚 24 小时</strong>）。
                       </li>
                     </ol>
                   </div>
@@ -1111,33 +1070,44 @@ export function RedeemPage() {
                 <section className="card stack redeem-stagger-block" style={staggerStyle(4)}>
                   <div className="row-between">
                     <div style={{ flex: "1 1 240px", minWidth: 0 }}>
-                      <h2 className="card-title">第 3 步：上传截图登记 30 天质保</h2>
+                      <h2 className="card-title">第 3 步：填写主邮箱登记 30 天质保</h2>
                       <p className="card-subtitle">
-                        发完邀请后，把你自己的常用邮箱和截图传上来，客服一般 2-6 小时内帮你登记好 30 天质保（最晚 24 小时，没超时不用催）。
+                        发完邀请后，填写你建家庭组用的常用主邮箱即可（免截图），提交后系统会自动帮你向官方完成质保报备。
                       </p>
                     </div>
                     <ToneBadge label={buyerWarrantyBadge.label} tone={buyerWarrantyBadge.tone} />
                   </div>
 
-                  {warrantySubmitted && !editingWarranty ? (
+                  {warrantySubmitted && (!editingWarranty || warrantyLocked) ? (
                     <div className="stack">
                       <div className={`callout ${warrantyLocked ? "callout-success" : "callout-info"}`}>
                         <CastoriceIcon name="check" size={19} className="callout-icon" />
                         <div>
                           <strong>
                             {warrantyLocked
-                              ? "30 天质保已登记完成，安心使用就行"
-                              : "截图已收到，客服正在帮你登记 30 天质保"}
+                              ? "30 天质保已自动完成官方报备"
+                              : "保修邮箱已登记"}
                           </strong>
                           <div style={{ marginTop: 4 }}>
-                            你提交的常用邮箱：<span className="mono">{record.warranty?.admin_email_masked || "-"}</span>
+                            {warrantyLocked ? (
+                              <>
+                                你的主邮箱{" "}
+                                <span className="mono">{record.warranty?.admin_email_masked || "-"}</span>{" "}
+                                已完成官方质保报备，安心使用就行。
+                              </>
+                            ) : (
+                              <>
+                                保修邮箱已登记，系统正在/已转人工帮你向官方报备质保（一般 2-6 小时内完成，最晚 24 小时）。已登记主邮箱：
+                                <span className="mono">{record.warranty?.admin_email_masked || "-"}</span>
+                              </>
+                            )}
                           </div>
                         </div>
                       </div>
 
                       <div className="kv-grid">
                         <div className="kv-item">
-                          <div className="kv-label">你的常用邮箱</div>
+                          <div className="kv-label">你的常用主邮箱</div>
                           <div className="kv-value mono">{record.warranty?.admin_email_masked || "-"}</div>
                         </div>
                         <div className="kv-item">
@@ -1149,8 +1119,10 @@ export function RedeemPage() {
                           <div className="kv-value tabular">{formatDateTime(record.warranty?.submitted_at)}</div>
                         </div>
                         <div className="kv-item">
-                          <div className="kv-label">邀请截图</div>
-                          <div className="kv-value">{record.warranty?.has_screenshot ? "已上传" : "未上传"}</div>
+                          <div className="kv-label">报备状态</div>
+                          <div className="kv-value">
+                            {warrantyLocked ? "已完成官方报备" : "待官方报备完成"}
+                          </div>
                         </div>
                       </div>
 
@@ -1166,9 +1138,12 @@ export function RedeemPage() {
                           <button
                             type="button"
                             className="btn btn-secondary btn-sm"
-                            onClick={() => setEditingWarranty(true)}
+                            onClick={() => {
+                              setWarrantyError(null);
+                              setEditingWarranty(true);
+                            }}
                           >
-                            改邮箱 / 重传截图
+                            修改主邮箱
                           </button>
                         </div>
                       ) : null}
@@ -1189,68 +1164,6 @@ export function RedeemPage() {
                           <div>你填成了上面的会员邮箱，请改成你自己的常用邮箱。</div>
                         </div>
                       ) : null}
-
-                      <div className="field-group">
-                        <label className="field-label" htmlFor="warranty-screenshot-input">
-                          <span>家庭组邀请截图</span>
-                          <span className="field-hint">JPG / PNG / WEBP，5MB 以内</span>
-                        </label>
-                        <input
-                          ref={fileInputRef}
-                          id="warranty-screenshot-input"
-                          type="file"
-                          accept="image/jpeg,image/png,image/webp"
-                          className="sr-only"
-                          disabled={submittingWarranty}
-                          onChange={handleSelectScreenshot}
-                        />
-                        <div className="upload-zone">
-                          {screenshotPreview ? (
-                            <div>
-                              <img
-                                src={screenshotPreview}
-                                alt="已选择的家庭组邀请确认截图预览"
-                                className="upload-preview-img"
-                              />
-                              <div className="upload-preview-bar">
-                                <span className="upload-filename">{screenshotFile?.name}</span>
-                                <div className="row" style={{ gap: 6 }}>
-                                  <button
-                                    type="button"
-                                    className="btn btn-secondary btn-sm"
-                                    disabled={submittingWarranty}
-                                    onClick={() => fileInputRef.current?.click()}
-                                  >
-                                    重选图片
-                                  </button>
-                                  <button
-                                    type="button"
-                                    className="btn btn-danger btn-sm"
-                                    disabled={submittingWarranty}
-                                    onClick={clearScreenshot}
-                                  >
-                                    <CastoriceIcon name="alert" size={14} />
-                                    <span>移除</span>
-                                  </button>
-                                </div>
-                              </div>
-                            </div>
-                          ) : (
-                            <button
-                              type="button"
-                              className="upload-trigger"
-                              disabled={submittingWarranty}
-                              onClick={() => fileInputRef.current?.click()}
-                            >
-                              <CastoriceIcon name="mail" size={28} className="upload-icon" />
-                              <span style={{ fontWeight: 600, fontSize: 14.5 }}>
-                                点这里上传家庭组邀请截图
-                              </span>
-                              <span className="field-hint">截图里能看清「已邀请会员邮箱」就行</span>
-                            </button>
-                          )}
-                        </div>
-                      </div>
 
                       <div className="field-group">
                         <label className="field-label" htmlFor="warranty-note-input">
@@ -1294,7 +1207,6 @@ export function RedeemPage() {
                           disabled={
                             !warrantyEmailCheck.valid ||
                             warrantyUsesStoreEmail ||
-                            !screenshotFile ||
                             submittingWarranty
                           }
                           aria-busy={submittingWarranty}
@@ -1302,12 +1214,12 @@ export function RedeemPage() {
                           {submittingWarranty ? (
                             <>
                               <CastoriceIcon name="refresh" size={17} spin />
-                              <span>正在上传...</span>
+                              <span>正在提交报备...</span>
                             </>
                           ) : (
                             <>
                               <CastoriceIcon name="check" size={18} />
-                              <span>提交保修信息</span>
+                              <span>提交主邮箱并登记质保</span>
                             </>
                           )}
                         </button>

@@ -17,4 +17,10 @@ smtp_password: replace-me
 smtp_from: merchant@example.com
 merchant_email: merchant@example.com
 poll_interval_seconds: 1200
+tg_warranty_enabled: false
+tg_api_id: 0
+tg_api_hash: ""
+tg_session: ""
+tg_admin_target: ""
+tg_timeout_seconds: 20
 

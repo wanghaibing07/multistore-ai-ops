@@ -14,6 +14,7 @@ import type {
   RedeemExclusiveRequest,
   RedeemSlotRequest,
   SkuKey,
+  SubmitPublicWarrantyRequest,
 } from "../types/api";
 
 export class ApiError extends Error {
@@ -108,13 +109,14 @@ export async function refreshPublicCode(code: string): Promise<PublicCodeRespons
 
 export async function submitPublicWarranty(
   code: string,
-  formData: FormData
+  payload: SubmitPublicWarrantyRequest
 ): Promise<PublicCodeResponse> {
   return requestJson<PublicCodeResponse>(
     `/api/v1/public/codes/${encodeURIComponent(code)}/warranty`,
     {
       method: "POST",
-      body: formData,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
     }
   );
 }
@@ -265,6 +267,19 @@ export async function ackAdminWarranty(
       method: "POST",
       headers: authHeaders(token, true),
       body: JSON.stringify({ note }),
+    }
+  );
+}
+
+export async function forwardAdminWarranty(
+  token: string,
+  code: string
+): Promise<AdminCodeDetail> {
+  return requestJson<AdminCodeDetail>(
+    `/api/v1/admin/codes/${encodeURIComponent(code)}/warranty-forward`,
+    {
+      method: "POST",
+      headers: authHeaders(token),
     }
   );
 }

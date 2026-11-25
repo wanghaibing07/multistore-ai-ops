@@ -36,14 +36,14 @@
 - `revoked`：兑换码已作废（退款、投诉或商家手动作废）
 
 ### 2.4 保修状态 (`warranty.status`，仅 `ultra_exclusive_admin`)
-- `pending`：等待买家提交主邮箱 + 邀请截图
-- `submitted`：买家已提交保修信息，已发邮件通知商家
-- `registered_upstream`：商家已在后台标记“已向 Canboso 管理员报备”
+- `pending`：等待买家提交家庭组组长邮箱（免截图）
+- `submitted`：买家已提交保修信息，等待人工或后台重试向 Canboso 管理员报备（TG 未启用或自动发送失败兜底态）
+- `registered_upstream`：已向 Canboso 管理员完成报备（Telegram 自动报备成功或商家在后台手工标记）
 
 ### 2.5 通知策略（硬性要求）
 - 仅在需要商家人工介入时发送邮件通知（正常拉人完成、独享自动出货成功不发邮件打扰）：
   1. 共享车位**超过 24 小时**仍未完成（**严禁在 6 小时发送提醒邮件**）
-  2. 独享整组买家提交保修信息（需人工转发上游报备，`warranty.status -> submitted`）
+  2. 独享整组买家提交保修信息：未启用 TG 自动报备时发邮件通知人工转发；启用 TG 自动报备成功时发简洁结果通知，失败时立即发告警邮件兜底（附单号、买家邮箱、脱敏错误与越南语话术）
   3. 异常报警：单笔价格超熔断上限、Canboso 余额低于阈值、上游断货/报错、订单进入 `needs_manual_review`
 
 ## 3. 通用约定
@@ -145,14 +145,17 @@
 ### 4.4 独享整组保修登记提交
 `POST /api/v1/public/codes/{code}/warranty`
 
-- `Content-Type: multipart/form-data`
+- 同时兼容 `Content-Type: application/json` 与 `Content-Type: multipart/form-data`：
   - `admin_email`：必填，合法邮箱，支持 Gmail 及其他常见/自定义域名邮箱（提交后会同步写入 `codes.buyer_email` 与 `codes.buyer_email_masked`；公网接口仍只返回脱敏值）
   - `admin_email_confirm`：选填（向后兼容）；不传或传空时跳过二次比对，仅在显式传了非空值且与 `admin_email` 不一致时返回 `422 EMAIL_MISMATCH`
-  - `screenshot`：必填，图片文件（`image/jpeg`, `image/png`, `image/webp`，最大 5MB）
+  - `screenshot`：**可选**（免截图默认不传；向后兼容 multipart 传图：`image/jpeg`, `image/png`, `image/webp`，最大 5MB；若显式上传了空文件仍返回 `422 SCREENSHOT_EMPTY`）
   - `note`：选填，最多 300 字
-- 允许在 `delivered_pending_warranty`（首次提交）或 `completed` 且 `warranty.status == "submitted"`（报备前修改重传）时提交；若已 `registered_upstream` 返回 `409 WARRANTY_LOCKED`。
-- `200 OK`：返回更新后的 `PublicCodeResponse`（`status = "completed"`, `warranty.status = "submitted"`）。
-- 隐私约束：所有 `/api/v1/public/*` 响应严禁返回明文 `buyer_email`、`admin_email`、`forward_template` 或 `upstream_order_code`。
+- 防误填校验：若 `admin_email` 与交付给买家的商店套餐邮箱（`delivery.account_text`）相同（忽略大小写与前后空白），返回 `400 WARRANTY_SAME_AS_STORE_EMAIL`。
+- 允许在 `delivered_pending_warranty`（首次提交）或 `completed` 且 `warranty.status == "submitted"`（报备前修改重提）时提交；若已 `registered_upstream` 返回 `409 WARRANTY_LOCKED`。
+- 自动报备与兜底：
+  - 若后端已启用且配置就绪 Telegram 自动报备，系统会按固定越南语模板自动向 Canboso 管理员发送私聊报备；发送成功直接流转为 `warranty.status = "registered_upstream"` 并写入 `warranty_auto_forwarded` 审计；发送失败不会让买家接口报错，仍返回 `200 OK` 且保持 `warranty.status = "submitted"`，同时记录脱敏错误并发送邮件告警，订单保留在后台 `pending_warranty_ack` / `manual_attention` 队列待重试或人工处理。
+  - 若未启用 TG 自动报备，返回 `200 OK`（`status = "completed"`, `warranty.status = "submitted"`），发送保修通知邮件。
+- 隐私约束：所有 `/api/v1/public/*` 响应严禁返回明文 `buyer_email`、`admin_email`、`forward_template`、`upstream_order_code` 或任何 Telegram 内部状态字段（`warranty` 对外字段固定为 `status`, `admin_email_masked`, `submitted_at`, `has_screenshot`, `note`）。
 
 ## 5. 商家后台接口 (`/api/v1/admin/*`)
 
@@ -171,6 +174,11 @@
     "is_low_balance": true,
     "checked_at": "2026-11-23T06:00:00+08:00",
     "error": null
+  },
+  "telegram_warranty": {
+    "enabled": false,
+    "ready": false,
+    "target_configured": false
   },
   "skus": [
     {
@@ -323,7 +331,7 @@
   - `buyer_email`: string | null（沿用 `AdminCodeSummary` 的兜底解析逻辑，兼容历史独享单；日志严禁打印明文）
   - `idempotency_key`: string | null
   - `delivery`: 同公开结构或 null
-  - `warranty`: `{ "status", "admin_email", "submitted_at", "registered_at", "note", "has_screenshot", "screenshot_url", "forward_template" }` 或 null（只要含 `admin_email`，后端每次返回时都会动态按最新越南语模板生成 `forward_template`，兼容历史订单无需改库）
+  - `warranty`: `{ "status", "admin_email", "submitted_at", "registered_at", "note", "has_screenshot", "screenshot_url", "forward_template", "auto_forwarded", "tg_forward_status", "tg_message_id", "tg_sent_at", "tg_error" }` 或 null（只要含 `admin_email`，后端每次返回时都会动态按最新越南语模板生成 `forward_template`，兼容历史订单无需改库；旧数据自动补齐 TG 字段默认值且不返回 `screenshot_path`）
   - `audit_events`: `[{ "event_id", "from_status", "to_status", "reason", "created_at" }]`
 
 ### 5.7 获取保修确认截图（需鉴权）
@@ -335,6 +343,7 @@
 - `POST /api/v1/admin/codes/{code}/revoke`：请求 `{ "reason": "买家退款" }`，作废兑换码，返回最新 `AdminCodeDetail`。
 - `POST /api/v1/admin/codes/{code}/retry`：请求 `{ "override_price_limit": false, "note": "" }`，对 `needs_manual_review` 订单安全重试（复用已落库 `Idempotency-Key` 防重复扣款），返回最新 `AdminCodeDetail`。
 - `POST /api/v1/admin/codes/{code}/warranty-ack`：请求 `{ "note": "已发Canboso管理员" }`，将独享保修状态标记为 `registered_upstream`，返回最新 `AdminCodeDetail`。
+- `POST /api/v1/admin/codes/{code}/warranty-forward`：管理员手动触发 / 重试 Telegram 私聊保修报备（带单号锁幂等防重发）。成功返回 `200 AdminCodeDetail`（状态流转为 `registered_upstream`）；未配置/未就绪返回 `503 TG_NOT_CONFIGURED`，发送失败返回 `503 TG_FORWARD_FAILED`（返回脱敏错误并记录 `warranty_tg_forward_failed` 审计），已报备返回 `409 WARRANTY_LOCKED`。
 
 ### 5.9 风控配置与邮件测试
 - `PATCH /api/v1/admin/settings/skus/{sku_key}`：请求 `{ "max_cost_usd": 16.0, "goods_no": "G12345678" }`，返回更新后的 SKU 对象。

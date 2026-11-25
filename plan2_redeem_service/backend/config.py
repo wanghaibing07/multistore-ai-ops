@@ -1,14 +1,16 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 import yaml
 
 
 def _parse_bool(value: Any) -> bool:
+    if value is None:
+        return False
     if isinstance(value, bool):
         return value
     text = str(value).strip().lower()
@@ -17,6 +19,30 @@ def _parse_bool(value: Any) -> bool:
     if text in {"0", "false", "no", "off", ""}:
         return False
     raise ValueError(f"Invalid boolean setting value: {value!r}")
+
+
+def _parse_int_or_default(default: int) -> Callable[[Any], int]:
+    def _convert(value: Any) -> int:
+        if value is None:
+            return default
+        text = str(value).strip()
+        if not text:
+            return default
+        return int(text)
+
+    return _convert
+
+
+def _parse_float_or_default(default: float) -> Callable[[Any], float]:
+    def _convert(value: Any) -> float:
+        if value is None:
+            return default
+        text = str(value).strip()
+        if not text:
+            return default
+        return float(text)
+
+    return _convert
 
 
 @dataclass
@@ -63,21 +89,16 @@ class Settings:
     channel16688_restock_enabled: bool = False
     channel16688_restock_interval_seconds: int = 900
     channel16688_restock_rules_json: str = ""
+    tg_warranty_enabled: bool = False
+    tg_api_id: int = 0
+    tg_api_hash: str = field(default="", repr=False)
+    tg_session: str = field(default="", repr=False)
+    tg_admin_target: str = ""
+    tg_timeout_seconds: float = 20.0
 
     @classmethod
     def from_env(cls) -> "Settings":
         values: dict[str, Any] = cls().__dict__.copy()
-        config_path = os.environ.get("PLAN2_CONFIG_FILE")
-        if config_path:
-            path = Path(config_path).expanduser()
-            if not path.is_file():
-                raise ValueError(f"PLAN2_CONFIG_FILE does not exist: {path}")
-            loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-            if not isinstance(loaded, dict):
-                raise ValueError("PLAN2_CONFIG_FILE must contain a YAML mapping")
-            for key in values:
-                if key in loaded:
-                    values[key] = loaded[key]
         converters = {
             "smtp_port": int,
             "poll_interval_seconds": int,
@@ -99,7 +120,27 @@ class Settings:
             "agiso_restock_interval_seconds": int,
             "channel16688_restock_enabled": _parse_bool,
             "channel16688_restock_interval_seconds": int,
+            "tg_warranty_enabled": _parse_bool,
+            "tg_api_id": _parse_int_or_default(0),
+            "tg_timeout_seconds": _parse_float_or_default(20.0),
         }
+        config_path = os.environ.get("PLAN2_CONFIG_FILE")
+        if config_path:
+            path = Path(config_path).expanduser()
+            if not path.is_file():
+                raise ValueError(f"PLAN2_CONFIG_FILE does not exist: {path}")
+            loaded = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+            if not isinstance(loaded, dict):
+                raise ValueError("PLAN2_CONFIG_FILE must contain a YAML mapping")
+            for key in values:
+                if key in loaded:
+                    raw_value = loaded[key]
+                    if key in converters:
+                        values[key] = converters[key](raw_value)
+                    elif raw_value is None:
+                        values[key] = ""
+                    else:
+                        values[key] = str(raw_value)
         for key in values:
             env_name = "PLAN2_" + key.upper()
             if env_name in os.environ:

@@ -14,7 +14,7 @@ class RedeemRequest(BaseModel):
 class WarrantyForm(BaseModel):
     admin_email: str
     admin_email_confirm: Optional[str] = None
-    note: str = ""
+    note: Optional[str] = ""
 
 
 class IssueRequest(BaseModel):

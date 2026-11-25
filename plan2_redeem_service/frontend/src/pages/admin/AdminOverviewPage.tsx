@@ -212,6 +212,27 @@ export function AdminOverviewPage({
                 {overview.public_base_url}
               </span>
             </div>
+            {overview.telegram_warranty && (
+              <div className="ops-meta-row">
+                <span className="ops-meta-key">TG 自动报备</span>
+                <span
+                  className={`badge ${
+                    overview.telegram_warranty.enabled && overview.telegram_warranty.ready
+                      ? "badge-success"
+                      : overview.telegram_warranty.enabled
+                      ? "badge-warning"
+                      : "badge-neutral"
+                  }`}
+                  style={{ fontSize: 11.5, padding: "2px 8px" }}
+                >
+                  {overview.telegram_warranty.enabled && overview.telegram_warranty.ready
+                    ? "已开启 · 就绪"
+                    : overview.telegram_warranty.enabled
+                    ? "已开启 · 凭证待补"
+                    : "未开启（人工报备模式）"}
+                </span>
+              </div>
+            )}
           </div>
         </article>
 

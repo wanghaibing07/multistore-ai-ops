@@ -122,7 +122,7 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
   const nodes: [string, string, string] = [
     "核对兑换码",
     "领取会员邮箱",
-    "传截图登记质保",
+    "填主邮箱登记质保",
   ];
 
   if (record.status === "validating") {
@@ -150,8 +150,8 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
       nodes,
       activeNode: 2,
       progressPct: 86,
-      caption: "已收到你的邀请截图，客服正在帮你登记 30 天质保~",
-      statusPill: "正在登记质保",
+      caption: "保修邮箱已登记，系统正在/已转人工帮你向官方报备 30 天质保~",
+      statusPill: "保修邮箱已登记",
     };
   }
 
@@ -159,8 +159,8 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
     nodes,
     activeNode: 2,
     progressPct: 82,
-    caption: "会员邮箱领到了！按下面步骤把它拉进家庭组，再上传截图就能登记 30 天质保 ✨",
-    statusPill: "第 3/3 步 · 待传截图",
+    caption: "会员邮箱领到了！按下面步骤把它拉进家庭组，再填主邮箱就能登记 30 天质保 ✨",
+    statusPill: "第 3/3 步 · 待填主邮箱",
   };
 }
 

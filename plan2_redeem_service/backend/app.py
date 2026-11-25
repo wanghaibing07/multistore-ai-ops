@@ -9,8 +9,10 @@ from pathlib import Path
 import time
 from typing import Any, Optional
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from pydantic import ValidationError
+from starlette.datastructures import UploadFile as StarletteUploadFile
 
 from .agiso import (
     AOPIC_AUTO_SEND_SUCCESS,
@@ -38,6 +40,7 @@ from .models import (
     RevokeRequest,
     SkuPatchRequest,
     WarrantyAckRequest,
+    WarrantyForm,
 )
 from .service import (
     COMPLETED_ADMIN_SQL,
@@ -60,7 +63,29 @@ def error(code: str, message: str, status: int) -> JSONResponse:
 
 
 def status_for(code: str) -> int:
-    return {"CODE_NOT_FOUND": 404, "CODE_REVOKED": 409, "CONCURRENT_IN_PROGRESS": 409, "ORDER_NOT_ELIGIBLE": 409, "CANNOT_REVOKE_COMPLETED": 409, "RETRY_NOT_AVAILABLE": 409, "WARRANTY_LOCKED": 409, "WARRANTY_NOT_APPLICABLE": 409, "WARRANTY_NOT_ALLOWED": 409, "INVALID_EMAIL": 422, "EMAIL_MISMATCH": 422, "PREFLIGHT_REQUIRED": 422, "INVALID_SCREENSHOT_TYPE": 422, "SCREENSHOT_TOO_LARGE": 422, "SCREENSHOT_EMPTY": 422, "NOTE_TOO_LONG": 422, "INVALID_CHANNEL": 422, "GOODS_NO_REQUIRED": 422}.get(code, 503)
+    return {
+        "CODE_NOT_FOUND": 404,
+        "WARRANTY_SAME_AS_STORE_EMAIL": 400,
+        "CODE_REVOKED": 409,
+        "CONCURRENT_IN_PROGRESS": 409,
+        "ORDER_NOT_ELIGIBLE": 409,
+        "CANNOT_REVOKE_COMPLETED": 409,
+        "RETRY_NOT_AVAILABLE": 409,
+        "WARRANTY_LOCKED": 409,
+        "WARRANTY_NOT_APPLICABLE": 409,
+        "WARRANTY_NOT_ALLOWED": 409,
+        "INVALID_EMAIL": 422,
+        "EMAIL_MISMATCH": 422,
+        "PREFLIGHT_REQUIRED": 422,
+        "INVALID_SCREENSHOT_TYPE": 422,
+        "SCREENSHOT_TOO_LARGE": 422,
+        "SCREENSHOT_EMPTY": 422,
+        "NOTE_TOO_LONG": 422,
+        "INVALID_CHANNEL": 422,
+        "GOODS_NO_REQUIRED": 422,
+        "TG_NOT_CONFIGURED": 503,
+        "TG_FORWARD_FAILED": 503,
+    }.get(code, 503)
 
 
 def create_app(
@@ -69,6 +94,7 @@ def create_app(
     channel: Any = None,
     mailer: Optional[Mailer] = None,
     agiso: Any = None,
+    tg_forwarder: Any = None,
 ) -> FastAPI:
     settings = settings or Settings.from_env()
     settings.prepare()
@@ -96,7 +122,7 @@ def create_app(
         )
     )
     mailer = mailer or Mailer(settings)
-    service = Service(ledger, settings, canboso, channel, mailer, agiso=agiso)
+    service = Service(ledger, settings, canboso, channel, mailer, agiso=agiso, tg_forwarder=tg_forwarder)
 
     async def poller() -> None:
         while True:
@@ -180,6 +206,7 @@ def create_app(
 
     app = FastAPI(title="Plan 2 Redeem Service", version="1.0.0", lifespan=lifespan)
     app.state.settings, app.state.ledger, app.state.service, app.state.mailer, app.state.agiso = settings, ledger, service, mailer, agiso
+    app.state.tg_forwarder = service.tg_forwarder
 
     @app.exception_handler(HTTPException)
     async def http_exception_handler(_, exc: HTTPException) -> JSONResponse:
@@ -373,19 +400,67 @@ def create_app(
         return result
 
     @app.post("/api/v1/public/codes/{code}/warranty")
-    async def public_warranty(code: str, admin_email: str = Form(...), admin_email_confirm: Optional[str] = Form(default=None), note: str = Form(""), screenshot: UploadFile = File(...), svc: Service = Depends(get_service)) -> Any:
+    async def public_warranty(code: str, request: Request, svc: Service = Depends(get_service)) -> Any:
+        content_type_header = (request.headers.get("content-type") or "").lower()
+        content: Optional[bytes] = None
+        upload_content_type = ""
+        if "application/json" in content_type_header:
+            try:
+                raw_json = await request.json()
+            except Exception:
+                return error("INVALID_REQUEST", "请求格式不对，请刷新页面后重试", 422)
+            if not isinstance(raw_json, dict):
+                return error("INVALID_REQUEST", "请求格式不对，请刷新页面后重试", 422)
+            try:
+                payload = WarrantyForm.model_validate(raw_json)
+            except ValidationError:
+                return error("INVALID_EMAIL", "请填正确的邮箱地址（支持 Gmail、QQ、163、Outlook 等）", 422)
+            admin_email = payload.admin_email
+            admin_email_confirm = payload.admin_email_confirm
+            note = payload.note or ""
+        else:
+            try:
+                form = await request.form()
+            except Exception:
+                return error("INVALID_REQUEST", "请求格式不对，请刷新页面后重试", 422)
+            raw_email = form.get("admin_email")
+            if not isinstance(raw_email, str):
+                return error("INVALID_EMAIL", "请填正确的邮箱地址（支持 Gmail、QQ、163、Outlook 等）", 422)
+            admin_email = raw_email
+            raw_confirm = form.get("admin_email_confirm")
+            admin_email_confirm = raw_confirm if isinstance(raw_confirm, str) else None
+            raw_note = form.get("note")
+            note = raw_note if isinstance(raw_note, str) else ""
+            screenshot = form.get("screenshot")
+            if isinstance(screenshot, StarletteUploadFile):
+                try:
+                    content = await _read_upload_limited(screenshot, 5 * 1024 * 1024)
+                    upload_content_type = screenshot.content_type or ""
+                finally:
+                    await screenshot.close()
+                if content is None:
+                    return error("SCREENSHOT_TOO_LARGE", "截图太大了，请传 5MB 以内的图片", 422)
+            elif screenshot is not None and screenshot != "":
+                return error("INVALID_SCREENSHOT_TYPE", "截图只支持 JPG、PNG 或 WEBP 格式", 422)
+
         if len(note) > 300:
             return error("NOTE_TOO_LONG", "备注最多写 300 字", 422)
-        content = await _read_upload_limited(screenshot, 5 * 1024 * 1024)
-        if content is None:
-            return error("SCREENSHOT_TOO_LARGE", "截图太大了，请传 5MB 以内的图片", 422)
-        result, err_code = svc.warranty(code, admin_email, admin_email_confirm, note, content, screenshot.content_type or "")
+        result, err_code = await asyncio.to_thread(
+            svc.warranty,
+            code,
+            admin_email,
+            admin_email_confirm,
+            note,
+            content,
+            upload_content_type,
+        )
         if err_code:
             messages = {
                 "CODE_NOT_FOUND": "没找到这个兑换码，请核对后重试",
                 "WARRANTY_LOCKED": "保修已经登记完，不能再改了，有变化请联系客服",
                 "INVALID_EMAIL": "请填正确的邮箱地址（支持 Gmail、QQ、163、Outlook 等）",
                 "EMAIL_MISMATCH": "两次填的邮箱不一样，请核对后再提交",
+                "WARRANTY_SAME_AS_STORE_EMAIL": "这里请填你自己的常用邮箱（家庭组组长邮箱），不要填我们发给你的商店会员邮箱",
                 "INVALID_SCREENSHOT_TYPE": "截图只支持 JPG、PNG 或 WEBP 格式",
                 "SCREENSHOT_TOO_LARGE": "截图太大了，请传 5MB 以内的图片",
                 "SCREENSHOT_EMPTY": "截图文件是空的，请重新上传",
@@ -572,6 +647,21 @@ def create_app(
         if not ledger.get_code(code):
             return error("CODE_NOT_FOUND", "没找到这个兑换码", 404)
         return svc.warranty_ack(code, body.note)
+
+    @app.post("/api/v1/admin/codes/{code}/warranty-forward", dependencies=[Depends(require_admin)])
+    async def warranty_forward(code: str, svc: Service = Depends(get_service)) -> Any:
+        result, err_code, err_detail = await asyncio.to_thread(svc.warranty_forward, code)
+        if err_code:
+            messages = {
+                "CODE_NOT_FOUND": "没找到这个兑换码",
+                "WARRANTY_NOT_APPLICABLE": "这个商品不用登记保修报备",
+                "WARRANTY_NOT_ALLOWED": "买家还没提交保修邮箱，暂时不能报备",
+                "WARRANTY_LOCKED": "保修已经完成上游报备，不能重复发送",
+                "TG_NOT_CONFIGURED": "Telegram 自动报备未启用或配置不完整",
+                "TG_FORWARD_FAILED": f"Telegram 报备发送失败：{err_detail}" if err_detail else "Telegram 报备发送失败，请稍后重试或改用手动复制话术",
+            }
+            return error(err_code, messages.get(err_code, "Telegram 报备发送失败，请稍后重试"), status_for(err_code))
+        return result
 
     @app.patch("/api/v1/admin/settings/skus/{sku_key}", dependencies=[Depends(require_admin)])
     def patch_sku(sku_key: str, body: SkuPatchRequest, svc: Service = Depends(get_service)) -> Any:

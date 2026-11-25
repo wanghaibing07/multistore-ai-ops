@@ -155,7 +155,17 @@ function translateAuditReason(rawReason: string): { title?: string; detail: stri
     case "shared_fulfillment_completed":
       return { title: "拉人完成", detail: "上游确认已发出家庭组邀请，这单完成了" };
     case "warranty_submitted":
-      return { title: "买家交了保修", detail: "已收到买家主力 Gmail 和家庭组邀请截图" };
+      return { title: "买家交了保修", detail: "已收到买家家庭组主邮箱" };
+    case "warranty_auto_forwarded":
+      return {
+        title: "TG 自动报备成功",
+        detail: "系统已通过 Telegram 私聊向官方发送越南语报备并标记完成",
+      };
+    case "warranty_tg_forward_failed":
+      return {
+        title: "TG 自动报备失败",
+        detail: "Telegram 自动发送失败，已发邮件告警并转入待人工处理",
+      };
     case "warranty_ack":
       return { title: "已向官方报备", detail: "你已把买家保修信息发给上游并标记完成" };
     case "16688_goods_missing":

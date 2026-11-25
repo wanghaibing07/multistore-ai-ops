@@ -33,6 +33,7 @@ from .agiso import (
 from .config import Settings
 from .db import Ledger, now_iso
 from .gateways import UpstreamError, UpstreamTimeout, parse_env_channel16688_restock_rules
+from .telegram_forwarder import DryRunTelegramForwarder, TelegramWarrantyForwarder, sanitize_tg_error
 
 
 logger = logging.getLogger(__name__)
@@ -81,10 +82,10 @@ def mask_email(value: Optional[str]) -> Optional[str]:
 
 def format_warranty_forward_template(order_code: str, admin_email: str) -> str:
     return (
-        "Chào shop ạ, em gửi thông tin đăng ký bảo hành gói Family:\n"
+        "Chào shop ạ, em gửi thông tin đăng ký bảo hành gói Family nhé:\n"
         f"- Mã đơn: {order_code or ''}\n"
         f"- Gmail chủ nhóm: {admin_email}\n"
-        "Em đã mời tài khoản shop vào nhóm và gửi kèm ảnh xác nhận, nhờ shop ghi nhận bảo hành giúp em ạ. Cảm ơn shop!"
+        "Em đã mời tài khoản shop vào nhóm rồi ạ, nhờ shop ghi nhận bảo hành giúp em nhé. Em cảm ơn shop nhiều ạ!"
     )
 
 
@@ -132,10 +133,37 @@ class Mailer:
 class Service:
     POLL_FAILURE_THRESHOLD = 3
 
-    def __init__(self, ledger: Ledger, settings: Settings, canboso: Any, channel: Any, mailer: Mailer, agiso: Any = None):
+    def __init__(
+        self,
+        ledger: Ledger,
+        settings: Settings,
+        canboso: Any,
+        channel: Any,
+        mailer: Mailer,
+        agiso: Any = None,
+        tg_forwarder: Any = None,
+    ):
         self.ledger, self.settings, self.canboso, self.channel, self.mailer, self.agiso = ledger, settings, canboso, channel, mailer, agiso
+        if tg_forwarder is not None:
+            self.tg_forwarder = tg_forwarder
+        elif settings.execution_mode == "dry_run":
+            self.tg_forwarder = DryRunTelegramForwarder(
+                enabled=settings.tg_warranty_enabled,
+                target=settings.tg_admin_target,
+            )
+        else:
+            self.tg_forwarder = TelegramWarrantyForwarder(
+                enabled=settings.tg_warranty_enabled,
+                api_id=settings.tg_api_id,
+                api_hash=settings.tg_api_hash,
+                session=settings.tg_session,
+                target=settings.tg_admin_target,
+                timeout_seconds=settings.tg_timeout_seconds,
+            )
         self._restock_lock = threading.Lock()
         self._channel16688_restock_lock = threading.Lock()
+        self._warranty_locks_guard = threading.Lock()
+        self._warranty_locks: dict[str, threading.Lock] = {}
         ledger.seed_skus(SKUS)
 
     def issue(self, sku_key: str, channel: str, external_order_id: str = "", remark: str = "", batch_id: Optional[str] = None, goods_no: Optional[str] = None) -> dict[str, Any]:
@@ -522,77 +550,241 @@ class Service:
             break
         return count
 
-    def warranty(self, code: str, admin_email: str, confirm: Optional[str], note: str, content: bytes, content_type: str) -> tuple[dict[str, Any], Optional[str]]:
-        row = self.ledger.get_code(code)
-        if not row:
-            return {}, "CODE_NOT_FOUND"
-        if row["sku_key"] != "ultra_exclusive_admin":
-            return {}, "WARRANTY_NOT_APPLICABLE"
-        if row["status"] not in {"delivered_pending_warranty", "completed"}:
-            return {}, "WARRANTY_NOT_ALLOWED"
-        old_warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else {}
-        if old_warranty.get("status") == "registered_upstream":
-            return {}, "WARRANTY_LOCKED"
-        email = admin_email.strip().lower()
-        if not is_valid_email(email):
-            return {}, "INVALID_EMAIL"
-        if confirm is not None and confirm.strip() != "" and email != confirm.strip().lower():
-            return {}, "EMAIL_MISMATCH"
-        if content_type not in {"image/jpeg", "image/png", "image/webp"}:
-            return {}, "INVALID_SCREENSHOT_TYPE"
-        if not content:
-            return {}, "SCREENSHOT_EMPTY"
-        if len(content) > 5 * 1024 * 1024:
-            return {}, "SCREENSHOT_TOO_LARGE"
-        path = Path(self.settings.storage_dir) / (uuid.uuid4().hex + "." + content_type.split("/")[1])
-        old_path = row.get("screenshot_path")
-        path.write_bytes(content)
-        submitted = {
-            "status": "submitted",
-            "admin_email": email,
-            "submitted_at": now_iso(),
-            "registered_at": None,
-            "note": note,
-            "has_screenshot": True,
-            "screenshot_path": str(path),
-            "forward_template": format_warranty_forward_template(row.get("upstream_order_code") or "", email),
-        }
-        changed = self.ledger.transition(
+    def _warranty_lock(self, code: str) -> threading.Lock:
+        with self._warranty_locks_guard:
+            lock = self._warranty_locks.get(code)
+            if lock is None:
+                lock = threading.Lock()
+                self._warranty_locks[code] = lock
+            return lock
+
+    def _forward_warranty_locked(
+        self,
+        code: str,
+        attachment: Optional[tuple[str, bytes, str]] = None,
+    ) -> tuple[bool, Optional[str]]:
+        current = self.ledger.get_code(code)
+        if not current:
+            return False, "CODE_NOT_FOUND"
+        warranty = json.loads(current["warranty_json"]) if current.get("warranty_json") else {}
+        if not isinstance(warranty, dict):
+            return False, "WARRANTY_NOT_ALLOWED"
+        if warranty.get("status") == "registered_upstream" or warranty.get("tg_message_id") is not None:
+            return True, None
+        admin_email = str(warranty.get("admin_email") or "").strip()
+        upstream_order_code = current.get("upstream_order_code") or ""
+        text = format_warranty_forward_template(upstream_order_code, admin_email)
+        try:
+            sent = self.tg_forwarder.send_text(text)
+        except Exception as exc:
+            err_msg = sanitize_tg_error(
+                exc,
+                secrets=(
+                    self.settings.tg_api_hash,
+                    self.settings.tg_session,
+                    getattr(self.tg_forwarder, "api_hash", ""),
+                    getattr(self.tg_forwarder, "session", ""),
+                ),
+            )
+            warranty.update(
+                {
+                    "status": "submitted",
+                    "auto_forwarded": False,
+                    "tg_forward_status": "failed",
+                    "tg_error": err_msg,
+                    "forward_template": text,
+                }
+            )
+            self.ledger.transition(
+                code,
+                "completed",
+                "warranty_tg_forward_failed",
+                {"warranty_json": json.dumps(warranty, ensure_ascii=False)},
+                ("completed",),
+            )
+            self._safe_send(
+                "【需人工处理】独享整组保修 TG 自动报备失败",
+                (
+                    f"兑换码：{code}\n"
+                    f"上游订单号：{upstream_order_code}\n"
+                    f"买家主邮箱：{admin_email}\n"
+                    f"失败原因：{err_msg}\n"
+                    "\n"
+                    "请人工复制以下越南语话术发给 Canboso 管理员，或在后台点击「重试 TG 报备」：\n"
+                    f"{text}"
+                ),
+                attachment,
+            )
+            return False, err_msg
+
+        sent_at = str(sent.get("sent_at") or now_iso())
+        msg_id = sent.get("message_id")
+        warranty.update(
+            {
+                "status": "registered_upstream",
+                "registered_at": sent_at,
+                "auto_forwarded": True,
+                "tg_forward_status": "sent",
+                "tg_message_id": msg_id,
+                "tg_sent_at": sent_at,
+                "tg_error": None,
+                "forward_template": text,
+            }
+        )
+        self.ledger.transition(
             code,
             "completed",
-            "warranty_submitted",
-            {
-                "buyer_email": email,
-                "buyer_email_masked": mask_email(email),
-                "warranty_json": json.dumps(submitted, ensure_ascii=False),
-                "screenshot_path": str(path),
-                "screenshot_content_type": content_type,
-                "screenshot_size": len(content),
-                "completed_at": now_iso(),
-            },
-            ("delivered_pending_warranty", "completed"),
+            "warranty_auto_forwarded",
+            {"warranty_json": json.dumps(warranty, ensure_ascii=False)},
+            ("completed",),
         )
-        if not changed:
-            path.unlink(missing_ok=True)
-            current = self.ledger.get_code(code)
-            if current and json.loads(current.get("warranty_json") or "{}").get("status") == "registered_upstream":
+        self._safe_send(
+            "独享整组保修已自动 TG 报备",
+            (
+                f"兑换码：{code}\n"
+                f"上游订单号：{upstream_order_code}\n"
+                f"买家主邮箱：{admin_email}\n"
+                f"Telegram 消息 ID：{msg_id}\n"
+                f"发送时间：{sent_at}\n"
+                "\n"
+                f"{text}"
+            ),
+        )
+        return True, None
+
+    def warranty(
+        self,
+        code: str,
+        admin_email: str,
+        confirm: Optional[str],
+        note: str,
+        content: Optional[bytes] = None,
+        content_type: str = "",
+    ) -> tuple[dict[str, Any], Optional[str]]:
+        with self._warranty_lock(code):
+            row = self.ledger.get_code(code)
+            if not row:
+                return {}, "CODE_NOT_FOUND"
+            if row["sku_key"] != "ultra_exclusive_admin":
+                return {}, "WARRANTY_NOT_APPLICABLE"
+            if row["status"] not in {"delivered_pending_warranty", "completed"}:
+                return {}, "WARRANTY_NOT_ALLOWED"
+            old_warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else {}
+            if old_warranty.get("status") == "registered_upstream":
                 return {}, "WARRANTY_LOCKED"
-            return {}, "WARRANTY_NOT_ALLOWED"
-        if old_path and old_path != str(path):
-            old = Path(old_path)
-            if old.is_file():
-                old.unlink()
-        self._safe_send("独享整组买家提交保修登记", submitted["forward_template"], (path.name, content, content_type))
-        return self.public_row(self.ledger.get_code(code)), None
+            email = admin_email.strip().lower()
+            if not is_valid_email(email):
+                return {}, "INVALID_EMAIL"
+            if confirm is not None and confirm.strip() != "" and email != confirm.strip().lower():
+                return {}, "EMAIL_MISMATCH"
+            delivery = json.loads(row["delivery_json"]) if row.get("delivery_json") else {}
+            store_email = str(delivery.get("account_text") or "").strip().lower() if isinstance(delivery, dict) else ""
+            if store_email and email == store_email:
+                return {}, "WARRANTY_SAME_AS_STORE_EMAIL"
+
+            old_path = row.get("screenshot_path")
+            path: Optional[Path] = None
+            has_screenshot = False
+            screenshot_path_value: Optional[str] = None
+            screenshot_ct_value: Optional[str] = None
+            screenshot_size_value: Optional[int] = None
+            email_attachment: Optional[tuple[str, bytes, str]] = None
+            if content is not None:
+                if not content:
+                    return {}, "SCREENSHOT_EMPTY"
+                if content_type not in {"image/jpeg", "image/png", "image/webp"}:
+                    return {}, "INVALID_SCREENSHOT_TYPE"
+                if len(content) > 5 * 1024 * 1024:
+                    return {}, "SCREENSHOT_TOO_LARGE"
+                path = Path(self.settings.storage_dir) / (uuid.uuid4().hex + "." + content_type.split("/")[1])
+                path.write_bytes(content)
+                has_screenshot = True
+                screenshot_path_value = str(path)
+                screenshot_ct_value = content_type
+                screenshot_size_value = len(content)
+                email_attachment = (path.name, content, content_type)
+
+            tg_ready = bool(self.tg_forwarder and getattr(self.tg_forwarder, "is_ready", False))
+            forward_template = format_warranty_forward_template(row.get("upstream_order_code") or "", email)
+            submitted = {
+                "status": "submitted",
+                "admin_email": email,
+                "submitted_at": now_iso(),
+                "registered_at": None,
+                "note": note,
+                "has_screenshot": has_screenshot,
+                "screenshot_path": screenshot_path_value,
+                "forward_template": forward_template,
+                "auto_forwarded": False,
+                "tg_forward_status": "pending" if tg_ready else "disabled",
+                "tg_message_id": old_warranty.get("tg_message_id"),
+                "tg_sent_at": old_warranty.get("tg_sent_at"),
+                "tg_error": None,
+            }
+            changed = self.ledger.transition(
+                code,
+                "completed",
+                "warranty_submitted",
+                {
+                    "buyer_email": email,
+                    "buyer_email_masked": mask_email(email),
+                    "warranty_json": json.dumps(submitted, ensure_ascii=False),
+                    "screenshot_path": screenshot_path_value,
+                    "screenshot_content_type": screenshot_ct_value,
+                    "screenshot_size": screenshot_size_value,
+                    "completed_at": now_iso(),
+                },
+                ("delivered_pending_warranty", "completed"),
+            )
+            if not changed:
+                if path is not None:
+                    path.unlink(missing_ok=True)
+                current = self.ledger.get_code(code)
+                if current and json.loads(current.get("warranty_json") or "{}").get("status") == "registered_upstream":
+                    return {}, "WARRANTY_LOCKED"
+                return {}, "WARRANTY_NOT_ALLOWED"
+            if old_path and old_path != screenshot_path_value:
+                old = Path(old_path)
+                if old.is_file():
+                    old.unlink()
+            if tg_ready:
+                self._forward_warranty_locked(code, attachment=email_attachment)
+            else:
+                self._safe_send("独享整组买家提交保修登记", submitted["forward_template"], email_attachment)
+            return self.public_row(self.ledger.get_code(code)), None
+
+    def warranty_forward(self, code: str) -> tuple[dict[str, Any], Optional[str], Optional[str]]:
+        with self._warranty_lock(code):
+            row = self.ledger.get_code(code)
+            if not row:
+                return {}, "CODE_NOT_FOUND", None
+            if row["sku_key"] != "ultra_exclusive_admin":
+                return {}, "WARRANTY_NOT_APPLICABLE", None
+            warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else {}
+            if (
+                row["status"] != "completed"
+                or not isinstance(warranty, dict)
+                or not str(warranty.get("admin_email") or "").strip()
+            ):
+                return {}, "WARRANTY_NOT_ALLOWED", None
+            if warranty.get("status") == "registered_upstream":
+                return {}, "WARRANTY_LOCKED", None
+            if not (self.tg_forwarder and getattr(self.tg_forwarder, "is_ready", False)):
+                return {}, "TG_NOT_CONFIGURED", None
+            ok, err_msg = self._forward_warranty_locked(code)
+            if not ok:
+                return {}, "TG_FORWARD_FAILED", err_msg
+            return self.admin_detail(self.ledger.get_code(code)), None, None
 
     def warranty_ack(self, code: str, note: str) -> dict[str, Any]:
-        row = self.ledger.get_code(code)
-        if not row:
-            return {}
-        warranty = json.loads(row["warranty_json"] or "{}")
-        warranty.update({"status": "registered_upstream", "registered_at": now_iso(), "note": note or warranty.get("note", "")})
-        self.ledger.transition(code, "completed", "warranty_ack", {"warranty_json": json.dumps(warranty, ensure_ascii=False)}, ("completed",))
-        return self.admin_detail(self.ledger.get_code(code))
+        with self._warranty_lock(code):
+            row = self.ledger.get_code(code)
+            if not row:
+                return {}
+            warranty = json.loads(row["warranty_json"] or "{}")
+            warranty.update({"status": "registered_upstream", "registered_at": now_iso(), "note": note or warranty.get("note", "")})
+            self.ledger.transition(code, "completed", "warranty_ack", {"warranty_json": json.dumps(warranty, ensure_ascii=False)}, ("completed",))
+            return self.admin_detail(self.ledger.get_code(code))
 
     def alert(self, code: str, reason: str) -> None:
         if self.ledger.claim_notification(f"alert:{code}:{reason}"):
@@ -712,6 +904,11 @@ class Service:
                 )
             warranty["screenshot_url"] = f"/api/v1/admin/codes/{row['code']}/warranty-screenshot" if row.get("screenshot_path") else None
             warranty.pop("screenshot_path", None)
+            warranty.setdefault("auto_forwarded", False)
+            warranty.setdefault("tg_forward_status", "disabled")
+            warranty.setdefault("tg_message_id", None)
+            warranty.setdefault("tg_sent_at", None)
+            warranty.setdefault("tg_error", None)
         result.update({
             "redeem_url": f"{self.settings.public_base_url}/r/{row['code']}",
             "batch_id": row.get("batch_id"),
@@ -747,7 +944,24 @@ class Service:
         })
         if balance_usd < self.settings.canboso_low_balance_threshold_usd and self.ledger.claim_notification("low-balance"):
             self._safe_send("Canboso 低余额报警", f"Canboso 余额低于配置阈值，请及时处理。当前余额为 ${balance_usd:.2f}。")
-        return {"execution_mode": self.settings.execution_mode, "public_base_url": self.settings.public_base_url, "canboso": {"balance_usd": balance_usd, "low_balance_threshold_usd": self.settings.canboso_low_balance_threshold_usd, "is_low_balance": balance_usd < self.settings.canboso_low_balance_threshold_usd, "checked_at": now_iso(), "error": None}, "skus": skus, "counts": counts}
+        return {
+            "execution_mode": self.settings.execution_mode,
+            "public_base_url": self.settings.public_base_url,
+            "canboso": {
+                "balance_usd": balance_usd,
+                "low_balance_threshold_usd": self.settings.canboso_low_balance_threshold_usd,
+                "is_low_balance": balance_usd < self.settings.canboso_low_balance_threshold_usd,
+                "checked_at": now_iso(),
+                "error": None,
+            },
+            "telegram_warranty": {
+                "enabled": bool(self.settings.tg_warranty_enabled),
+                "ready": bool(self.tg_forwarder and getattr(self.tg_forwarder, "is_ready", False)),
+                "target_configured": bool((self.settings.tg_admin_target or "").strip()),
+            },
+            "skus": skus,
+            "counts": counts,
+        }
 
     def sku_status(self, sku_key: str, catalog: Optional[dict[str, Any]] = None) -> dict[str, Any]:
         s = self.ledger.get_sku(sku_key)

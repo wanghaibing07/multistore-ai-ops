@@ -21,6 +21,8 @@ export type AdminOrderStatusFilter =
 
 export type WarrantyStatus = "pending" | "submitted" | "registered_upstream";
 
+export type TgForwardStatus = "disabled" | "pending" | "sent" | "failed";
+
 export interface ApiErrorEnvelope {
   error_code: string;
   message: string;
@@ -82,6 +84,12 @@ export interface RedeemExclusiveRequest {
   preflight_confirmed: true;
 }
 
+export interface SubmitPublicWarrantyRequest {
+  admin_email: string;
+  admin_email_confirm?: string;
+  note?: string;
+}
+
 export interface AdminCanbosoStatus {
   balance_usd: number | null;
   low_balance_threshold_usd: number;
@@ -124,11 +132,18 @@ export interface AdminOverviewCounts {
   overdue_24h: number;
 }
 
+export interface AdminTelegramWarrantyStatus {
+  enabled: boolean;
+  ready: boolean;
+  target_configured: boolean;
+}
+
 export interface AdminOverviewResponse {
   public_base_url: string;
   canboso: AdminCanbosoStatus;
   skus: AdminSkuStatus[];
   counts: AdminOverviewCounts;
+  telegram_warranty?: AdminTelegramWarrantyStatus;
 }
 
 export interface AdminCodeSummary {
@@ -169,6 +184,11 @@ export interface AdminWarrantyDetail {
   has_screenshot: boolean;
   screenshot_url: string | null;
   forward_template: string | null;
+  auto_forwarded?: boolean;
+  tg_forward_status?: TgForwardStatus | null;
+  tg_message_id?: number | string | null;
+  tg_sent_at?: string | null;
+  tg_error?: string | null;
 }
 
 export interface AuditEventItem {

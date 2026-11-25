@@ -8,6 +8,7 @@ import {
   Maximize2,
   RefreshCw,
   RotateCcw,
+  Send,
   ShieldCheck,
   X,
 } from "lucide-react";
@@ -15,6 +16,7 @@ import {
   ackAdminWarranty,
   ApiError,
   fetchAdminWarrantyScreenshot,
+  forwardAdminWarranty,
   getAdminCodeDetail,
   pollAdminCode,
   retryAdminCode,
@@ -68,6 +70,7 @@ export function AdminOrderDrawer({
   const [polling, setPolling] = useState(false);
   const [ackNote, setAckNote] = useState("");
   const [acking, setAcking] = useState(false);
+  const [forwarding, setForwarding] = useState(false);
 
   const [overridePriceLimit, setOverridePriceLimit] = useState(false);
   const [retryNote, setRetryNote] = useState("");
@@ -136,7 +139,7 @@ export function AdminOrderDrawer({
           onUnauthorized();
           return;
         }
-        setScreenshotError(caught instanceof ApiError ? caught.message : "加载保修截图失败");
+        setScreenshotError(caught instanceof ApiError ? caught.message : "加载历史保修截图失败");
       } finally {
         if (!cancelled) {
           setScreenshotLoading(false);
@@ -207,6 +210,48 @@ export function AdminOrderDrawer({
       pushToast(caught instanceof ApiError ? caught.message : "标记保修报备失败", "error");
     } finally {
       setAcking(false);
+    }
+  };
+
+  const handleForwardWarranty = async () => {
+    setForwarding(true);
+    try {
+      const updated = await forwardAdminWarranty(token, code);
+      setDetail(updated);
+      onMutated();
+      if (
+        updated.warranty?.status === "registered_upstream" ||
+        updated.warranty?.tg_forward_status === "sent"
+      ) {
+        pushToast("已通过 Telegram 完成官方报备", "success");
+      } else if (updated.warranty?.tg_forward_status === "failed") {
+        pushToast(
+          updated.warranty.tg_error
+            ? `Telegram 自动报备失败：${updated.warranty.tg_error}`
+            : "Telegram 自动报备失败，请查看失败原因",
+          "error"
+        );
+      } else {
+        pushToast("已重新发起 Telegram 报备", "success");
+      }
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      pushToast(caught instanceof ApiError ? caught.message : "重发 TG 报备失败", "error");
+      try {
+        const refreshed = await getAdminCodeDetail(token, code);
+        setDetail(refreshed);
+        onMutated();
+      } catch (refreshError) {
+        if (refreshError instanceof ApiError && refreshError.status === 401) {
+          onUnauthorized();
+          return;
+        }
+      }
+    } finally {
+      setForwarding(false);
     }
   };
 
@@ -560,63 +605,109 @@ export function AdminOrderDrawer({
                   );
                 })()}
 
-                {detail.warranty && (
+                {detail.warranty && (() => {
+                  const warranty = detail.warranty;
+                  const isTgAutoForwarded =
+                    warranty.status === "registered_upstream" &&
+                    (warranty.tg_forward_status === "sent" || warranty.auto_forwarded === true);
+                  const isTgForwardFailed =
+                    warranty.status !== "registered_upstream" &&
+                    warranty.tg_forward_status === "failed";
+                  const hasTgMessageId =
+                    warranty.tg_message_id !== null &&
+                    warranty.tg_message_id !== undefined &&
+                    String(warranty.tg_message_id).trim() !== "";
+                  const canForwardTg =
+                    warranty.status !== "registered_upstream" &&
+                    Boolean(warranty.admin_email && warranty.admin_email.trim());
+                  return (
                   <section className="inset-panel stack-sm" aria-label="保修登记与官方报备">
                     <div className="row-between">
                       <div className="row" style={{ gap: 8 }}>
                         <ShieldCheck size={16} style={{ color: "var(--accent)" }} aria-hidden="true" />
                         <strong style={{ fontSize: 14 }}>保修登记与官方报备</strong>
                       </div>
-                      <WarrantyStatusBadge status={detail.warranty.status} />
+                      <WarrantyStatusBadge status={warranty.status} />
                     </div>
 
                     <div className="kv-grid">
                       <div className="kv-item">
                         <span className="kv-label">买家主邮箱</span>
                         <span className="kv-value mono">
-                          {detail.warranty.admin_email || "待买家提交"}
+                          {warranty.admin_email || "待买家提交"}
                         </span>
                       </div>
                       <div className="kv-item">
                         <span className="kv-label">提交 / 报备时间</span>
                         <span className="kv-value mono">
-                          {formatDateTime(detail.warranty.submitted_at)} /{" "}
-                          {formatDateTime(detail.warranty.registered_at)}
+                          {formatDateTime(warranty.submitted_at)} /{" "}
+                          {formatDateTime(warranty.registered_at)}
                         </span>
                       </div>
                     </div>
 
-                    {detail.warranty.status === "registered_upstream" ? (
+                    {warranty.status === "registered_upstream" ? (
                       <div className="callout callout-success" role="status">
                         <CheckCircle2 size={17} className="callout-icon" aria-hidden="true" />
                         <div>
                           <div>
                             已于{" "}
                             <strong className="mono">
-                              {formatDateTime(detail.warranty.registered_at)}
+                              {formatDateTime(
+                                isTgAutoForwarded
+                                  ? warranty.tg_sent_at || warranty.registered_at
+                                  : warranty.registered_at
+                              )}
                             </strong>{" "}
-                            完成官方报备
+                            {isTgAutoForwarded ? (
+                              <>
+                                通过 <strong>TG 自动报备</strong> 完成官方报备
+                              </>
+                            ) : (
+                              "完成官方报备"
+                            )}
                           </div>
-                          {detail.warranty.note && (
+                          {isTgAutoForwarded && hasTgMessageId && (
                             <div style={{ marginTop: 4, fontSize: 12.5 }}>
-                              备注：{detail.warranty.note}
+                              TG 消息 ID：<span className="mono">{String(warranty.tg_message_id)}</span>
+                            </div>
+                          )}
+                          {warranty.note && (
+                            <div style={{ marginTop: 4, fontSize: 12.5 }}>
+                              备注：{warranty.note}
                             </div>
                           )}
                         </div>
                       </div>
-                    ) : detail.warranty.note ? (
-                      <div style={{ fontSize: 13, color: "var(--ink-2)" }}>
-                        <strong>买家备注：</strong>
-                        {detail.warranty.note}
-                      </div>
-                    ) : null}
+                    ) : (
+                      <>
+                        {isTgForwardFailed && (
+                          <div className="callout callout-danger" role="alert">
+                            <AlertTriangle size={17} className="callout-icon" aria-hidden="true" />
+                            <div>
+                              <strong>Telegram 自动报备失败</strong>
+                              <div style={{ marginTop: 4, fontSize: 12.5, wordBreak: "break-word" }}>
+                                {warranty.tg_error ||
+                                  "未能自动发送给官方客服，可点击下方「重发 TG 报备」重试或改用人工报备。"}
+                              </div>
+                            </div>
+                          </div>
+                        )}
+                        {warranty.note && (
+                          <div style={{ fontSize: 13, color: "var(--ink-2)" }}>
+                            <strong>买家备注：</strong>
+                            {warranty.note}
+                          </div>
+                        )}
+                      </>
+                    )}
 
-                    {detail.warranty.has_screenshot && (
+                    {warranty.has_screenshot && (
                       <div className="stack-sm">
                         <div className="row-between" style={{ fontSize: 13, color: "var(--ink-3)" }}>
                           <span className="row" style={{ gap: 6 }}>
                             <ImageIcon size={14} aria-hidden="true" />
-                            <span>买家家庭组邀请截图</span>
+                            <span>历史保修截图</span>
                           </span>
                           {screenshotUrl && (
                             <button
@@ -639,7 +730,7 @@ export function AdminOrderDrawer({
                           <button
                             type="button"
                             onClick={() => setScreenshotZoomOpen(true)}
-                            aria-label="放大查看买家家庭组邀请截图"
+                            aria-label="放大查看历史保修截图"
                             style={{
                               padding: 0,
                               border: 0,
@@ -651,7 +742,7 @@ export function AdminOrderDrawer({
                           >
                             <img
                               src={screenshotUrl}
-                              alt="买家上传的 Google 家庭组邀请确认截图"
+                              alt="历史订单保留的保修确认截图"
                               className="upload-preview-img"
                               style={{ maxHeight: 240 }}
                             />
@@ -660,36 +751,60 @@ export function AdminOrderDrawer({
                       </div>
                     )}
 
-                    {detail.warranty.forward_template && (
+                    {warranty.forward_template && (
                       <div className="stack-sm">
                         <div className="row-between">
                           <span style={{ fontSize: 13, fontWeight: 600 }}>
                             发给官方的越南语报备话术
                           </span>
                           <CopyButton
-                            text={detail.warranty.forward_template}
+                            text={warranty.forward_template}
                             label="复制越南语话术"
                             toastMessage="已复制越南语报备话术，可直接发给 Canboso 客服"
                             variant="primary"
                           />
                         </div>
-                        <pre className="code-output">{detail.warranty.forward_template}</pre>
+                        <pre className="code-output">{warranty.forward_template}</pre>
                       </div>
                     )}
 
-                    {detail.warranty.status !== "registered_upstream" && (
+                    {warranty.status !== "registered_upstream" && (
                       <div className="stack-sm" style={{ paddingTop: 6 }}>
+                        {canForwardTg && (
+                          <button
+                            type="button"
+                            className={`btn ${isTgForwardFailed ? "btn-warm" : "btn-secondary"} btn-block ${
+                              forwarding ? "is-loading" : ""
+                            }`}
+                            disabled={forwarding || acking}
+                            aria-busy={forwarding}
+                            onClick={() => void handleForwardWarranty()}
+                          >
+                            {forwarding ? (
+                              <>
+                                <Loader2 size={15} className="spin" />
+                                <span>正在重发 TG 报备...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Send size={15} />
+                                <span>重发 TG 报备</span>
+                              </>
+                            )}
+                          </button>
+                        )}
                         <input
                           type="text"
                           className="input"
                           placeholder="报备备注（可选，例如：已发 Telegram 客服确认）"
                           value={ackNote}
                           onChange={(event) => setAckNote(event.target.value)}
+                          disabled={acking || forwarding}
                         />
                         <button
                           type="button"
                           className={`btn btn-primary btn-block ${acking ? "is-loading" : ""}`}
-                          disabled={acking}
+                          disabled={acking || forwarding}
                           aria-busy={acking}
                           onClick={() => void handleAckWarranty()}
                         >
@@ -708,7 +823,8 @@ export function AdminOrderDrawer({
                       </div>
                     )}
                   </section>
-                )}
+                  );
+                })()}
 
                 {hasActions && (
                   <section className="stack-sm" aria-label="订单操作">
@@ -820,12 +936,12 @@ export function AdminOrderDrawer({
         </aside>
       </div>
 
-      {screenshotZoomOpen && screenshotUrl && (
+      {detail?.warranty?.has_screenshot && screenshotZoomOpen && screenshotUrl && (
         <div
           role="dialog"
           className="admin-screenshot-lightbox"
           aria-modal="true"
-          aria-label="放大查看保修截图"
+          aria-label="放大查看历史保修截图"
           onClick={() => setScreenshotZoomOpen(false)}
         >
           <div
@@ -850,7 +966,7 @@ export function AdminOrderDrawer({
             </button>
             <img
               src={screenshotUrl}
-              alt="买家上传的 Google 家庭组邀请确认截图大图"
+              alt="历史订单保留的保修确认截图大图"
               style={{
                 maxWidth: "92vw",
                 maxHeight: "calc(90vh - 48px)",
