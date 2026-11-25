@@ -25,8 +25,8 @@ const COURIER_RUN_ASSET = "/assets/waiting/castorice-courier-run.png";
 const MINI_BUTTERFLY_ASSET = "/assets/waiting/mini-butterfly-glow.png";
 
 const TEA_REASSURANCE_TIPS = [
-  "淘宝显示“无需物流已发货”即已发提货码（非空包裹），当前正排队拉入家庭组",
-  "一般 2~6 小时内发邀请（最晚 24 小时），关掉页面不影响排队，收藏本页随时看进度",
+  "你的邮箱已经提交成功，正在排队拉你进 Google 家庭组，不用重复操作",
+  "一般 2-6 小时内发邀请，最晚 24 小时；关掉页面也会继续排，收藏本页随时看进度",
   "发出邀请后页面会自动变绿提醒，记得留意 Gmail 收件箱与垃圾箱哦",
 ] as const;
 
@@ -111,18 +111,18 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
   if (!isExclusive) {
     const activeNode: 0 | 1 = record.status === "validating" ? 0 : 1;
     return {
-      nodes: ["读取兑换码", "锁定车位派单", "转入排队巡检"],
+      nodes: ["核对兑换码", "提交排队", "等待发邀请"],
       activeNode,
       progressPct: activeNode === 0 ? 22 : 56,
-      caption: "小蝶正在为您核验兑换码并锁定家庭组车位，马上切入自动队列~",
+      caption: "小蝶正在帮你核对兑换码并安排排队，马上就好~",
       statusPill: null,
     };
   }
 
   const nodes: [string, string, string] = [
-    "读取兑换码",
-    "分配独享账号/拉群",
-    "等待接单/交保修",
+    "核对兑换码",
+    "领取会员邮箱",
+    "传截图登记质保",
   ];
 
   if (record.status === "validating") {
@@ -130,7 +130,7 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
       nodes,
       activeNode: 0,
       progressPct: 18,
-      caption: "正在核对兑换码有效性，准备为您调拨独享商店套餐账号…",
+      caption: "正在核对兑换码，马上帮你领会员邮箱…",
       statusPill: null,
     };
   }
@@ -150,8 +150,8 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
       nodes,
       activeNode: 2,
       progressPct: 86,
-      caption: "已收到您的家庭组邀请截图，商家正在为您登记 30 天官方质保报备~",
-      statusPill: "质保报备排队中",
+      caption: "已收到你的邀请截图，客服正在帮你登记 30 天质保~",
+      statusPill: "正在登记质保",
     };
   }
 
@@ -159,8 +159,8 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
     nodes,
     activeNode: 2,
     progressPct: 82,
-    caption: "商店套餐邮箱已送达！按下方指引拉进家庭组后上传截图，即可完成质保登记 ✨",
-    statusPill: "节点 3/3 · 待交保修",
+    caption: "会员邮箱领到了！按下面步骤把它拉进家庭组，再上传截图就能登记 30 天质保 ✨",
+    statusPill: "第 3/3 步 · 待传截图",
   };
 }
 
@@ -372,9 +372,9 @@ export function CastoriceWaitingStage({
             );
           })}
           <div className="cws-bloom-title">
-            {isExclusiveDone ? "🌸 质保报备已完成！" : "🌸 家庭组邀请已发出！"}
+            {isExclusiveDone ? "🌸 30 天质保已登记完成！" : "🌸 家庭组邀请已发出！"}
           </div>
-          <div className="cws-bloom-sub">紫蝶信使已送达，正在为您展开下一步指引…</div>
+          <div className="cws-bloom-sub">已送到，马上为你打开下一步操作说明…</div>
         </div>
       </section>
     );
@@ -402,7 +402,7 @@ export function CastoriceWaitingStage({
           <span>
             {currentMode === "tea" ? "花园茶歇陪伴" : "信使火速派送"}
             <span className="cws-scene-sub">
-              {currentMode === "tea" ? " · 后台每 20 分钟自动巡检" : " · 实时节点追踪"}
+              {currentMode === "tea" ? " · 后台会自动帮你查进度" : " · 实时更新进度"}
             </span>
           </span>
         </div>
@@ -507,8 +507,8 @@ export function CastoriceWaitingStage({
                 </div>
               ) : (
                 <>
-                  <span>自动排队巡检脉冲</span>
-                  <span>已为您守护队列</span>
+                  <span>正在自动排队中</span>
+                  <span>关掉页面也不会掉队</span>
                 </>
               )}
             </div>
