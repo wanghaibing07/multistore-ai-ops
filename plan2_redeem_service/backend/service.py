@@ -20,6 +20,7 @@ from .agiso import (
     AOPIC_REFUND_CREATED,
     AOPIC_REFUND_SUCCESS,
     AgisoError,
+    PLAN2_CODE_RE,
     build_create_order_result_content,
     build_redeem_url,
     extract_sent_card_entries,
@@ -31,7 +32,7 @@ from .agiso import (
 )
 from .config import Settings
 from .db import Ledger, now_iso
-from .gateways import UpstreamError, UpstreamTimeout
+from .gateways import UpstreamError, UpstreamTimeout, parse_env_channel16688_restock_rules
 
 
 logger = logging.getLogger(__name__)
@@ -133,6 +134,7 @@ class Service:
     def __init__(self, ledger: Ledger, settings: Settings, canboso: Any, channel: Any, mailer: Mailer, agiso: Any = None):
         self.ledger, self.settings, self.canboso, self.channel, self.mailer, self.agiso = ledger, settings, canboso, channel, mailer, agiso
         self._restock_lock = threading.Lock()
+        self._channel16688_restock_lock = threading.Lock()
         ledger.seed_skus(SKUS)
 
     def issue(self, sku_key: str, channel: str, external_order_id: str = "", remark: str = "", batch_id: Optional[str] = None, goods_no: Optional[str] = None) -> dict[str, Any]:
@@ -302,6 +304,14 @@ class Service:
                 if order.get("error") == "ORDER_NOT_ELIGIBLE":
                     self._release_claim(code, "16688_order_not_eligible")
                     return {}, "ORDER_NOT_ELIGIBLE"
+                self.ledger.transition(code, "needs_manual_review", "16688_unavailable", {"last_error_code": "UPSTREAM_ERROR", "last_error_message": "16688 verification failed"}, ("purchasing",))
+                self.alert(code, "UPSTREAM_ERROR")
+                return self.public_row(self.ledger.get_code(code)), None
+            verified_trade_no = str(order.get("trade_no") or "").strip()
+            if verified_trade_no:
+                bind_res = self.ledger.bind_code_external_order(code, verified_trade_no, reason="channel16688_order_verified")
+                if bind_res == "conflict":
+                    logger.warning("16688 verified trade_no conflicts with existing external_order_id code=%s", code)
         try:
             preflight_ok, reason, cost = self.upstream_preflight(sku)
             error_message = self._preflight_error_message(reason, sku, cost)
@@ -380,6 +390,48 @@ class Service:
             self.ledger.transition(code, "needs_manual_review", f"admin_retry_failed:{reason}", {"last_error_code": reason, "last_error_message": error_message}, ("needs_manual_review",))
             self.alert(code, reason)
             return self.admin_detail(self.ledger.get_code(code)), reason
+        if row["channel"] == "16688":
+            order_goods = row.get("goods_no") or sku.get("goods_no")
+            if not order_goods:
+                self.ledger.transition(
+                    code,
+                    "needs_manual_review",
+                    "admin_retry_failed:ORDER_NOT_ELIGIBLE",
+                    {"last_error_code": "ORDER_NOT_ELIGIBLE", "last_error_message": "16688 商品编号未配置"},
+                    ("needs_manual_review",),
+                )
+                self.alert(code, "ORDER_NOT_ELIGIBLE")
+                return self.admin_detail(self.ledger.get_code(code)), "ORDER_NOT_ELIGIBLE"
+            try:
+                order = self.channel.verify_order(code, order_goods)
+            except Exception as exc:
+                logger.warning("admin retry 16688 verify failed code=%s sku=%s error_type=%s detail=%s", code, sku["sku_key"], type(exc).__name__, exc)
+                self.ledger.transition(
+                    code,
+                    "needs_manual_review",
+                    "admin_retry_failed:UPSTREAM_ERROR",
+                    {"last_error_code": "UPSTREAM_ERROR", "last_error_message": self._format_upstream_exception("16688 核验失败", exc)},
+                    ("needs_manual_review",),
+                )
+                self.alert(code, "UPSTREAM_ERROR")
+                return self.admin_detail(self.ledger.get_code(code)), "UPSTREAM_ERROR"
+            if not order.get("ok"):
+                verify_err = "ORDER_NOT_ELIGIBLE" if order.get("error") == "ORDER_NOT_ELIGIBLE" else "UPSTREAM_ERROR"
+                verify_msg = "16688 订单不符合领货条件" if verify_err == "ORDER_NOT_ELIGIBLE" else "16688 核验失败"
+                self.ledger.transition(
+                    code,
+                    "needs_manual_review",
+                    f"admin_retry_failed:{verify_err}",
+                    {"last_error_code": verify_err, "last_error_message": verify_msg},
+                    ("needs_manual_review",),
+                )
+                self.alert(code, verify_err)
+                return self.admin_detail(self.ledger.get_code(code)), verify_err
+            verified_trade_no = str(order.get("trade_no") or "").strip()
+            if verified_trade_no:
+                bind_res = self.ledger.bind_code_external_order(code, verified_trade_no, reason="channel16688_order_verified")
+                if bind_res == "conflict":
+                    logger.warning("16688 verified trade_no conflicts with existing external_order_id code=%s", code)
         audit_reason = "admin_retry" if not note.strip() else f"admin_retry:{note.strip()[:200]}"
         self.ledger.transition(code, "purchasing", audit_reason, {"last_error_code": None, "last_error_message": None}, ("needs_manual_review",))
         self._purchase(code, self.ledger.get_code(code), sku, cost)
@@ -2174,6 +2226,474 @@ class Service:
                 "checked": len(rules),
                 "restocked": restocked,
                 "total_pushed": total_pushed,
+                "errors": errors,
+                "items": items,
+            }
+
+    def _channel16688_ready(self) -> bool:
+        return bool(self.channel is not None and getattr(self.channel, "is_ready", True))
+
+    @staticmethod
+    def _parse_16688_int(value: Any) -> Optional[int]:
+        if value is None or isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        text = str(value).strip()
+        if not text:
+            return None
+        try:
+            return int(text)
+        except (TypeError, ValueError):
+            return None
+
+    @classmethod
+    def _extract_16688_available_qty(cls, stock: dict[str, Any]) -> Optional[int]:
+        raw_avail = stock.get("available_quantity")
+        avail = cls._parse_16688_int(raw_avail)
+        if avail is not None:
+            return avail
+        raw_total = stock.get("total")
+        total = cls._parse_16688_int(raw_total)
+        if total is not None:
+            return total
+        avail_blank = raw_avail is None or (isinstance(raw_avail, str) and not raw_avail.strip())
+        total_blank = raw_total is None or (isinstance(raw_total, str) and not raw_total.strip())
+        return 0 if (avail_blank and total_blank) else None
+
+    def _channel16688_alert(self, dedupe_key: str, subject: str, body: str) -> None:
+        if self.ledger.claim_notification(f"channel16688:{dedupe_key}"):
+            self._safe_send(subject, body)
+
+    def channel16688_restock_rules(self, enabled_only: bool = False) -> list[dict[str, Any]]:
+        try:
+            rules = parse_env_channel16688_restock_rules(self.settings.channel16688_restock_rules_json)
+        except ValueError as exc:
+            logger.warning("invalid PLAN2_CHANNEL16688_RESTOCK_RULES_JSON: %s", exc)
+            return []
+        valid: list[dict[str, Any]] = []
+        for rule in rules:
+            sku_key = rule["sku_key"]
+            if sku_key not in SKUS:
+                logger.warning("ignoring 16688 restock rule with unknown sku_key=%s", sku_key)
+                continue
+            if enabled_only and not rule.get("enabled"):
+                continue
+            sku_row = self.ledger.get_sku(sku_key) or {}
+            resolved_goods = (rule.get("goods_no") or "").strip() or (sku_row.get("goods_no") or "").strip()
+            valid.append({**rule, "goods_no": resolved_goods})
+        return valid
+
+    def sync_channel16688_sold_codes(
+        self,
+        *,
+        sku_keys: Optional[list[str]] = None,
+        max_pages: int = 5,
+        page_size: int = 50,
+    ) -> dict[str, Any]:
+        if not self._channel16688_ready():
+            raise UpstreamError(503, "16688 API credentials are not configured", rejected=True)
+        wanted = {item.strip() for item in (sku_keys or []) if item and item.strip()}
+        targets: list[tuple[str, str]] = []
+        seen_goods: set[str] = set()
+        rules = self.channel16688_restock_rules(enabled_only=False)
+        for rule in rules:
+            sku_key = rule["sku_key"]
+            goods_no = (rule.get("goods_no") or "").strip()
+            if wanted and sku_key not in wanted:
+                continue
+            if goods_no and goods_no not in seen_goods:
+                seen_goods.add(goods_no)
+                targets.append((sku_key, goods_no))
+        if not targets:
+            for sku_key in SKUS:
+                if wanted and sku_key not in wanted:
+                    continue
+                sku_row = self.ledger.get_sku(sku_key) or {}
+                goods_no = (sku_row.get("goods_no") or "").strip()
+                if goods_no and goods_no not in seen_goods:
+                    seen_goods.add(goods_no)
+                    targets.append((sku_key, goods_no))
+
+        scanned = 0
+        bound = 0
+        already_bound = 0
+        missing = 0
+        conflicts = 0
+        errors: list[str] = []
+        per_sku: list[dict[str, Any]] = []
+        any_truncated = False
+        page_limit = max(1, int(max_pages))
+
+        for sku_key, goods_no in targets:
+            sku_scanned = 0
+            sku_bound = 0
+            sku_already = 0
+            sku_error = ""
+            sku_truncated = False
+            try:
+                for page_no in range(1, page_limit + 1):
+                    resp = self.channel.stock_secret_list(
+                        goods_no,
+                        status=1,
+                        page_no=page_no,
+                        page_size=page_size,
+                    )
+                    rows = resp.get("list") or []
+                    total = self._parse_16688_int(resp.get("total")) or 0
+                    for entry in rows:
+                        if not isinstance(entry, dict):
+                            continue
+                        try:
+                            entry_status = int(entry.get("status", -1))
+                        except (TypeError, ValueError):
+                            entry_status = -1
+                        trade_no = str(entry.get("trade_no") or "").strip()
+                        if entry_status != 2 or not trade_no:
+                            continue
+                        secret_text = str(entry.get("secret_code") or "")
+                        extracted_codes = list(dict.fromkeys(PLAN2_CODE_RE.findall(secret_text)))
+                        for found_code in extracted_codes:
+                            sku_scanned += 1
+                            scanned += 1
+                            code_row = self.ledger.get_code(found_code)
+                            if not code_row or code_row.get("channel") != "16688":
+                                missing += 1
+                                continue
+                            result = self.ledger.bind_code_external_order(
+                                found_code,
+                                trade_no,
+                                reason="channel16688_sold_sync",
+                            )
+                            if result == "bound":
+                                bound += 1
+                                sku_bound += 1
+                            elif result == "already_bound":
+                                already_bound += 1
+                                sku_already += 1
+                            elif result == "conflict":
+                                conflicts += 1
+                            else:
+                                missing += 1
+                    if not rows or len(rows) < page_size or (total > 0 and page_no * page_size >= total):
+                        break
+                    if page_no == page_limit:
+                        sku_truncated = True
+                        any_truncated = True
+            except (UpstreamTimeout, UpstreamError) as exc:
+                sku_error = str(exc) or type(exc).__name__
+                errors.append(f"{sku_key}({goods_no}): {sku_error}")
+            per_sku.append(
+                {
+                    "sku_key": sku_key,
+                    "goods_no": goods_no,
+                    "scanned": sku_scanned,
+                    "bound": sku_bound,
+                    "already_bound": sku_already,
+                    "truncated": sku_truncated,
+                    "error": sku_error or None,
+                }
+            )
+
+        return {
+            "scanned": scanned,
+            "bound": bound,
+            "already_bound": already_bound,
+            "missing": missing,
+            "conflicts": conflicts,
+            "truncated": any_truncated,
+            "errors": errors,
+            "items": per_sku,
+        }
+
+    def get_channel16688_stock(self, sku_keys: Optional[list[str]] = None) -> dict[str, Any]:
+        if not self._channel16688_ready():
+            raise UpstreamError(503, "16688 API credentials are not configured", rejected=True)
+        rules = self.channel16688_restock_rules(enabled_only=False)
+        if sku_keys:
+            wanted = {item.strip() for item in sku_keys if item and item.strip()}
+            rules = [rule for rule in rules if rule["sku_key"] in wanted]
+        if not rules:
+            return {
+                "restock_enabled": self.settings.channel16688_restock_enabled,
+                "restock_interval_seconds": self.settings.channel16688_restock_interval_seconds,
+                "items": [],
+            }
+        items: list[dict[str, Any]] = []
+        for rule in rules:
+            sku_key = rule["sku_key"]
+            goods_no = (rule.get("goods_no") or "").strip()
+            current_qty: Optional[int] = None
+            locked_qty: Optional[int] = None
+            sold_qty: Optional[int] = None
+            stock_found = False
+            item_error: Optional[str] = None
+            if not goods_no:
+                item_error = "GOODS_NO_REQUIRED"
+            else:
+                stock = self.channel.stock_secret_list(goods_no, status=0, page_no=1, page_size=1)
+                current_qty = self._extract_16688_available_qty(stock)
+                locked_qty = self._parse_16688_int(stock.get("locked_quantity")) or 0
+                sold_qty = self._parse_16688_int(stock.get("sold_quantity")) or 0
+                if current_qty is None:
+                    item_error = "INVALID_STOCK_RESPONSE"
+                    stock_found = False
+                else:
+                    stock_found = True
+            planned_push = 0
+            if stock_found and current_qty is not None and rule["enabled"] and current_qty <= rule["min_stock"]:
+                planned_push = min(max(0, rule["target_stock"] - current_qty), rule["max_push"])
+            items.append(
+                {
+                    "sku_key": sku_key,
+                    "sku_title": SKUS[sku_key]["title"],
+                    "goods_no": goods_no,
+                    "enabled": rule["enabled"],
+                    "min_stock": rule["min_stock"],
+                    "target_stock": rule["target_stock"],
+                    "max_push": rule["max_push"],
+                    "current_qty": current_qty,
+                    "locked_qty": locked_qty,
+                    "sold_qty": sold_qty,
+                    "stock_found": stock_found,
+                    "needs_restock": planned_push > 0,
+                    "planned_push": planned_push,
+                    "error": item_error,
+                    "local_unused_16688": self._count(
+                        "sku_key=? AND channel='16688' AND status='unused'",
+                        (sku_key,),
+                    ),
+                    "local_in_stock_16688": self._count(
+                        f"sku_key=? AND channel='16688' AND {IN_STOCK_SQL}",
+                        (sku_key,),
+                    ),
+                    "local_dispatched_unused_16688": self._count(
+                        f"sku_key=? AND channel='16688' AND {DISPATCHED_UNUSED_SQL}",
+                        (sku_key,),
+                    ),
+                }
+            )
+        return {
+            "restock_enabled": self.settings.channel16688_restock_enabled,
+            "restock_interval_seconds": self.settings.channel16688_restock_interval_seconds,
+            "items": items,
+        }
+
+    def check_and_restock_channel16688_cards(
+        self,
+        *,
+        sku_keys: Optional[list[str]] = None,
+        dry_check: bool = False,
+        sync_sold: bool = True,
+        trigger: str = "manual",
+    ) -> dict[str, Any]:
+        with self._channel16688_restock_lock:
+            if not self._channel16688_ready():
+                raise UpstreamError(503, "16688 API credentials are not configured", rejected=True)
+            rules = self.channel16688_restock_rules(enabled_only=True)
+            if sku_keys:
+                wanted = {item.strip() for item in sku_keys if item and item.strip()}
+                rules = [rule for rule in rules if rule["sku_key"] in wanted]
+            if not rules:
+                return {
+                    "trigger": trigger,
+                    "dry_check": dry_check,
+                    "checked": 0,
+                    "restocked": 0,
+                    "total_pushed": 0,
+                    "sync_sold": {"skipped": True, "reason": "no_rules"},
+                    "errors": [],
+                    "items": [],
+                }
+
+            hour_bucket = datetime.now(timezone.utc).strftime("%Y%m%d%H")
+            target_skus = [rule["sku_key"] for rule in rules]
+            if not sync_sold:
+                sync_result: dict[str, Any] = {"skipped": True, "reason": "disabled"}
+            elif dry_check:
+                sync_result = {"skipped": True, "reason": "dry_check"}
+            else:
+                sync_result = self.sync_channel16688_sold_codes(sku_keys=target_skus)
+
+            restocked = 0
+            total_pushed = 0
+            errors: list[str] = list(sync_result.get("errors") or [])
+            items: list[dict[str, Any]] = []
+
+            for rule in rules:
+                sku_key = rule["sku_key"]
+                goods_no = (rule.get("goods_no") or "").strip()
+                if not goods_no:
+                    msg = f"{sku_key} 缺少 16688 商品编号 goods_no"
+                    errors.append(msg)
+                    if not dry_check:
+                        self._channel16688_alert(
+                            f"restock-missing-goods:{sku_key}:{hour_bucket}",
+                            "16688 自动补卡缺少商品编号（需人工排查）",
+                            f"触发来源 {trigger} 检查 {sku_key} 时未找到 16688 商品编号，请在管理台 SKU 配置或规则中补全 goods_no。",
+                        )
+                    items.append(
+                        {
+                            "sku_key": sku_key,
+                            "goods_no": "",
+                            "current_qty": None,
+                            "min_stock": rule["min_stock"],
+                            "target_stock": rule["target_stock"],
+                            "action": "missing_goods_no",
+                            "pushed_count": 0,
+                            "error": msg,
+                        }
+                    )
+                    continue
+
+                try:
+                    stock = self.channel.stock_secret_list(goods_no, status=0, page_no=1, page_size=1)
+                except (UpstreamTimeout, UpstreamError) as exc:
+                    detail = str(exc) or type(exc).__name__
+                    err_msg = f"{sku_key}({goods_no}) 查询库存失败: {detail}"
+                    errors.append(err_msg)
+                    if not dry_check:
+                        self._channel16688_alert(
+                            f"restock-stock:{sku_key}:{hour_bucket}",
+                            "16688 自动补卡查询库存失败（需人工排查）",
+                            f"触发来源 {trigger} 查询 {sku_key}（goods_no={goods_no}）16688 库存失败：{detail}",
+                        )
+                    items.append(
+                        {
+                            "sku_key": sku_key,
+                            "goods_no": goods_no,
+                            "current_qty": None,
+                            "min_stock": rule["min_stock"],
+                            "target_stock": rule["target_stock"],
+                            "action": "stock_error",
+                            "pushed_count": 0,
+                            "error": detail,
+                        }
+                    )
+                    continue
+
+                current_qty = self._extract_16688_available_qty(stock)
+                if current_qty is None:
+                    err_msg = f"{sku_key}({goods_no}) 返回的库存数据格式异常"
+                    errors.append(err_msg)
+                    if not dry_check:
+                        self._channel16688_alert(
+                            f"restock-stock:{sku_key}:{hour_bucket}",
+                            "16688 自动补卡查询库存失败（需人工排查）",
+                            f"触发来源 {trigger} 查询 {sku_key}（goods_no={goods_no}）16688 库存返回异常数据。",
+                        )
+                    items.append(
+                        {
+                            "sku_key": sku_key,
+                            "goods_no": goods_no,
+                            "current_qty": None,
+                            "min_stock": rule["min_stock"],
+                            "target_stock": rule["target_stock"],
+                            "action": "stock_error",
+                            "pushed_count": 0,
+                            "error": "INVALID_STOCK_RESPONSE",
+                        }
+                    )
+                    continue
+                if current_qty > rule["min_stock"]:
+                    items.append(
+                        {
+                            "sku_key": sku_key,
+                            "goods_no": goods_no,
+                            "current_qty": current_qty,
+                            "min_stock": rule["min_stock"],
+                            "target_stock": rule["target_stock"],
+                            "action": "sufficient",
+                            "pushed_count": 0,
+                        }
+                    )
+                    continue
+
+                needed = min(max(0, rule["target_stock"] - current_qty), rule["max_push"])
+                if needed <= 0:
+                    items.append(
+                        {
+                            "sku_key": sku_key,
+                            "goods_no": goods_no,
+                            "current_qty": current_qty,
+                            "min_stock": rule["min_stock"],
+                            "target_stock": rule["target_stock"],
+                            "action": "noop",
+                            "pushed_count": 0,
+                        }
+                    )
+                    continue
+
+                if dry_check:
+                    items.append(
+                        {
+                            "sku_key": sku_key,
+                            "goods_no": goods_no,
+                            "current_qty": current_qty,
+                            "min_stock": rule["min_stock"],
+                            "target_stock": rule["target_stock"],
+                            "action": "would_restock",
+                            "planned_push": needed,
+                            "pushed_count": 0,
+                        }
+                    )
+                    continue
+
+                try:
+                    batch_res = self.batch(
+                        sku_key,
+                        "16688",
+                        needed,
+                        goods_no,
+                        f"auto-restock-{trigger}-{sku_key}",
+                    )
+                except (UpstreamTimeout, UpstreamError, ValueError) as exc:
+                    detail = str(exc) or type(exc).__name__
+                    err_msg = f"{sku_key}({goods_no}) 补卡失败: {detail}"
+                    errors.append(err_msg)
+                    self._channel16688_alert(
+                        f"restock-push:{sku_key}:{hour_bucket}",
+                        "16688 自动补卡导入失败（需人工处理）",
+                        f"触发来源 {trigger} 为 {sku_key}（goods_no={goods_no}，当前库存 {current_qty}）自动补发 {needed} 张卡密失败：{detail}",
+                    )
+                    items.append(
+                        {
+                            "sku_key": sku_key,
+                            "goods_no": goods_no,
+                            "current_qty": current_qty,
+                            "min_stock": rule["min_stock"],
+                            "target_stock": rule["target_stock"],
+                            "action": "failed",
+                            "pushed_count": 0,
+                            "error": detail,
+                        }
+                    )
+                    continue
+
+                pushed_count = int(batch_res.get("count") or needed)
+                restocked += 1
+                total_pushed += pushed_count
+                items.append(
+                    {
+                        "sku_key": sku_key,
+                        "goods_no": goods_no,
+                        "current_qty": current_qty,
+                        "after_qty": current_qty + pushed_count,
+                        "min_stock": rule["min_stock"],
+                        "target_stock": rule["target_stock"],
+                        "action": "restocked",
+                        "batch_id": batch_res["batch_id"],
+                        "pushed_count": pushed_count,
+                    }
+                )
+
+            return {
+                "trigger": trigger,
+                "dry_check": dry_check,
+                "checked": len(rules),
+                "restocked": restocked,
+                "total_pushed": total_pushed,
+                "sync_sold": sync_result,
                 "errors": errors,
                 "items": items,
             }

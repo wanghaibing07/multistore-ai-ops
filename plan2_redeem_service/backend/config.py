@@ -60,6 +60,9 @@ class Settings:
     agiso_restock_enabled: bool = False
     agiso_restock_interval_seconds: int = 900
     agiso_restock_rules_json: str = ""
+    channel16688_restock_enabled: bool = False
+    channel16688_restock_interval_seconds: int = 900
+    channel16688_restock_rules_json: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -94,6 +97,8 @@ class Settings:
             "agiso_poll_interval_seconds": int,
             "agiso_restock_enabled": _parse_bool,
             "agiso_restock_interval_seconds": int,
+            "channel16688_restock_enabled": _parse_bool,
+            "channel16688_restock_interval_seconds": int,
         }
         for key in values:
             env_name = "PLAN2_" + key.upper()

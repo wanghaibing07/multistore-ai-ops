@@ -31,6 +31,7 @@ from .models import (
     AgisoSkuMappingRequest,
     AgisoSyncOrdersRequest,
     BatchRequest,
+    Channel16688RestockRequest,
     IssueRequest,
     RedeemRequest,
     RetryRequest,
@@ -150,6 +151,16 @@ def create_app(
             except Exception as exc:
                 logger.warning("background agiso restock failed error=%s", type(exc).__name__)
 
+    async def channel16688_restocker() -> None:
+        while True:
+            await asyncio.sleep(max(30, settings.channel16688_restock_interval_seconds))
+            if not settings.channel16688_restock_enabled or not service._channel16688_ready():
+                continue
+            try:
+                await asyncio.to_thread(service.check_and_restock_channel16688_cards, trigger="scheduler")
+            except Exception as exc:
+                logger.warning("background channel16688 restock failed error=%s", type(exc).__name__)
+
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         tasks = [asyncio.create_task(poller())]
@@ -157,6 +168,8 @@ def create_app(
             tasks.append(asyncio.create_task(agiso_poller()))
         if settings.agiso_restock_enabled:
             tasks.append(asyncio.create_task(agiso_restocker()))
+        if settings.channel16688_restock_enabled:
+            tasks.append(asyncio.create_task(channel16688_restocker()))
         try:
             yield
         finally:
@@ -532,6 +545,7 @@ def create_app(
         if err_code:
             messages = {
                 "RETRY_NOT_AVAILABLE": "这笔单没有可重试的原始请求，请先核对详情",
+                "ORDER_NOT_ELIGIBLE": "16688 订单状态不符合领货条件（可能未售出、已退款或有投诉），已拦截重试",
                 "PRICE_LIMIT_EXCEEDED": "上游现价还是高于上限，确认接受再勾选放行重试",
                 "LOW_BALANCE": "Canboso 余额不够，充值后再试",
                 "UPSTREAM_OUT_OF_STOCK": "上游暂时没货，等补货后再试",
@@ -711,6 +725,37 @@ def create_app(
             )
         except AgisoError as exc:
             return error("AGISO_ERROR", exc.message, 503)
+
+    @app.get("/api/v1/admin/channel16688/stock", dependencies=[Depends(require_admin)])
+    def admin_channel16688_stock(
+        sku_keys: Optional[str] = Query(default=None),
+        svc: Service = Depends(get_service),
+    ) -> Any:
+        parsed_skus = [item.strip() for item in sku_keys.split(",") if item.strip()] if sku_keys else None
+        try:
+            return svc.get_channel16688_stock(sku_keys=parsed_skus)
+        except UpstreamTimeout as exc:
+            return error("CHANNEL_16688_TIMEOUT", str(exc) or "16688 查询库存超时", 504)
+        except UpstreamError as exc:
+            return error("CHANNEL_16688_ERROR", exc.message or "16688 查询库存失败", 503)
+
+    @app.post("/api/v1/admin/channel16688/restock", dependencies=[Depends(require_admin)])
+    def admin_channel16688_restock(
+        body: Optional[Channel16688RestockRequest] = None,
+        svc: Service = Depends(get_service),
+    ) -> Any:
+        req = body or Channel16688RestockRequest()
+        try:
+            return svc.check_and_restock_channel16688_cards(
+                sku_keys=req.sku_keys,
+                dry_check=req.dry_check,
+                sync_sold=req.sync_sold,
+                trigger="manual",
+            )
+        except UpstreamTimeout as exc:
+            return error("CHANNEL_16688_TIMEOUT", str(exc) or "16688 自动补卡超时", 504)
+        except UpstreamError as exc:
+            return error("CHANNEL_16688_ERROR", exc.message or "16688 自动补卡失败", 503)
 
     @app.get("/api/{path:path}")
     def api_not_found(path: str) -> JSONResponse:

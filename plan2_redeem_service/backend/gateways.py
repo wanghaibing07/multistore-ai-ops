@@ -158,6 +158,10 @@ class Channel16688Client:
     def __init__(self, base_url: str, api_key: str, api_secret: str, timeout: float = 15):
         self.base_url, self.api_key, self.api_secret, self.timeout = base_url.rstrip("/"), api_key, api_secret, timeout
 
+    @property
+    def is_ready(self) -> bool:
+        return bool(self.base_url and self.api_key.strip() and self.api_secret.strip())
+
     def _call(self, path: str, params: dict[str, Any]) -> dict[str, Any]:
         nonce = "".join(secrets.choice("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789") for _ in range(24))
         params = {**params, "app_id": self.api_key, "nonce": nonce, "timestamp": int(time.time())}
@@ -199,37 +203,170 @@ class Channel16688Client:
             raise UpstreamError(502, message, rejected=True)
         return body.get("data") or body
 
+    def stock_secret_list(
+        self,
+        goods_no: str,
+        *,
+        status: Optional[int] = None,
+        keywords: str = "",
+        page_no: int = 1,
+        page_size: int = 20,
+    ) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "goods_no": goods_no,
+            "page_no": max(1, int(page_no)),
+            "page_size": max(1, min(100, int(page_size))),
+        }
+        if status is not None:
+            params["status"] = int(status)
+        if keywords:
+            params["keywords"] = keywords
+        return self._call("openApi/stockSecret/list", params)
+
     def verify_order(self, code: str, goods_no: str) -> dict[str, Any]:
-        listing = self._call("openApi/order/list", {"card_no": code, "page_no": 1, "page_size": 20})
-        orders = listing.get("list", [])
-        if len(orders) != 1:
+        trade_no = ""
+        stock = self.stock_secret_list(goods_no, keywords=code, page_no=1, page_size=20)
+        stock_matches = [
+            item
+            for item in (stock.get("list") or [])
+            if isinstance(item, dict) and code in str(item.get("secret_code") or "")
+        ]
+        if len(stock_matches) > 1:
             return {"ok": False, "error": "ORDER_NOT_ELIGIBLE"}
-        summary = orders[0]
-        if summary.get("identity") != "merchant":
-            return {"ok": False, "error": "ORDER_NOT_ELIGIBLE"}
-        detail = self._call("openApi/order/info", {"trade_no": summary["trade_no"]})
+        if len(stock_matches) == 1:
+            matched = stock_matches[0]
+            try:
+                secret_status = int(matched.get("status", -1))
+            except (TypeError, ValueError):
+                secret_status = -1
+            trade_no = str(matched.get("trade_no") or "").strip()
+            if secret_status != 2 or not trade_no:
+                return {"ok": False, "error": "ORDER_NOT_ELIGIBLE"}
+        else:
+            listing = self._call("openApi/order/list", {"card_no": code, "page_no": 1, "page_size": 20})
+            orders = listing.get("list") or []
+            if len(orders) != 1:
+                return {"ok": False, "error": "ORDER_NOT_ELIGIBLE"}
+            summary = orders[0]
+            if summary.get("identity") != "merchant":
+                return {"ok": False, "error": "ORDER_NOT_ELIGIBLE"}
+            trade_no = str(summary.get("trade_no") or "").strip()
+            if not trade_no:
+                return {"ok": False, "error": "ORDER_NOT_ELIGIBLE"}
+        detail = self._call("openApi/order/info", {"trade_no": trade_no})
+        detail_identity = detail.get("identity")
+        if detail_identity is not None and detail_identity != "merchant":
+            return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": trade_no}
         cards = detail.get("cards") or []
-        code_in_cards = any(code in (item.get("code", "") if isinstance(item, dict) else str(item)) for item in cards)
+        code_in_cards = any(
+            code in str((item.get("code") if isinstance(item, dict) else item) or "")
+            for item in cards
+        )
         if detail.get("goods_no") != goods_no or not code_in_cards:
-            return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": summary["trade_no"]}
-        status = int(detail.get("status", -1))
+            return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": trade_no}
+        try:
+            status = int(detail.get("status", -1))
+        except (TypeError, ValueError):
+            status = -1
         if status in (2, 3) or status not in (4, 5):
-            return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": summary["trade_no"]}
-        complaints = self._call("openApi/complaint/list", {"keywords": summary["trade_no"], "page_no": 1, "page_size": 20})
-        for item in complaints.get("list", []):
-            if item.get("trade_no") == summary["trade_no"] and int(item.get("status", -1)) in (0, 1):
-                return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": summary["trade_no"]}
-            if item.get("trade_no") == summary["trade_no"] and int(item.get("status", -1)) == 2:
-                detail = self._call("openApi/complaint/detail", {"complaint_no": item.get("complaint_no")})
-                if int(detail.get("result", 0)) == 2:
-                    return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": summary["trade_no"]}
-        return {"ok": True, "trade_no": summary["trade_no"]}
+            return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": trade_no}
+        complaints = self._call("openApi/complaint/list", {"keywords": trade_no, "page_no": 1, "page_size": 20})
+        for item in complaints.get("list") or []:
+            if not isinstance(item, dict) or item.get("trade_no") != trade_no:
+                continue
+            try:
+                complaint_status = int(item.get("status", -1))
+            except (TypeError, ValueError):
+                complaint_status = -1
+            if complaint_status in (0, 1):
+                return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": trade_no}
+            if complaint_status == 2:
+                complaint_no = str(item.get("complaint_no") or "").strip()
+                if not complaint_no:
+                    return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": trade_no}
+                complaint_detail = self._call("openApi/complaint/detail", {"complaint_no": complaint_no})
+                try:
+                    complaint_result = int(complaint_detail.get("result", 0))
+                except (TypeError, ValueError):
+                    complaint_result = 0
+                if complaint_result == 2:
+                    return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": trade_no}
+        return {"ok": True, "trade_no": trade_no}
 
     def stock_secret_add(self, goods_no: str, content: str) -> dict[str, Any]:
         return self._call("openApi/stockSecretBatch/add", {"goods_no": goods_no, "content": content, "split_type": 2, "remove_repeat": 1})
 
     def invalidate(self, goods_no: str, secret_ids: list[int]) -> dict[str, Any]:
         return self._call("openApi/stockSecret/invalidate", {"goods_no": goods_no, "ids": secret_ids})
+
+
+def _parse_rule_int(
+    entry: dict[str, Any],
+    key: str,
+    *,
+    default: Optional[int] = None,
+    minimum: int = 0,
+    maximum: Optional[int] = None,
+    idx: int = 0,
+) -> int:
+    raw = entry.get(key)
+    if raw is None or (isinstance(raw, str) and not raw.strip()):
+        if default is None:
+            raise ValueError(f"16688 restock rule at index {idx} requires {key}")
+        value = default
+    elif isinstance(raw, bool):
+        raise ValueError(f"16688 restock rule at index {idx} field {key} must be an integer")
+    else:
+        try:
+            value = int(raw)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"16688 restock rule at index {idx} field {key} must be an integer") from exc
+    if value < minimum:
+        raise ValueError(f"16688 restock rule at index {idx} field {key} must be >= {minimum}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"16688 restock rule at index {idx} field {key} must be <= {maximum}")
+    return value
+
+
+def parse_env_channel16688_restock_rules(raw_json: str) -> list[dict[str, Any]]:
+    text = (raw_json or "").strip()
+    if not text:
+        return []
+    parsed = json.loads(text)
+    if not isinstance(parsed, list):
+        raise ValueError("PLAN2_CHANNEL16688_RESTOCK_RULES_JSON must be a JSON array")
+    normalized: list[dict[str, Any]] = []
+    seen_skus: set[str] = set()
+    seen_goods: set[str] = set()
+    for idx, entry in enumerate(parsed):
+        if not isinstance(entry, dict):
+            raise ValueError(f"16688 restock rule at index {idx} must be an object")
+        sku_key = str(entry.get("sku_key") or "").strip()
+        if not sku_key:
+            raise ValueError(f"16688 restock rule at index {idx} requires sku_key")
+        if sku_key in seen_skus:
+            raise ValueError(f"16688 restock rule at index {idx} has duplicate sku_key: {sku_key}")
+        seen_skus.add(sku_key)
+        goods_no = str(entry.get("goods_no") or "").strip()
+        if goods_no:
+            if goods_no in seen_goods:
+                raise ValueError(f"16688 restock rule at index {idx} has duplicate goods_no: {goods_no}")
+            seen_goods.add(goods_no)
+        min_stock = _parse_rule_int(entry, "min_stock", default=0, minimum=0, idx=idx)
+        target_stock = _parse_rule_int(entry, "target_stock", minimum=max(1, min_stock), idx=idx)
+        max_push = _parse_rule_int(entry, "max_push", default=20, minimum=1, maximum=500, idx=idx)
+        normalized.append(
+            {
+                "sku_key": sku_key,
+                "goods_no": goods_no,
+                "min_stock": min_stock,
+                "target_stock": target_stock,
+                "max_push": max_push,
+                "enabled": bool(entry.get("enabled", True)),
+                "note": str(entry.get("note") or "").strip()[:200],
+            }
+        )
+    return normalized
 
 
 def _canonical_value(value: Any) -> str:
@@ -297,10 +434,79 @@ class DryRun16688:
         self.orders: dict[str, dict[str, Any]] = {}
         self.complaints: set[str] = set()
         self.imported: list[str] = []
+        self.stock: dict[str, list[dict[str, Any]]] = {}
+        self._next_id = 1
+
+    @property
+    def is_ready(self) -> bool:
+        return True
 
     def stock_secret_add(self, goods_no: str, content: str) -> dict[str, Any]:
+        blocks = [block.strip() for block in content.split("\n\n") if block.strip()]
+        bucket = self.stock.setdefault(goods_no, [])
+        existing = {entry["secret_code"] for entry in bucket}
+        added = 0
+        dup = 0
+        for block in blocks:
+            if block in existing:
+                dup += 1
+                continue
+            existing.add(block)
+            bucket.append(
+                {
+                    "id": self._next_id,
+                    "secret_code": block,
+                    "batch_no": "DRY-BATCH",
+                    "status": 0,
+                    "first": 0,
+                    "trade_no": "",
+                }
+            )
+            self._next_id += 1
+            added += 1
         self.imported.extend([line for line in content.splitlines() if line.startswith("CODE-")])
-        return {"import_count": len(self.imported)}
+        available = sum(1 for item in bucket if item["status"] == 0)
+        return {
+            "goods_no": goods_no,
+            "import_count": added,
+            "stock_dup_count": dup,
+            "available_quantity": available,
+        }
+
+    def stock_secret_list(
+        self,
+        goods_no: str,
+        *,
+        status: Optional[int] = None,
+        keywords: str = "",
+        page_no: int = 1,
+        page_size: int = 20,
+    ) -> dict[str, Any]:
+        bucket = list(self.stock.get(goods_no, []))
+        available = sum(1 for item in bucket if item["status"] == 0)
+        locked = sum(1 for item in bucket if item["status"] == 1)
+        sold = sum(1 for item in bucket if item["status"] == 2)
+        filter_map = {0: 0, 1: 2, 3: 3, 4: 4}
+        filtered = bucket
+        if status is not None:
+            target = filter_map.get(int(status), int(status))
+            filtered = [item for item in filtered if item["status"] == target]
+        if keywords:
+            filtered = [
+                item
+                for item in filtered
+                if keywords in item["secret_code"] or keywords in str(item.get("trade_no") or "")
+            ]
+        start = (max(1, page_no) - 1) * max(1, page_size)
+        end = start + max(1, page_size)
+        return {
+            "goods_no": goods_no,
+            "total": len(filtered),
+            "available_quantity": available,
+            "locked_quantity": locked,
+            "sold_quantity": sold,
+            "list": [dict(item) for item in filtered[start:end]],
+        }
 
     def verify_order(self, code: str, goods_no: str) -> dict[str, Any]:
         return {"ok": True, "trade_no": "DRY-16688-" + code[-8:]}

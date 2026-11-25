@@ -434,12 +434,12 @@ def test_16688_signature_matches_protocol(monkeypatch):
 
 def test_16688_client_keeps_order_and_stock_methods_on_class():
     client_ = Channel16688Client("https://16688.example", "app-id", "secret")
-    assert all(callable(getattr(client_, name, None)) for name in ("verify_order", "stock_secret_add", "invalidate"))
+    assert all(callable(getattr(client_, name, None)) for name in ("verify_order", "stock_secret_list", "stock_secret_add", "invalidate"))
 
     calls = []
     responses = [
-        {"list": [{"identity": "merchant", "trade_no": "T1"}]},
-        {"goods_no": "G1", "cards": [{"code": "C1"}], "status": 4},
+        {"list": [{"id": 10, "secret_code": "提货链接：https://redeem.example/r/C1\n兑换码：C1", "status": 2, "trade_no": "T1"}]},
+        {"identity": "merchant", "goods_no": "G1", "cards": [{"code": "提货链接：https://redeem.example/r/C1\n兑换码：C1"}], "status": 4},
         {"list": []},
         {"list": []},
         {"list": []},
@@ -454,7 +454,7 @@ def test_16688_client_keeps_order_and_stock_methods_on_class():
     assert client_.stock_secret_add("G1", "C1") == {"list": []}
     assert client_.invalidate("G1", [7]) == {"list": []}
     assert calls == [
-        ("openApi/order/list", {"card_no": "C1", "page_no": 1, "page_size": 20}),
+        ("openApi/stockSecret/list", {"goods_no": "G1", "page_no": 1, "page_size": 20, "keywords": "C1"}),
         ("openApi/order/info", {"trade_no": "T1"}),
         ("openApi/complaint/list", {"keywords": "T1", "page_no": 1, "page_size": 20}),
         ("openApi/stockSecretBatch/add", {"goods_no": "G1", "content": "C1", "split_type": 2, "remove_repeat": 1}),

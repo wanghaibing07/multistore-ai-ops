@@ -85,6 +85,12 @@ class AgisoRestockRequest(BaseModel):
     sku_keys: Optional[list[str]] = None
 
 
+class Channel16688RestockRequest(BaseModel):
+    dry_check: bool = False
+    sku_keys: Optional[list[str]] = None
+    sync_sold: bool = True
+
+
 class PublicCodeResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
     code: str

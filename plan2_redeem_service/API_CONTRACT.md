@@ -501,5 +501,27 @@
   - `dry_check=false`：加锁防并发，自动批量签发并调用 `CardPwd/Add` 入库，失败或卡种缺失时记录事件并发送商家告警邮件。
 - `200 OK`：`{ "trigger": "manual", "dry_check", "checked", "restocked", "total_pushed", "errors", "items" }`；上游失败返回 `503 AGISO_ERROR`。
 
+### 6.11 查询 16688 卡密库实时库存（管理员鉴权）
+`GET /api/v1/admin/channel16688/stock?sku_keys=ultra_shared_slot,ultra_exclusive_admin`
+- 读取 `PLAN2_CHANNEL16688_RESTOCK_RULES_JSON` 规则并调用 16688 `openApi/stockSecret/list`（`status=0`），返回每个商品的 `goods_no`、`current_qty`、`locked_qty`、`sold_qty`、`stock_found`、`needs_restock`、`planned_push` 及本地 16688 码统计（`local_unused_16688`、`local_in_stock_16688`、`local_dispatched_unused_16688`）。
+- `sku_keys` 可选，逗号分隔；超时返回 `504 CHANNEL_16688_TIMEOUT`，上游失败返回 `503 CHANNEL_16688_ERROR`。
+
+### 6.12 手动检查并触发 16688 低水位自动补卡（管理员鉴权）
+`POST /api/v1/admin/channel16688/restock`
+- 请求体（可选）：
+```json
+{
+  "dry_check": false,
+  "sku_keys": ["ultra_shared_slot", "ultra_exclusive_admin"],
+  "sync_sold": true
+}
+```
+- 按 `PLAN2_CHANNEL16688_RESTOCK_RULES_JSON` 中已启用的规则巡检 16688 卡密库存：
+  - `sync_sold=true` 且 `dry_check=false` 时，先同步 16688 已售卡密（`stockSecret/list` `status=1` -> 出参 `status=2`）的 `trade_no` 并回绑到本地 `codes.external_order_id`，以便准确区分 `in_stock` 与 `dispatched_unused`。
+  - 当 `current_qty <= min_stock` 时计算 `needed = min(target_stock - current_qty, max_push)`：
+    - `dry_check=true`：仅返回预演结果（`action="would_restock"` / `"sufficient"` / `"missing_goods_no"`），不写库不推卡。
+    - `dry_check=false`：加锁防并发，自动批量签发并调用 16688 `openApi/stockSecretBatch/add` 导入库存；失败时按小时去重发送商家告警邮件。
+- `200 OK`：`{ "trigger": "manual", "dry_check", "checked", "restocked", "total_pushed", "sync_sold", "errors", "items" }`。
+
 ## 7. 健康检查
 `GET /api/v1/health` -> `{ "status": "ok", "execution_mode": "dry_run" }`
