@@ -146,7 +146,7 @@
 `POST /api/v1/public/codes/{code}/warranty`
 
 - 同时兼容 `Content-Type: application/json` 与 `Content-Type: multipart/form-data`：
-  - `admin_email`：必填，合法邮箱，支持 Gmail 及其他常见/自定义域名邮箱（提交后会同步写入 `codes.buyer_email` 与 `codes.buyer_email_masked`；公网接口仍只返回脱敏值）
+  - `admin_email`：必填，合法邮箱，支持 Gmail 及其他常见/自定义域名邮箱（提交后会同步写入 `codes.buyer_email` 与 `codes.buyer_email_masked`；展示字段直接返回完整邮箱，不做脱敏/模糊处理）
   - `admin_email_confirm`：选填（向后兼容）；不传或传空时跳过二次比对，仅在显式传了非空值且与 `admin_email` 不一致时返回 `422 EMAIL_MISMATCH`
   - `screenshot`：**可选**（免截图默认不传；向后兼容 multipart 传图：`image/jpeg`, `image/png`, `image/webp`，最大 5MB；若显式上传了空文件仍返回 `422 SCREENSHOT_EMPTY`）
   - `note`：选填，最多 300 字
@@ -155,7 +155,7 @@
 - 自动报备与兜底：
   - 若后端已启用且配置就绪 Telegram 自动报备，系统会按固定越南语模板自动向 Canboso 管理员发送私聊报备；发送成功直接流转为 `warranty.status = "registered_upstream"` 并写入 `warranty_auto_forwarded` 审计；发送失败不会让买家接口报错，仍返回 `200 OK` 且保持 `warranty.status = "submitted"`，同时记录脱敏错误并发送邮件告警，订单保留在后台 `pending_warranty_ack` / `manual_attention` 队列待重试或人工处理。
   - 若未启用 TG 自动报备，返回 `200 OK`（`status = "completed"`, `warranty.status = "submitted"`），发送保修通知邮件。
-- 隐私约束：所有 `/api/v1/public/*` 响应严禁返回明文 `buyer_email`、`admin_email`、`forward_template`、`upstream_order_code` 或任何 Telegram 内部状态字段（`warranty` 对外字段固定为 `status`, `admin_email_masked`, `submitted_at`, `has_screenshot`, `note`）。
+- 字段与边界约束：`buyer_email_masked` 与 `warranty.admin_email_masked` 保留原字段名兼容前端，均直接返回完整邮箱不做脱敏；所有 `/api/v1/public/*` 响应仍严禁返回 `forward_template`、`upstream_order_code` 或任何 Telegram 内部状态字段（`warranty` 对外字段固定为 `status`, `admin_email_masked`, `submitted_at`, `has_screenshot`, `note`）。
 
 ## 5. 商家后台接口 (`/api/v1/admin/*`)
 
@@ -298,7 +298,7 @@
       "remark": "",
       "status": "waiting_fulfillment",
       "buyer_email": "alice@gmail.com",
-      "buyer_email_masked": "al***@gmail.com",
+      "buyer_email_masked": "alice@gmail.com",
       "store_email": null,
       "upstream_order_code": "ORD-12345",
       "upstream_status": "paid",
@@ -320,7 +320,7 @@
 }
 ```
 - 独享单适配说明：
-  - `buyer_email` 优先取 `codes.buyer_email`，历史单兜底取 `warranty.admin_email`；`buyer_email_masked` 同步兜底脱敏展示。
+  - `buyer_email` 优先取 `codes.buyer_email`，历史单兜底取 `warranty.admin_email`；`buyer_email_masked` 优先返回完整邮箱（不做脱敏），历史单无明文时再兜底旧字段。
   - `store_email` 从 `delivery_json.account_text` 提取，独享单出货后展示商店套餐邮箱，共享车位或未出货订单为 `null`。
 
 ### 5.6 兑换码详情（含完整事件流、交付凭据与保修信息）

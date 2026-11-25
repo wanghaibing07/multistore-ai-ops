@@ -371,7 +371,7 @@ def create_app(
                 "CODE_REVOKED": "这个兑换码已作废，有问题请联系客服",
                 "CONCURRENT_IN_PROGRESS": "正在处理中，请等几秒刷新看看",
                 "ORDER_NOT_ELIGIBLE": "这笔订单暂时领不了，请确认已付款且没退款",
-                "INVALID_EMAIL": "请填正确的邮箱地址（支持 Gmail、QQ、163、Outlook 等）",
+                "INVALID_EMAIL": "请填正确的邮箱地址",
                 "EMAIL_MISMATCH": "两次填的邮箱不一样，请核对后再提交",
                 "PREFLIGHT_REQUIRED": "请先勾选上面的确认项再提交",
             }
@@ -414,7 +414,7 @@ def create_app(
             try:
                 payload = WarrantyForm.model_validate(raw_json)
             except ValidationError:
-                return error("INVALID_EMAIL", "请填正确的邮箱地址（支持 Gmail、QQ、163、Outlook 等）", 422)
+                return error("INVALID_EMAIL", "请填正确的邮箱地址", 422)
             admin_email = payload.admin_email
             admin_email_confirm = payload.admin_email_confirm
             note = payload.note or ""
@@ -425,7 +425,7 @@ def create_app(
                 return error("INVALID_REQUEST", "请求格式不对，请刷新页面后重试", 422)
             raw_email = form.get("admin_email")
             if not isinstance(raw_email, str):
-                return error("INVALID_EMAIL", "请填正确的邮箱地址（支持 Gmail、QQ、163、Outlook 等）", 422)
+                return error("INVALID_EMAIL", "请填正确的邮箱地址", 422)
             admin_email = raw_email
             raw_confirm = form.get("admin_email_confirm")
             admin_email_confirm = raw_confirm if isinstance(raw_confirm, str) else None
@@ -458,7 +458,7 @@ def create_app(
             messages = {
                 "CODE_NOT_FOUND": "没找到这个兑换码，请核对后重试",
                 "WARRANTY_LOCKED": "保修已经登记完，不能再改了，有变化请联系客服",
-                "INVALID_EMAIL": "请填正确的邮箱地址（支持 Gmail、QQ、163、Outlook 等）",
+                "INVALID_EMAIL": "请填正确的邮箱地址",
                 "EMAIL_MISMATCH": "两次填的邮箱不一样，请核对后再提交",
                 "WARRANTY_SAME_AS_STORE_EMAIL": "这里请填你自己的常用邮箱（家庭组组长邮箱），不要填我们发给你的商店会员邮箱",
                 "INVALID_SCREENSHOT_TYPE": "截图只支持 JPG、PNG 或 WEBP 格式",

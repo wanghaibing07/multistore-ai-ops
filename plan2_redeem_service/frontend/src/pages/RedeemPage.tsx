@@ -419,14 +419,15 @@ export function RedeemPage() {
       <strong style={{ fontSize: 13.5 }}>质保和退换说明</strong>
       <ol className="guide-steps">
         <li>
-          <strong>千万别把我们给的会员邮箱踢出家庭组！</strong>踢掉会立刻掉会员，而且没法保修。
+          <strong>千万别把会员邮箱踢出家庭组</strong>，踢掉立刻掉会员且不保修。
         </li>
         <li>
-          <strong>质保 30 天（从领到邮箱那天算起）</strong>，不是你自己原因掉会员的免费保修；领完后如果不是商品本身问题，不支持全额退款。
+          <strong>质保 30 天</strong>（从领号起算），非个人原因掉会员免费保修；领号后非商品问题不支持全额退款。
         </li>
-        <li>如果你自己的账号被封或登不上，没法保修。</li>
+        <li>自己账号被封、登不上不保修。</li>
         <li>
-          如果因为自己的号被封、登不上、12 个月换组限制，或不小心踢掉了会员邮箱导致用不了/掉会员，补救或换号收 <strong>79.9 元手续费</strong>，且不保证一定能恢复。
+          个人原因（封号、12 个月换组限制、误踢会员邮箱）导致用不了，补救或换号收{" "}
+          <strong>79.9 元</strong>（不保证一定恢复）。
         </li>
       </ol>
     </div>
@@ -503,7 +504,7 @@ export function RedeemPage() {
               <ChibiSticker
                 variant="mail"
                 springEntrance
-                bubbleText="收件箱没看到的话，记得翻翻垃圾箱或推广分类 ✨"
+                bubbleText="没看到邀请邮件记得翻垃圾箱"
               />
 
               <div className="voucher-head voucher-head--with-sticker redeem-stagger-block" style={staggerStyle(0)}>
@@ -590,9 +591,9 @@ export function RedeemPage() {
                 <div className="callout callout-danger">
                   <CastoriceIcon name="alert" size={19} className="callout-icon" />
                   <div>
-                    <strong>这个兑换码已经作废了</strong>
+                    <strong>兑换码已作废</strong>
                     <div style={{ marginTop: 4 }}>
-                      {record.buyer_notice || "这个码已失效或订单已关闭，不能再用了。"}
+                      {record.buyer_notice || "该码已失效或订单已关闭。"}
                     </div>
                   </div>
                 </div>
@@ -606,10 +607,10 @@ export function RedeemPage() {
                 <div className="callout callout-warning">
                   <CastoriceIcon name="refresh" size={18} className="callout-icon" />
                   <div>
-                    <strong>客服正在人工处理这单</strong>
+                    <strong>客服人工处理中</strong>
                     <div style={{ marginTop: 4 }}>
                       {record.buyer_notice ||
-                        "你的提货信息已经记下来并通知客服跟进了，收藏本页链接，处理完这里会自动更新。"}
+                        "已通知客服跟进，收藏本页等自动更新。"}
                     </div>
                   </div>
                 </div>
@@ -643,9 +644,9 @@ export function RedeemPage() {
             {!isExclusive && record.status === "unused" ? (
               <section className="card stack redeem-stagger-block" style={staggerStyle(3)}>
                 <div>
-                  <h2 className="card-title">填你要开通会员的邮箱</h2>
+                  <h2 className="card-title">填开通会员的邮箱</h2>
                   <p className="card-subtitle">
-                    先检查并勾选下面 3 项，再填你的邮箱提交（支持 Gmail、QQ、Outlook 等任意邮箱）。提交后一般 2-6 小时发家庭组邀请，最晚 24 小时，没超过 24 小时不用催。
+                    先勾选下面 3 项再填邮箱。提交后一般 2-6 小时发邀请，最晚 24 小时，未超时不用催。
                   </p>
                 </div>
 
@@ -658,12 +659,11 @@ export function RedeemPage() {
                       onChange={(event) => setCheckFamily(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>这个邮箱账号现在不在别的 Google 家庭组里，且最近 12 个月内没加过、没退过、也没被重拉过任何家庭组</strong>
-                      （Google 规定每 12 个月只能换 1 次家庭组，哪怕只进出过 1 次也会被限制加不进新组；可以点{" "}
+                      <strong>账号没在家庭组，且 12 个月内没进出过家庭组</strong>（Google 规定 12 个月只能换 1 次；点{" "}
                       <a href="https://g.co/yourfamily" target="_blank" rel="noreferrer">
                         g.co/yourfamily <CastoriceIcon name="external" size={13} className="inline-ext-icon" />
                       </a>{" "}
-                      检查并退出旧组）。
+                      检查并退旧组）。
                     </div>
                   </label>
 
@@ -675,7 +675,7 @@ export function RedeemPage() {
                       onChange={(event) => setCheckPayment(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>已经关掉了 Google 付款资料</strong>（先点{" "}
+                      <strong>已关掉 Google 付款资料</strong>（点{" "}
                       <a
                         href="https://payments.google.com/gp/w/home/settings"
                         target="_blank"
@@ -684,7 +684,7 @@ export function RedeemPage() {
                         payments.google.com/gp/w/home/settings{" "}
                         <CastoriceIcon name="external" size={13} className="inline-ext-icon" />
                       </a>{" "}
-                      把里面的付款资料关掉，不然进组时会提示“国家/地区不符”）。
+                      关闭，不然会提示地区不符）。
                     </div>
                   </label>
 
@@ -696,7 +696,8 @@ export function RedeemPage() {
                       onChange={(event) => setCheckSlotRule(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>我已看清等待时间和退换规则</strong>：提交邮箱后就会马上占好名额开始排队（一般 2-6 小时发邀请，最晚 24 小时）；如果不是商品本身问题（比如 12 个月内换过组加不进、没退旧家庭组、没关付款资料、填错邮箱等），不支持全额退款，可补 <strong>49.9 元手续费</strong>换新邮箱重新拉人，或扣除 <strong>49.9 元名额成本</strong>后退还余款。
+                      <strong>已知晓排队时间和退换规则</strong>：提交就占名额（2-6 小时发邀请，最晚 24 小时）；非商品问题不支持全额退款，换邮箱需补{" "}
+                      <strong>49.9 元</strong>，或扣 <strong>49.9 元</strong>退余款。
                     </div>
                   </label>
                 </div>
@@ -705,13 +706,14 @@ export function RedeemPage() {
                   <strong style={{ fontSize: 13.5 }}>购买和使用须知</strong>
                   <ol className="guide-steps">
                     <li>
-                      <strong>质保 30 天会员</strong>，不保你的个人 Google 账号；自己违规使用或反代导致封号没法保修。
+                      <strong>质保 30 天会员</strong>，不保个人账号；违规或反代封号不保。
                     </li>
                     <li>
-                      本款是 <strong>0 积分/点数车位</strong>，请不要去用积分或点数，用了会被系统自动踢出家庭组且不退款。
+                      <strong>0 积分/点数车位</strong>，别用积分或点数，用了会被踢且不退款。
                     </li>
                     <li>
-                      提交邮箱后如果不是商品本身问题（比如 12 个月内换过组加不进、没退旧家庭组、没关付款资料、填错邮箱等），不支持全额退款；可补 <strong>49.9 元手续费</strong>换新邮箱重新拉人，或扣除 <strong>49.9 元名额成本</strong>后退还余款。
+                      账号受 12 个月限制、没退旧组、没关付款资料或填错邮箱等个人原因，按{" "}
+                      <strong>49.9 元</strong>换邮箱或扣 <strong>49.9 元</strong>退余款处理。
                     </li>
                   </ol>
                 </div>
@@ -721,8 +723,8 @@ export function RedeemPage() {
                     email={buyerEmail}
                     onEmailChange={setBuyerEmail}
                     disabled={submittingRedeem}
-                    primaryLabel="收家庭组邀请的邮箱"
-                    warningText="别填错邮箱！提交后会立刻占好名额排队拉人，如果因为填错邮箱或 12 个月内换过组导致加不进，换新号需要补 49.9 元手续费，点提交前请再检查一遍拼写。"
+                    primaryLabel="收邀请的邮箱"
+                    warningText="别填错邮箱！提交就占名额，换邮箱需补 49.9 元手续费。"
                   />
 
                   <div className="presubmit-card" aria-live="polite">
@@ -736,13 +738,13 @@ export function RedeemPage() {
                         )}
                         <span>三项确认已勾选</span>
                       </li>
-                      <li className={`presubmit-item ${slotEmailCheck.valid ? "is-pass" : ""}`}>
-                        {slotEmailCheck.valid ? (
+                      <li className={`presubmit-item ${checkSlotRule ? "is-pass" : ""}`}>
+                        {checkSlotRule ? (
                           <CastoriceIcon name="check" size={15} />
                         ) : (
                           <span className="presubmit-dot" aria-hidden="true" />
                         )}
-                        <span>邮箱拼写格式没问题</span>
+                        <span>知晓一旦提交换邮箱需要手续费</span>
                       </li>
                     </ul>
                   </div>
@@ -782,9 +784,9 @@ export function RedeemPage() {
                 <div className="callout callout-info">
                   <CastoriceIcon name="refresh" size={18} className="callout-icon" />
                   <div>
-                    <strong>已经排上队了，安心等邮件就行</strong>
+                    <strong>已排队，等邮件就行</strong>
                     <div style={{ marginTop: 4 }}>
-                      你的邮箱已经进入自动拉人队列，一般 2-6 小时内会把家庭组邀请发到你邮箱，最晚 24 小时，没超过 24 小时不用催；这个页面会自动更新进度，建议收藏链接随时回来看。
+                      一般 2-6 小时发邀请，最晚 24 小时，未超时不用催。收藏本页会自动更新进度。
                     </div>
                   </div>
                 </div>
@@ -836,9 +838,9 @@ export function RedeemPage() {
                 <div className="callout callout-success">
                   <CastoriceIcon name="mail" size={20} className="callout-icon" />
                   <div>
-                    <strong>家庭组邀请发出来了，快去邮箱查收</strong>
+                    <strong>邀请已发出，去邮箱查收</strong>
                     <div style={{ marginTop: 4 }}>
-                      打开 <span className="mono">{record.buyer_email_masked || "你填的邮箱"}</span>，找来自 Google 的家庭组邀请邮件（收件箱没看到的话翻一下垃圾箱或推广分类）。
+                      打开 <span className="mono">{record.buyer_email_masked || "你填的邮箱"}</span>，找 Google 家庭组邀请邮件（没看到就翻垃圾箱或推广）。
                     </div>
                   </div>
                 </div>
@@ -857,10 +859,20 @@ export function RedeemPage() {
                 <div className="inset-panel stack-sm">
                   <strong style={{ fontSize: 13.5 }}>怎么点接受邀请</strong>
                   <ol className="guide-steps">
-                    <li>打开你的邮箱，找到标题带 “Google 家庭组” 或 “Join family group” 的邮件。</li>
-                    <li>点里面的 <strong>接受邀请</strong>，按提示点确认加入就生效了。</li>
+                    <li>打开邮箱，找标题带 “Google 家庭组” 或 “Join family group” 的邮件。</li>
+                    <li>点 <strong>接受邀请</strong>，确认加入即可生效。</li>
                     <li>
-                      如果提示「12 个月只能切换一次家庭群组」或「国家/地区不同」，请完整截图发给淘宝客服；如果是你自己的账号受 12 个月换组限制或没退旧组导致加不进，可以补 <strong>49.9 元手续费</strong>换一个符合条件的新邮箱重新拉人。
+                      提示「不在同一国家/地区」：先去付款资料设置页{" "}
+                      <a
+                        href="https://payments.google.com/gp/w/home/settings"
+                        target="_blank"
+                        rel="noreferrer"
+                      >
+                        payments.google.com/gp/w/home/settings{" "}
+                        <CastoriceIcon name="external" size={13} className="inline-ext-icon" />
+                      </a>{" "}
+                      关掉付款资料，再点接受邀请。提示「12 个月内家庭组限制」：需补{" "}
+                      <strong>49.9 元</strong>换邮箱，或扣 <strong>49.9 元</strong>退款。
                     </li>
                   </ol>
                 </div>
@@ -890,19 +902,20 @@ export function RedeemPage() {
                 <div>
                   <h2 className="card-title">先领会员邮箱</h2>
                   <p className="card-subtitle">
-                    独享整组是你自己当家庭组组长：先点下面领一个我们给的会员邮箱（商店邮箱），再用你自己的常用邮箱建家庭组把它拉进去，最后回来填你的主邮箱登记 30 天质保就行（免截图）。
+                    你自己当组长：先领会员邮箱，再用常用邮箱建家庭组把它拉进去，最后回来填主邮箱登记 30 天质保（免截图）。
                   </p>
                 </div>
 
                 <div className="exclusive-steps-card">
-                  <strong style={{ fontSize: 13.5 }}>一共就 3 步，很快</strong>
+                  <strong style={{ fontSize: 13.5 }}>3 步搞定</strong>
                   <ol className="guide-steps">
-                    <li>点下面按钮，立刻领到我们给的<strong>会员邮箱（商店邮箱）</strong>。</li>
+                    <li>点下面领一个<strong>会员邮箱（商店邮箱）</strong>。</li>
                     <li>
-                      用你自己的<strong>常用邮箱</strong>建一个 Google 家庭组，把这个会员邮箱拉进去；对方同意后你就开通 Ultra 会员了，<strong>自己还能再拉 4 个人</strong>一起用。
+                      用你自己的<strong>常用邮箱</strong>建 Google 家庭组并拉它进组；对方同意后开通会员，<strong>还能再拉 4 个人</strong>。
                     </li>
                     <li>
-                      发完邀请后回到本页，填写<strong>你自己的常用主邮箱</strong>即可一键登记 30 天质保（免截图，系统会自动向官方报备；如需人工跟进一般 <strong>2-6 小时内完成，最晚 24 小时</strong>）。
+                      发完邀请回来填<strong>你的常用主邮箱</strong>登记 30 天质保（免截图，自动报备；人工一般{" "}
+                      <strong>2-6 小时，最晚 24 小时</strong>）。
                     </li>
                   </ol>
                 </div>
@@ -916,11 +929,11 @@ export function RedeemPage() {
                       onChange={(event) => setCheckFamily(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>我准备好了自己当组长的常用邮箱</strong>，现在不在别的家庭组里，且最近 12 个月内没加过、没退过、也没被重拉过其他家庭组（Google 规定每 12 个月只能换 1 次家庭组；点{" "}
+                      <strong>已备好建组用的常用邮箱</strong>，不在别的家庭组且 12 个月内没进出过家庭组（点{" "}
                       <a href="https://g.co/yourfamily" target="_blank" rel="noreferrer">
                         g.co/yourfamily <CastoriceIcon name="external" size={13} className="inline-ext-icon" />
                       </a>{" "}
-                      检查并退出旧组）。
+                      检查并退旧组）。
                     </div>
                   </label>
 
@@ -932,7 +945,7 @@ export function RedeemPage() {
                       onChange={(event) => setCheckPayment(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>已经关掉了 Google 付款资料</strong>（先点{" "}
+                      <strong>已关掉 Google 付款资料</strong>（点{" "}
                       <a
                         href="https://payments.google.com/gp/w/home/settings"
                         target="_blank"
@@ -941,7 +954,7 @@ export function RedeemPage() {
                         payments.google.com/gp/w/home/settings{" "}
                         <CastoriceIcon name="external" size={13} className="inline-ext-icon" />
                       </a>{" "}
-                      把里面的付款资料关掉，不然建组或拉人时可能提示地区受限）。
+                      关闭，不然可能提示地区受限）。
                     </div>
                   </label>
 
@@ -953,7 +966,8 @@ export function RedeemPage() {
                       onChange={(event) => setCheckExclusiveRule(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>我已看清使用和售后规则</strong>：把我们给的会员邮箱拉进家庭组后千万别踢掉（踢掉会立刻掉会员且没法保修），发完邀请记得回来填主邮箱登记质保；领完邮箱后，不是商品本身问题不支持全额退款，因为自己原因导致用不了/掉会员，补救或换号收 <strong>79.9 元手续费</strong>（不保证一定能恢复）。
+                      <strong>已知晓使用和售后规则</strong>：别把会员邮箱踢出家庭组，发完邀请回来登记质保；领号后非商品问题不支持全额退款，个人原因换号或补救收{" "}
+                      <strong>79.9 元</strong>（不保证一定恢复）。
                     </div>
                   </label>
                 </div>
@@ -982,7 +996,7 @@ export function RedeemPage() {
                     ) : (
                       <>
                         <CastoriceIcon name="check" size={18} />
-                        <span>准备好了，马上领会员邮箱</span>
+                        <span>准备好了，领会员邮箱</span>
                       </>
                     )}
                   </button>
@@ -996,7 +1010,7 @@ export function RedeemPage() {
               <>
                 <section className="card stack redeem-stagger-block" style={staggerStyle(3)}>
                   <div className="row-between">
-                    <h2 className="card-title">第 1 步：复制我们给的会员邮箱</h2>
+                    <h2 className="card-title">第 1 步：复制会员邮箱</h2>
                     {record.delivery?.delivered_at ? (
                       <span className="field-hint tabular">
                         领号时间：{formatDateTime(record.delivery.delivered_at)}
@@ -1009,7 +1023,7 @@ export function RedeemPage() {
                       <div className="stack-sm grow">
                         <div className="email-line">
                           <span className="email-role-tag email-role-tag-store">会员邮箱（商店邮箱）</span>
-                          <span className="field-hint">用来拉进你的家庭组，别填到下面保修框里</span>
+                          <span className="field-hint">用来拉进家庭组，别填到下面保修框</span>
                         </div>
                         <div className="credential-value">{storeEmail}</div>
                       </div>
@@ -1047,20 +1061,21 @@ export function RedeemPage() {
                   ) : null}
 
                   <div className="exclusive-steps-card">
-                    <strong style={{ fontSize: 13.5 }}>第 2 步：用你自己的常用邮箱建家庭组并邀请它</strong>
+                    <strong style={{ fontSize: 13.5 }}>第 2 步：用常用邮箱建组并邀请它</strong>
                     <ol className="guide-steps">
                       <li>
-                        用你自己的<strong>常用邮箱</strong>打开{" "}
+                        用你的<strong>常用邮箱</strong>打开{" "}
                         <a href="https://g.co/yourfamily" target="_blank" rel="noreferrer">
                           g.co/yourfamily <CastoriceIcon name="external" size={13} className="inline-ext-icon" />
                         </a>{" "}
-                        建好 Google 家庭组。
+                        建家庭组。
                       </li>
                       <li>
-                        在家庭组里点「发送邀请」，把上面复制的<strong>会员邮箱</strong>粘进去发邀请；对方同意后你就开通 Ultra 会员了，<strong>自己还能再拉 4 个人</strong>一起用。
+                        点「发送邀请」，把上面<strong>会员邮箱</strong>粘进去；对方同意后生效，<strong>还能再拉 4 个人</strong>。
                       </li>
                       <li>
-                        发完邀请后，在下面填写<strong>你自己的常用主邮箱</strong>登记 30 天质保即可（无需截图，系统会自动向官方报备；如需人工处理一般 <strong>2-6 小时内完成，最晚 24 小时</strong>）。
+                        发完邀请在下面填<strong>你的常用主邮箱</strong>登记 30 天质保（免截图，自动报备；人工{" "}
+                        <strong>2-6 小时，最晚 24 小时</strong>）。
                       </li>
                     </ol>
                   </div>
@@ -1070,9 +1085,9 @@ export function RedeemPage() {
                 <section className="card stack redeem-stagger-block" style={staggerStyle(4)}>
                   <div className="row-between">
                     <div style={{ flex: "1 1 240px", minWidth: 0 }}>
-                      <h2 className="card-title">第 3 步：填写主邮箱登记 30 天质保</h2>
+                      <h2 className="card-title">第 3 步：填主邮箱登记 30 天质保</h2>
                       <p className="card-subtitle">
-                        发完邀请后，填写你建家庭组用的常用主邮箱即可（免截图），提交后系统会自动帮你向官方完成质保报备。
+                        填你建家庭组的常用主邮箱（免截图），提交后自动报备质保。
                       </p>
                     </div>
                     <ToneBadge label={buyerWarrantyBadge.label} tone={buyerWarrantyBadge.tone} />
@@ -1093,12 +1108,13 @@ export function RedeemPage() {
                               <>
                                 你的主邮箱{" "}
                                 <span className="mono">{record.warranty?.admin_email_masked || "-"}</span>{" "}
-                                已完成官方质保报备，安心使用就行。
+                                已完成报备，安心用就行。
                               </>
                             ) : (
                               <>
-                                保修邮箱已登记，系统正在/已转人工帮你向官方报备质保（一般 2-6 小时内完成，最晚 24 小时）。已登记主邮箱：
+                                已登记主邮箱{" "}
                                 <span className="mono">{record.warranty?.admin_email_masked || "-"}</span>
+                                ，正在报备质保（2-6 小时内完成，最晚 24 小时）。
                               </>
                             )}
                           </div>
@@ -1153,8 +1169,8 @@ export function RedeemPage() {
                       <GmailDoubleInput
                         email={adminEmail}
                         onEmailChange={setAdminEmail}
-                        primaryLabel="你的常用邮箱（建家庭组那个号）"
-                        warningText="这里填你自己建家庭组的常用邮箱，别填成上面复制的会员邮箱，点提交前看清拼写。"
+                        primaryLabel="建家庭组的常用主邮箱"
+                        warningText="填你自己建组的常用邮箱，别填成上面的会员邮箱。"
                         disabled={submittingWarranty}
                       />
 
@@ -1176,7 +1192,7 @@ export function RedeemPage() {
                           maxLength={300}
                           enterKeyHint="done"
                           className="input"
-                          placeholder="比如：已经发邀请了，麻烦帮忙登记质保"
+                          placeholder="已发邀请，帮忙登记质保"
                           value={warrantyNote}
                           onChange={(event) => setWarrantyNote(event.target.value)}
                           disabled={submittingWarranty}

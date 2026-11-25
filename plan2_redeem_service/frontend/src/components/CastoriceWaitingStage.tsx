@@ -25,9 +25,9 @@ const COURIER_RUN_ASSET = "/assets/waiting/castorice-courier-run.png";
 const MINI_BUTTERFLY_ASSET = "/assets/waiting/mini-butterfly-glow.png";
 
 const TEA_REASSURANCE_TIPS = [
-  "你的邮箱已经提交成功，正在排队拉你进 Google 家庭组，不用重复操作",
-  "一般 2-6 小时内发邀请，最晚 24 小时；关掉页面也会继续排，收藏本页随时看进度",
-  "发出邀请后页面会自动变绿提醒，记得留意邮箱收件箱与垃圾箱哦",
+  "邮箱已提交，正在排队拉进家庭组，不用重复操作",
+  "一般 2-6 小时发邀请，最晚 24 小时；关掉页面也会继续排",
+  "发出邀请后页面会自动变绿，记得看收件箱和垃圾箱",
 ] as const;
 
 const POKE_HEALING_LINES = [
@@ -114,7 +114,7 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
       nodes: ["核对兑换码", "提交排队", "等待发邀请"],
       activeNode,
       progressPct: activeNode === 0 ? 22 : 56,
-      caption: "小蝶正在帮你核对兑换码并安排排队，马上就好~",
+      caption: "正在核对兑换码并安排排队，马上就好",
       statusPill: null,
     };
   }
@@ -130,7 +130,7 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
       nodes,
       activeNode: 0,
       progressPct: 18,
-      caption: "正在核对兑换码，马上帮你领会员邮箱…",
+      caption: "正在核对兑换码，马上领会员邮箱…",
       statusPill: null,
     };
   }
@@ -140,7 +140,7 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
       nodes,
       activeNode: 1,
       progressPct: 52,
-      caption: "小蝶正捧着紫蝶火漆信封火速取号派送中，请稍候片刻~",
+      caption: "正在火速取号，请稍等片刻",
       statusPill: null,
     };
   }
@@ -150,7 +150,7 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
       nodes,
       activeNode: 2,
       progressPct: 86,
-      caption: "保修邮箱已登记，系统正在/已转人工帮你向官方报备 30 天质保~",
+      caption: "主邮箱已登记，正在向官方报备 30 天质保",
       statusPill: "保修邮箱已登记",
     };
   }
@@ -159,7 +159,7 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
     nodes,
     activeNode: 2,
     progressPct: 82,
-    caption: "会员邮箱领到了！按下面步骤把它拉进家庭组，再填主邮箱就能登记 30 天质保 ✨",
+    caption: "会员邮箱领到了！拉它进家庭组后填主邮箱登记 30 天质保",
     statusPill: "第 3/3 步 · 待填主邮箱",
   };
 }

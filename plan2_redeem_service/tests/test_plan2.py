@@ -76,13 +76,13 @@ def test_any_valid_email_domain_is_accepted_for_redeem_and_warranty(components):
     app, _, _, _, _ = components
     with client(app) as c:
         valid_emails = [
-            ("buyer@example.com", "bu***@example.com"),
-            ("123456789@qq.com", "12***@qq.com"),
-            ("User.Name+tag@Outlook.com", "us***@outlook.com"),
-            ("admin@sub.company.co.uk", "ad***@sub.company.co.uk"),
-            ("buyer@googlemail.com", "bu***@googlemail.com"),
+            ("buyer@example.com", "buyer@example.com"),
+            ("123456789@qq.com", "123456789@qq.com"),
+            ("User.Name+tag@Outlook.com", "user.name+tag@outlook.com"),
+            ("admin@sub.company.co.uk", "admin@sub.company.co.uk"),
+            ("buyer@googlemail.com", "buyer@googlemail.com"),
         ]
-        for raw_email, expected_masked in valid_emails:
+        for raw_email, expected_email in valid_emails:
             code = issue(c)
             response = c.post(
                 f"/api/v1/public/codes/{code}/redeem",
@@ -90,8 +90,8 @@ def test_any_valid_email_domain_is_accepted_for_redeem_and_warranty(components):
             )
             assert response.status_code == 200, raw_email
             body = response.json()
-            assert body["buyer_email_masked"] == expected_masked
-            assert raw_email.lower() not in str(body)
+            assert body["buyer_email_masked"] == expected_email
+            assert "buyer_email" not in body
             assert app.state.ledger.get_code(code)["buyer_email"] == raw_email.lower()
 
         exclusive_code = issue(c, sku="ultra_exclusive_admin")
@@ -103,7 +103,7 @@ def test_any_valid_email_domain_is_accepted_for_redeem_and_warranty(components):
             files={"screenshot": ("proof.png", b"png-bytes", "image/png")},
         )
         assert warranty_resp.status_code == 200
-        assert warranty_resp.json()["warranty"]["admin_email_masked"] == "ow***@163.com"
+        assert warranty_resp.json()["warranty"]["admin_email_masked"] == "owner@163.com"
         assert app.state.ledger.get_code(exclusive_code)["buyer_email"] == "owner@163.com"
 
 
@@ -276,7 +276,8 @@ def test_exclusive_delivery_warranty_and_screenshot_auth(components):
     warranty = c.post(f"/api/v1/public/codes/{code}/warranty", data={"admin_email": "owner@gmail.com", "admin_email_confirm": "owner@gmail.com", "note": "已建组"}, files={"screenshot": ("invite.png", b"png-bytes", "image/png")})
     assert warranty.status_code == 200 and warranty.json()["status"] == "completed"
     assert set(warranty.json()["warranty"]) == {"status", "admin_email_masked", "submitted_at", "has_screenshot", "note"}
-    assert "owner@gmail.com" not in warranty.text
+    assert warranty.json()["warranty"]["admin_email_masked"] == "owner@gmail.com"
+    assert warranty.json()["buyer_email_masked"] == "owner@gmail.com"
     assert "forward_template" not in warranty.text
     detail = c.get(f"/api/v1/admin/codes/{code}", headers=ADMIN).json()
     assert "owner@gmail.com" in detail["warranty"]["forward_template"]
@@ -553,10 +554,9 @@ def test_single_email_redeem_and_optional_confirm_backward_compat(components):
         assert resp_omit.status_code == 200
         body_omit = resp_omit.json()
         assert body_omit["status"] == "waiting_fulfillment"
-        assert body_omit["buyer_email_masked"] == "si***@gmail.com"
+        assert body_omit["buyer_email_masked"] == "singleuser@gmail.com"
         assert "buyer_email" not in body_omit
         assert "upstream_order_code" not in body_omit
-        assert "singleuser@gmail.com" not in resp_omit.text.lower()
 
         code_blank = issue(c)
         resp_blank = c.post(
@@ -599,18 +599,17 @@ def test_single_email_warranty_optional_confirm_and_privacy(components):
         assert submitted.status_code == 200
         pub = submitted.json()
         assert pub["status"] == "completed"
-        assert pub["buyer_email_masked"] == "ow***@gmail.com"
-        assert pub["warranty"]["admin_email_masked"] == "ow***@gmail.com"
+        assert pub["buyer_email_masked"] == "ownerone@gmail.com"
+        assert pub["warranty"]["admin_email_masked"] == "ownerone@gmail.com"
         assert "buyer_email" not in pub
         assert "admin_email" not in pub["warranty"]
         assert "forward_template" not in pub["warranty"]
         assert "upstream_order_code" not in pub
-        assert "ownerone@gmail.com" not in submitted.text.lower()
         assert upstream_order not in submitted.text
 
         row = app.state.ledger.get_code(code)
         assert row["buyer_email"] == "ownerone@gmail.com"
-        assert row["buyer_email_masked"] == "ow***@gmail.com"
+        assert row["buyer_email_masked"] == "ownerone@gmail.com"
 
         updated = c.post(
             f"/api/v1/public/codes/{code}/warranty",
@@ -620,12 +619,13 @@ def test_single_email_warranty_optional_confirm_and_privacy(components):
         assert updated.status_code == 200
         row_after = app.state.ledger.get_code(code)
         assert row_after["buyer_email"] == "owner.two@gmail.com"
-        assert row_after["buyer_email_masked"] == "ow***@gmail.com"
+        assert row_after["buyer_email_masked"] == "owner.two@gmail.com"
 
         fetched_pub = c.get(f"/api/v1/public/codes/{code}")
         assert fetched_pub.status_code == 200
         assert "buyer_email" not in fetched_pub.json()
-        assert "owner.two@gmail.com" not in fetched_pub.text.lower()
+        assert fetched_pub.json()["buyer_email_masked"] == "owner.two@gmail.com"
+        assert fetched_pub.json()["warranty"]["admin_email_masked"] == "owner.two@gmail.com"
         assert "forward_template" not in fetched_pub.text
         assert upstream_order not in fetched_pub.text
 
@@ -652,7 +652,7 @@ def test_vietnamese_forward_template_and_legacy_exclusive_compat_and_search(comp
         new_detail = c.get(f"/api/v1/admin/codes/{new_code}", headers=ADMIN).json()
         assert new_detail["warranty"]["forward_template"] == expected_new
         assert new_detail["buyer_email"] == "new.owner@gmail.com"
-        assert new_detail["buyer_email_masked"] == "ne***@gmail.com"
+        assert new_detail["buyer_email_masked"] == "new.owner@gmail.com"
         assert new_detail["store_email"] == "store-ultra@example.com"
         assert any(mail["body"] == expected_new for mail in mailer.sent)
 
@@ -660,6 +660,7 @@ def test_vietnamese_forward_template_and_legacy_exclusive_compat_and_search(comp
         legacy_warranty = {
             "status": "submitted",
             "admin_email": "legacy.owner@gmail.com",
+            "admin_email_masked": "le***@gmail.com",
             "submitted_at": now_iso(),
             "registered_at": None,
             "note": "历史单",
@@ -691,13 +692,15 @@ def test_vietnamese_forward_template_and_legacy_exclusive_compat_and_search(comp
         assert legacy_detail["warranty"]["forward_template"] == expected_legacy
         assert "Canboso 管理员报备" not in legacy_detail["warranty"]["forward_template"]
         assert legacy_detail["buyer_email"] == "legacy.owner@gmail.com"
-        assert legacy_detail["buyer_email_masked"] == "le***@gmail.com"
+        assert legacy_detail["buyer_email_masked"] == "legacy.owner@gmail.com"
+        assert legacy_detail["warranty"]["admin_email_masked"] == "legacy.owner@gmail.com"
         assert legacy_detail["store_email"] == "store-legacy@gmail.com"
 
         legacy_pub = c.get(f"/api/v1/public/codes/{legacy_code}")
         assert legacy_pub.status_code == 200
         assert "buyer_email" not in legacy_pub.json()
-        assert "legacy.owner@gmail.com" not in legacy_pub.text.lower()
+        assert legacy_pub.json()["buyer_email_masked"] == "legacy.owner@gmail.com"
+        assert legacy_pub.json()["warranty"]["admin_email_masked"] == "legacy.owner@gmail.com"
         assert "forward_template" not in legacy_pub.text
         assert "ORD-LEGACY-92HH" not in legacy_pub.text
 
@@ -706,17 +709,25 @@ def test_vietnamese_forward_template_and_legacy_exclusive_compat_and_search(comp
             f"/api/v1/public/codes/{slot_code}/redeem",
             json={"buyer_email": "slot.buyer@gmail.com", "preflight_confirmed": True},
         )
+        with app.state.ledger.transaction(immediate=True) as conn:
+            conn.execute(
+                "UPDATE codes SET buyer_email_masked=? WHERE code=?",
+                ("sl***@gmail.com", slot_code),
+            )
+        slot_pub = c.get(f"/api/v1/public/codes/{slot_code}")
+        assert slot_pub.status_code == 200
+        assert slot_pub.json()["buyer_email_masked"] == "slot.buyer@gmail.com"
 
         listed = c.get("/api/v1/admin/codes", headers=ADMIN).json()
         by_code = {item["code"]: item for item in listed["items"]}
         assert by_code[new_code]["buyer_email"] == "new.owner@gmail.com"
-        assert by_code[new_code]["buyer_email_masked"] == "ne***@gmail.com"
+        assert by_code[new_code]["buyer_email_masked"] == "new.owner@gmail.com"
         assert by_code[new_code]["store_email"] == "store-ultra@example.com"
         assert by_code[legacy_code]["buyer_email"] == "legacy.owner@gmail.com"
-        assert by_code[legacy_code]["buyer_email_masked"] == "le***@gmail.com"
+        assert by_code[legacy_code]["buyer_email_masked"] == "legacy.owner@gmail.com"
         assert by_code[legacy_code]["store_email"] == "store-legacy@gmail.com"
         assert by_code[slot_code]["buyer_email"] == "slot.buyer@gmail.com"
-        assert by_code[slot_code]["buyer_email_masked"] == "sl***@gmail.com"
+        assert by_code[slot_code]["buyer_email_masked"] == "slot.buyer@gmail.com"
         assert by_code[slot_code]["store_email"] is None
 
         search_new = c.get("/api/v1/admin/codes", headers=ADMIN, params={"q": "new.owner@gmail.com"}).json()

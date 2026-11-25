@@ -140,8 +140,8 @@ def test_warranty_no_screenshot_json_and_multipart_submissions(tmp_path: Path):
         assert set(body_json["warranty"]) == {"status", "admin_email_masked", "submitted_at", "has_screenshot", "note"}
         assert body_json["warranty"]["status"] == "submitted"
         assert body_json["warranty"]["has_screenshot"] is False
-        assert body_json["warranty"]["admin_email_masked"] == "bu***@gmail.com"
-        assert "buyer.json@gmail.com" not in resp_json.text
+        assert body_json["warranty"]["admin_email_masked"] == "buyer.json@gmail.com"
+        assert body_json["buyer_email_masked"] == "buyer.json@gmail.com"
         assert "tg_forward_status" not in resp_json.text
 
         detail_json = c.get(f"/api/v1/admin/codes/{code_json}", headers=ADMIN).json()
@@ -167,7 +167,7 @@ def test_warranty_no_screenshot_json_and_multipart_submissions(tmp_path: Path):
         assert body_mp["status"] == "completed"
         assert body_mp["warranty"]["status"] == "submitted"
         assert body_mp["warranty"]["has_screenshot"] is False
-        assert body_mp["warranty"]["admin_email_masked"] == "bu***@gmail.com"
+        assert body_mp["warranty"]["admin_email_masked"] == "buyer.multipart@gmail.com"
         assert len(mailer.sent) == 2
         assert all(m["attachment"] is False for m in mailer.sent)
 
@@ -242,7 +242,8 @@ def test_tg_auto_forward_success_transitions_and_is_idempotent(tmp_path: Path):
         assert set(pub["warranty"]) == {"status", "admin_email_masked", "submitted_at", "has_screenshot", "note"}
         assert pub["warranty"]["status"] == "registered_upstream"
         assert pub["warranty"]["has_screenshot"] is False
-        assert "buyer.auto@gmail.com" not in resp.text
+        assert pub["warranty"]["admin_email_masked"] == "buyer.auto@gmail.com"
+        assert pub["buyer_email_masked"] == "buyer.auto@gmail.com"
         assert "tg_message_id" not in resp.text
         assert "auto_forwarded" not in resp.text
 

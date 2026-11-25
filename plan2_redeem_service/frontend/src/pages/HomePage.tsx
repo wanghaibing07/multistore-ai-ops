@@ -167,7 +167,7 @@ export function HomePage() {
             >
               <ChibiSticker
                 variant="peek"
-                bubbleText="直接粘贴整段客服消息也能自动识别哦~"
+                bubbleText="直接粘贴客服消息就能自动识别"
                 wiggle={inputFocused || typingWiggle}
               />
 
@@ -175,9 +175,9 @@ export function HomePage() {
                 <h1 id="home-hero-heading" className="zzz-hero-title">
                   Google AI Ultra 20x
                 </h1>
-                <p className="zzz-hero-subhead">输入兑换码，立即提货或查进度</p>
+                <p className="zzz-hero-subhead">输入兑换码，提货或查进度</p>
                 <p className="zzz-hero-lead">
-                  粘贴客服发给你的兑换码或提货链接，系统会自动识别。
+                  粘贴兑换码或提货链接，自动识别。
                 </p>
               </div>
 
@@ -200,7 +200,7 @@ export function HomePage() {
                       aria-invalid={Boolean(error) || undefined}
                       aria-describedby={error ? "redeem-code-error" : undefined}
                       className={`zzz-input mono ${error ? "is-error" : ""}`}
-                      placeholder="例如：U20S-8K3M-9P2Q 或直接粘贴链接"
+                      placeholder="U20S-8K3M-9P2Q 或直接粘贴链接"
                       value={rawInput}
                       onFocus={() => setInputFocused(true)}
                       onBlur={() => setInputFocused(false)}
@@ -241,7 +241,7 @@ export function HomePage() {
                 ) : null}
               </form>
 
-              <p className="zzz-card-note">提货后可收藏专属链接，随时回来查进度</p>
+              <p className="zzz-card-note">提货后收藏链接，随时查进度</p>
             </section>
           </div>
         </main>

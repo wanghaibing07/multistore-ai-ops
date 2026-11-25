@@ -73,11 +73,13 @@ SKUS = {
 }
 
 
+def normalize_display_email(value: Optional[str]) -> Optional[str]:
+    cleaned = (value or "").strip().lower()
+    return cleaned if "@" in cleaned else None
+
+
 def mask_email(value: Optional[str]) -> Optional[str]:
-    if not value or "@" not in value:
-        return None
-    local, domain = value.split("@", 1)
-    return f"{local[:2] if len(local) > 1 else local[:1]}***@{domain}"
+    return normalize_display_email(value)
 
 
 def format_warranty_forward_template(order_code: str, admin_email: str) -> str:
@@ -816,15 +818,29 @@ class Service:
             return {}
         sku = self.ledger.get_sku(row["sku_key"])
         delivery = json.loads(row["delivery_json"]) if row.get("delivery_json") else None
-        warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else ( {"status": "pending", "admin_email_masked": None, "submitted_at": None, "has_screenshot": False, "note": None} if row["sku_key"] == "ultra_exclusive_admin" and row["status"] in {"delivered_pending_warranty", "completed"} else None)
-        if warranty:
+        raw_warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else None
+        if raw_warranty:
+            warranty_email = (
+                normalize_display_email(raw_warranty.get("admin_email"))
+                or normalize_display_email(raw_warranty.get("admin_email_masked"))
+            )
             warranty = {
-                "status": warranty.get("status", "pending"),
-                "admin_email_masked": warranty.get("admin_email_masked") or mask_email(warranty.get("admin_email")),
-                "submitted_at": warranty.get("submitted_at"),
-                "has_screenshot": bool(warranty.get("has_screenshot")),
-                "note": warranty.get("note"),
+                "status": raw_warranty.get("status", "pending"),
+                "admin_email_masked": warranty_email,
+                "submitted_at": raw_warranty.get("submitted_at"),
+                "has_screenshot": bool(raw_warranty.get("has_screenshot")),
+                "note": raw_warranty.get("note"),
             }
+        elif row["sku_key"] == "ultra_exclusive_admin" and row["status"] in {"delivered_pending_warranty", "completed"}:
+            warranty = {
+                "status": "pending",
+                "admin_email_masked": None,
+                "submitted_at": None,
+                "has_screenshot": False,
+                "note": None,
+            }
+        else:
+            warranty = None
         if sku["product_type"] == "slot":
             delivery = None
         elapsed = None
@@ -834,8 +850,12 @@ class Service:
             except ValueError:
                 pass
         notice = "订单正在人工处理，请带兑换码联系客服。" if row["status"] == "needs_manual_review" else None
-        masked_email = row.get("buyer_email_masked") or (warranty.get("admin_email_masked") if warranty else None)
-        return {"code": row["code"], "sku_key": row["sku_key"], "sku_title": sku["title"], "product_type": sku["product_type"], "channel": row["channel"], "status": row["status"], "buyer_email_masked": masked_email, "delivery": delivery, "warranty": warranty, "fulfillment": {"eta_text": "一般 2-6 小时内发家庭组邀请，最晚 24 小时" if sku["product_type"] == "slot" else None, "submitted_at": row.get("submitted_at"), "completed_at": row.get("completed_at"), "last_polled_at": row.get("last_polled_at"), "elapsed_minutes": elapsed}, "buyer_notice": notice, "support_hint": "有问题请把订单号和兑换码发给客服。", "created_at": row["created_at"], "updated_at": row["updated_at"]}
+        display_email = (
+            normalize_display_email(row.get("buyer_email"))
+            or (warranty.get("admin_email_masked") if warranty else None)
+            or normalize_display_email(row.get("buyer_email_masked"))
+        )
+        return {"code": row["code"], "sku_key": row["sku_key"], "sku_title": sku["title"], "product_type": sku["product_type"], "channel": row["channel"], "status": row["status"], "buyer_email_masked": display_email, "delivery": delivery, "warranty": warranty, "fulfillment": {"eta_text": "一般 2-6 小时内发家庭组邀请，最晚 24 小时" if sku["product_type"] == "slot" else None, "submitted_at": row.get("submitted_at"), "completed_at": row.get("completed_at"), "last_polled_at": row.get("last_polled_at"), "elapsed_minutes": elapsed}, "buyer_notice": notice, "support_hint": "有问题请把订单号和兑换码发给客服。", "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
     def admin_summary(self, row: dict[str, Any]) -> dict[str, Any]:
         sku = self.ledger.get_sku(row["sku_key"])
@@ -865,7 +885,7 @@ class Service:
             "display_status": display_status,
             "is_dispatched": is_dispatched,
             "buyer_email": resolved_email,
-            "buyer_email_masked": row.get("buyer_email_masked") or mask_email(resolved_email),
+            "buyer_email_masked": normalize_display_email(resolved_email) or normalize_display_email(row.get("buyer_email_masked")),
             "store_email": store_email,
             "upstream_order_code": row.get("upstream_order_code"),
             "upstream_status": row.get("upstream_status"),
@@ -886,6 +906,8 @@ class Service:
         warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else None
         if warranty:
             if warranty.get("admin_email"):
+                if "admin_email_masked" in warranty:
+                    warranty["admin_email_masked"] = normalize_display_email(warranty["admin_email"])
                 warranty["forward_template"] = format_warranty_forward_template(
                     row.get("upstream_order_code") or "",
                     warranty["admin_email"],
@@ -1656,7 +1678,7 @@ class Service:
                 subject,
                 (
                     f"淘宝订单 {tid}（子订单 {oid or '-'}，退款单 {refund_id or '-'}，退款金额 {refund_fee or '-'}）收到退款通知（aopic={aopic}），\n"
-                    f"但对应兑换码 {code} 当前状态为 {row['status']}（买家邮箱：{row.get('buyer_email_masked') or '-'}，"
+                    f"但对应兑换码 {code} 当前状态为 {row['status']}（买家邮箱：{row.get('buyer_email') or row.get('buyer_email_masked') or '-'}，"
                     f"上游单号：{row.get('upstream_order_code') or '-'}），系统未自动作废，请立即人工核对。"
                 ),
             )

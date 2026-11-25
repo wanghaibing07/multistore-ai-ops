@@ -18,8 +18,8 @@ export function GmailDoubleInput({
   email,
   onEmailChange,
   primaryLabel = "你的邮箱",
-  warningText = "提交后就会马上占好名额，如果因为填错邮箱或 12 个月内换过组加不进，换新号需要补 49.9 元手续费，点提交前请仔细检查拼写。",
-  placeholder = "比如：yourname@gmail.com 或其他邮箱",
+  warningText = "提交就占名额，填错或受限换号需补 49.9 元，提交前请核对。",
+  placeholder = "yourname@gmail.com 或其他邮箱",
   disabled = false,
 }: GmailDoubleInputProps) {
   const [touchedPrimary, setTouchedPrimary] = useState(false);
@@ -41,7 +41,6 @@ export function GmailDoubleInput({
       <div className="field-group">
         <label className="field-label" htmlFor={primaryId}>
           <span>{primaryLabel}</span>
-          <span className="field-hint">支持任意邮箱</span>
         </label>
         <input
           id={primaryId}
@@ -84,7 +83,7 @@ export function GmailDoubleInput({
         {check.valid ? (
           <div className="field-ok">
             <CastoriceIcon name="check" size={15} />
-            <span>格式没问题，核对一遍就能提交</span>
+            <span>格式没问题</span>
           </div>
         ) : null}
       </div>
