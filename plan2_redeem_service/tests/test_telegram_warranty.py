@@ -669,7 +669,10 @@ class _FakeLocator:
     def first(self) -> "_FakeLocator":
         return self
 
-    async def click(self) -> None:
+    async def count(self) -> int:
+        return 1
+
+    async def click(self, **kwargs: Any) -> None:
         self.page.clicks.append(self.selector)
         if "btn-send" in self.selector:
             self.page.sent_payloads.append(self.page.composer_text)
@@ -838,6 +841,7 @@ def test_playwright_web_forwarder_send_verify_and_guards(tmp_path: Path):
     assert verified["ok"] is True
     assert verified["transport"] == "web"
     assert verified["target_id"] == "998877"
+    assert ok_page.last_url == "https://web.telegram.org/k/#998877"
     assert ok_page.sent_payloads == []
 
     vn_text = format_warranty_forward_template("CAN-9901", "buyer.demo@gmail.com")

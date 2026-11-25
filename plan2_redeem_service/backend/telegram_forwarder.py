@@ -403,8 +403,13 @@ class PlaywrightTelegramWebForwarder:
         if not cleaned:
             raise TelegramForwardError("Telegram admin target is empty")
 
+        is_numeric = bool(NUMERIC_PEER_RE.match(cleaned))
+        username_norm = cleaned.lstrip("@").strip().lower()
+        target_fragment = f"#{cleaned}" if is_numeric else f"#@{username_norm}"
+        target_url = f"{self.web_url}{target_fragment}"
+
         nav_timeout_ms = max(5000, int(min(30.0, max(5.0, deadline - time.monotonic())) * 1000))
-        await page.goto(self.web_url, wait_until="domcontentloaded", timeout=nav_timeout_ms)
+        await page.goto(target_url, wait_until="domcontentloaded", timeout=nav_timeout_ms)
 
         logged_in = False
         me_id: Any = None
@@ -447,38 +452,10 @@ class PlaywrightTelegramWebForwarder:
         if not logged_in:
             raise TelegramForwardError("Telegram Web session did not reach chat list before timeout")
 
-        chatlist_deadline = min(deadline, time.monotonic() + 8.0)
-        while time.monotonic() < chatlist_deadline:
-            has_items = await page.evaluate("() => !!document.querySelector('.chatlist a.chatlist-chat')")
-            if has_items:
-                break
-            await page.wait_for_timeout(300)
-
-        is_numeric = bool(NUMERIC_PEER_RE.match(cleaned))
-        username_norm = cleaned.lstrip("@").strip().lower()
-        hash_triggered = False
-
-        if is_numeric:
-            clicked = await page.evaluate(
-                """(peerId) => {
-                    const el = document.querySelector(`.chatlist a.chatlist-chat[data-peer-id="${peerId}"]`)
-                        || document.querySelector(`.chatlist [data-peer-id="${peerId}"]`);
-                    if (el) {
-                        el.click();
-                        return true;
-                    }
-                    return false;
-                }""",
-                cleaned,
-            )
-            if not clicked:
-                await page.evaluate("(peerId) => { window.location.hash = '#' + peerId; }", cleaned)
-                hash_triggered = True
-        else:
-            await page.evaluate("(uname) => { window.location.hash = '#@' + uname; }", username_norm)
-            hash_triggered = True
-
-        click_fallback_at = time.monotonic() + 3.5
+        click_fallback_at = time.monotonic() + 3.0
+        hash_retry_at = time.monotonic() + 6.0
+        fallback_clicked = False
+        hash_retried = False
         while time.monotonic() < deadline:
             chat_state = await page.evaluate(
                 """() => {
@@ -505,9 +482,23 @@ class PlaywrightTelegramWebForwarder:
                         "target_title": str(chat_state.get("peerTitle") or ""),
                         "composer_ready": True,
                     }
-                if not hash_triggered and time.monotonic() >= click_fallback_at:
-                    await page.evaluate("(peerId) => { window.location.hash = '#' + peerId; }", cleaned)
-                    hash_triggered = True
+                if not fallback_clicked and time.monotonic() >= click_fallback_at:
+                    fallback_clicked = True
+                    chat_item = page.locator(
+                        f'.chatlist a.chatlist-chat[data-peer-id="{cleaned}"], '
+                        f'.chatlist [data-peer-id="{cleaned}"]'
+                    ).first
+                    try:
+                        if await chat_item.count() > 0:
+                            await chat_item.click(timeout=5000)
+                    except Exception:
+                        pass
+                elif not hash_retried and time.monotonic() >= hash_retry_at:
+                    hash_retried = True
+                    await page.evaluate(
+                        "(frag) => { window.location.hash = frag; window.dispatchEvent(new HashChangeEvent('hashchange')); }",
+                        target_fragment,
+                    )
             else:
                 if active_peer_id and active_hash == f"#@{username_norm}" and composer_visible:
                     return {
@@ -516,6 +507,12 @@ class PlaywrightTelegramWebForwarder:
                         "target_title": str(chat_state.get("peerTitle") or ""),
                         "composer_ready": True,
                     }
+                if not hash_retried and time.monotonic() >= click_fallback_at:
+                    hash_retried = True
+                    await page.evaluate(
+                        "(frag) => { window.location.hash = frag; window.dispatchEvent(new HashChangeEvent('hashchange')); }",
+                        target_fragment,
+                    )
 
             await page.wait_for_timeout(300)
 
