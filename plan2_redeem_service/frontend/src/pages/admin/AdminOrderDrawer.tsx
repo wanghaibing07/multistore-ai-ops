@@ -463,7 +463,7 @@ export function AdminOrderDrawer({
                       </span>
                     </div>
                     <div className="kv-item">
-                      <span className="kv-label">创建时间</span>
+                      <span className="kv-label">兑换码生成时间</span>
                       <span className="kv-value mono">{formatDateTime(detail.created_at)}</span>
                     </div>
                     <div className="kv-item">

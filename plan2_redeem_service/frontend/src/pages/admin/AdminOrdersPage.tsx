@@ -307,7 +307,7 @@ export function AdminOrdersPage({
                   <th>当前状态</th>
                   <th>买家 / 商店邮箱</th>
                   <th>上游单号与成本</th>
-                  <th>更新时间</th>
+                  <th>兑换码生成时间</th>
                 </tr>
               </thead>
               <tbody>
@@ -371,7 +371,7 @@ export function AdminOrdersPage({
                     </td>
                     <td>
                       <span className="mono" style={{ fontSize: 12.5 }}>
-                        {formatDateTime(item.updated_at)}
+                        {formatDateTime(item.created_at)}
                       </span>
                     </td>
                   </tr>
@@ -421,7 +421,7 @@ export function AdminOrdersPage({
                   <div className="row" style={{ gap: 6 }}>
                     {item.is_overdue_24h && <span className="badge badge-danger">超 24 小时</span>}
                   </div>
-                  <span className="mono">{formatDateTime(item.updated_at)}</span>
+                  <span className="mono">{formatDateTime(item.created_at)}</span>
                 </div>
               </button>
             ))}

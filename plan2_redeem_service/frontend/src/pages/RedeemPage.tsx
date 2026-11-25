@@ -129,6 +129,7 @@ export function RedeemPage() {
 
   const [checkFamily, setCheckFamily] = useState(false);
   const [checkPayment, setCheckPayment] = useState(false);
+  const [checkSlotRule, setCheckSlotRule] = useState(false);
   const [checkExclusiveRule, setCheckExclusiveRule] = useState(false);
 
   const [buyerEmail, setBuyerEmail] = useState("");
@@ -181,6 +182,7 @@ export function RedeemPage() {
   useEffect(() => {
     setCheckFamily(false);
     setCheckPayment(false);
+    setCheckSlotRule(false);
     setCheckExclusiveRule(false);
     setBuyerEmail("");
     setRedeemError(null);
@@ -259,13 +261,13 @@ export function RedeemPage() {
   const slotEmailCheck = validateGmailInput(buyerEmail);
   const preflightReady = isExclusive
     ? checkFamily && checkPayment && checkExclusiveRule
-    : checkFamily && checkPayment;
+    : checkFamily && checkPayment && checkSlotRule;
 
   const handleSlotSubmit = async (event: FormEvent) => {
     event.preventDefault();
     setRedeemError(null);
     if (!preflightReady) {
-      setRedeemError("请先勾选上面的两项提货前确认。");
+      setRedeemError("请先勾选上面的三项提货前确认。");
       return;
     }
     if (!slotEmailCheck.valid) {
@@ -456,11 +458,11 @@ export function RedeemPage() {
           <strong>千万别踢掉会员邮箱！</strong>踢掉会失去会员，不保修。
         </li>
         <li>
-          <strong>质保 30 天（从领号起算）</strong>，非本人原因掉会员免费保修；确认提货后非商品问题不退款。
+          <strong>质保 30 天（从领号起算）</strong>，非本人原因掉会员免费保修；确认提货后非商品问题不支持全额退款。
         </li>
         <li>自己的 Gmail 被封、无法登录不保修。</li>
         <li>
-          自己号被封、无法登录或误踢权益号导致掉权益，补救/换号收 <strong>79.9 元手续费</strong>，且不保证成功恢复。
+          自己号被封、无法登录、账号冷却受限或误踢权益号导致无法使用/掉权益，补救/换号收 <strong>79.9 元手续费</strong>，且不保证成功恢复。
         </li>
       </ol>
     </div>
@@ -679,7 +681,7 @@ export function RedeemPage() {
                 <div>
                   <h2 className="card-title">填你收家庭组邀请的 Gmail</h2>
                   <p className="card-subtitle">
-                    先勾选下面两项确认，再填你的 Gmail。提交后一般 2-6 小时发家庭组邀请，最晚 24 小时，未超时勿催。
+                    本单为虚拟服务，淘宝“无需物流已发货”即代表已发提货码（非空包裹）。先勾选下面三项确认，再填你的 Gmail；提交后一般 2-6 小时发家庭组邀请，最晚 24 小时，未超时勿催。
                   </p>
                 </div>
 
@@ -692,11 +694,12 @@ export function RedeemPage() {
                       onChange={(event) => setCheckFamily(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>这个 Gmail 现在没在别的 Google 家庭组里</strong>，而且近 12 个月没频繁换过组（可点{" "}
+                      <strong>这个 Gmail 现在没在别的 Google 家庭组里，且近 12 个月内从未加入、退出或被重拉进任何 Google 家庭组</strong>
+                      （Google 官方强制限制每 12 个月仅可更换 1 次家庭组，哪怕仅 1 次或原组掉线重拉也会触发冷却导致无法进组；可点{" "}
                       <a href="https://g.co/yourfamily" target="_blank" rel="noreferrer">
                         g.co/yourfamily <CastoriceIcon name="external" size={13} className="inline-ext-icon" />
                       </a>{" "}
-                      看一眼）。
+                      确认）。
                     </div>
                   </label>
 
@@ -720,6 +723,18 @@ export function RedeemPage() {
                       关闭现有付款资料，避免拉进家庭组时提示地区不符）。
                     </div>
                   </label>
+
+                  <label className={`check-card ${checkSlotRule ? "is-checked" : ""}`}>
+                    <input
+                      type="checkbox"
+                      checked={checkSlotRule}
+                      disabled={submittingRedeem}
+                      onChange={(event) => setCheckSlotRule(event.target.checked)}
+                    />
+                    <div className="check-card-body">
+                      <strong>我已知悉虚拟发货、排队时效与费用规则</strong>：淘宝“无需物流已发货”即已发提货码（非空包裹）；提交 Gmail 后立刻锁定上游车位（一般 2-6 小时发邀请，最晚 24 小时）；因 12 个月换组冷却、未退旧家庭组、未关付款资料、填错邮箱等非商品问题不支持全额退款，可补 <strong>49.9 元手续费</strong>换号履约，或协商扣除 <strong>49.9 元车位实损</strong>后退还余款。
+                    </div>
+                  </label>
                 </div>
 
                 <div className="inset-panel stack-sm">
@@ -732,7 +747,7 @@ export function RedeemPage() {
                       本款为 <strong>0 积分/点数车位</strong>，使用积分或点数会被机器人检测踢出家庭组且不退款。
                     </li>
                     <li>
-                      确认提货后非商品问题不退款；买家原因填错邮箱或需换号，需补 <strong>39.9 元手续费</strong>。
+                      确认提货后非商品问题（含 12 个月换组冷却、未退旧家庭组、未关付款资料、填错邮箱等买家自身原因）不支持全额退款；买家可补 <strong>49.9 元手续费</strong>换号履约，或协商扣除 <strong>49.9 元车位实损</strong>后退还余款。
                     </li>
                   </ol>
                 </div>
@@ -743,7 +758,7 @@ export function RedeemPage() {
                     onEmailChange={setBuyerEmail}
                     disabled={submittingRedeem}
                     primaryLabel="收家庭组邀请的 Gmail"
-                    warningText="别输错邮箱！提交后会立刻开始安排拉人，买家原因换邮箱需要39.9手续费，点提交前看清拼写。"
+                    warningText="别输错邮箱！提交后会立刻锁定上游车位排队拉人，因买家自身原因（含 12 个月换组冷却、填错邮箱等）换号需补 49.9 元手续费，点提交前请核对拼写并确认该号近 12 个月从未换过组。"
                   />
 
                   <div className="presubmit-card" aria-live="polite">
@@ -755,7 +770,7 @@ export function RedeemPage() {
                         ) : (
                           <span className="presubmit-dot" aria-hidden="true" />
                         )}
-                        <span>两项确认已勾选</span>
+                        <span>三项确认已勾选</span>
                       </li>
                       <li className={`presubmit-item ${slotEmailCheck.valid ? "is-pass" : ""}`}>
                         {slotEmailCheck.valid ? (
@@ -803,9 +818,9 @@ export function RedeemPage() {
                 <div className="callout callout-info">
                   <CastoriceIcon name="refresh" size={18} className="callout-icon" />
                   <div>
-                    <strong>已经排上队了，等发邀请就行</strong>
+                    <strong>已经排上队了，等发邀请就行（虚拟服务·非空包裹）</strong>
                     <div style={{ marginTop: 4 }}>
-                      一般 2-6 小时内发家庭组邀请，最晚 24 小时，未超时勿催。页面会自动刷新进度，建议收藏链接随时回来看。
+                      淘宝“无需物流已发货”即代表已发提货码。当前已进入自动拉人队列，一般 2-6 小时内发家庭组邀请，最晚 24 小时，排队期间属正常履约，未超时勿催；页面会自动刷新进度，建议收藏链接随时回来看。
                     </div>
                   </div>
                 </div>
@@ -880,7 +895,9 @@ export function RedeemPage() {
                   <ol className="guide-steps">
                     <li>打开 Gmail，找到标题带 “Google 家庭组” 或 “Join family group” 的邮件。</li>
                     <li>点里面的 <strong>接受邀请</strong>，按提示点确认加入就生效了。</li>
-                    <li>如果弹出地区或家庭组限制提示，直接截图找下单店铺客服帮你处理。</li>
+                    <li>
+                      如果弹出「12 个月只能切换一次家庭群组」冷却提示或地区不符提示，请完整截图联系下单店铺客服；因买家自身账号冷却/未退旧组等原因无法进组时，可补 <strong>49.9 元手续费</strong>更换符合条件的新 Gmail 重新拉人。
+                    </li>
                   </ol>
                 </div>
 
@@ -933,7 +950,7 @@ export function RedeemPage() {
                       onChange={(event) => setCheckFamily(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>我准备好了当管理员的稳定主力 Gmail</strong>，且现在没在别的家庭组里（点{" "}
+                      <strong>我准备好了当管理员的稳定主力 Gmail</strong>，现在没在别的家庭组里，且近 12 个月未触发 Google 家庭组更换冷却（官方每 12 个月仅限换 1 次，含原组重拉；点{" "}
                       <a href="https://g.co/yourfamily" target="_blank" rel="noreferrer">
                         g.co/yourfamily <CastoriceIcon name="external" size={13} className="inline-ext-icon" />
                       </a>{" "}
@@ -970,7 +987,7 @@ export function RedeemPage() {
                       onChange={(event) => setCheckExclusiveRule(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>我知道把会员/商店邮箱拉进家庭组后千万别踢掉</strong>（踢掉会失去会员且不保修），发完邀请后回来传截图登记保修。
+                      <strong>我已知悉虚拟发货（非空包裹）与售后规则</strong>：把会员/商店邮箱拉进家庭组后千万别踢掉（踢掉会失去会员且不保修），发完邀请后回来传截图登记保修；领号后非商品问题不支持全额退款，因自身原因导致掉权益补救/换号收 <strong>79.9 元手续费</strong>（不保证成功恢复）。
                     </div>
                   </label>
                 </div>

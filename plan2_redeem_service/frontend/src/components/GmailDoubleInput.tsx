@@ -18,7 +18,7 @@ export function GmailDoubleInput({
   email,
   onEmailChange,
   primaryLabel = "你的 Gmail 邮箱",
-  warningText = "提交后如因买家原因换邮箱需要39.9手续费，点提交前仔细核对一遍拼写。",
+  warningText = "提交后立刻锁定车位，因买家原因（含 12 个月换组冷却、填错邮箱等）换号需补 49.9 元手续费，点提交前请仔细核对拼写。",
   placeholder = "比如：yourname@gmail.com",
   disabled = false,
 }: GmailDoubleInputProps) {

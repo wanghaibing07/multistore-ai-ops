@@ -25,8 +25,8 @@ const COURIER_RUN_ASSET = "/assets/waiting/castorice-courier-run.png";
 const MINI_BUTTERFLY_ASSET = "/assets/waiting/mini-butterfly-glow.png";
 
 const TEA_REASSURANCE_TIPS = [
-  "正在排队为您拉入 Google 家庭组，一般 2~6 小时内完成",
-  "现在关掉页面也完全不影响排队，收藏本页链接随时回来查进度",
+  "淘宝显示“无需物流已发货”即已发提货码（非空包裹），当前正排队拉入家庭组",
+  "一般 2~6 小时内发邀请（最晚 24 小时），关掉页面不影响排队，收藏本页随时看进度",
   "发出邀请后页面会自动变绿提醒，记得留意 Gmail 收件箱与垃圾箱哦",
 ] as const;
 
