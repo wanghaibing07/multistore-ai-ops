@@ -1236,3 +1236,156 @@ def test_admin_manual_attention_unifies_exception_and_warranty_states(components
         after_completed = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "completed"}).json()
         assert {item["code"] for item in after_completed["items"]} == {shared_done_code, pending_ack_code}
 
+
+def test_admin_codes_sorting_and_all_excludes_in_stock(components):
+    app, _, canboso, _, _ = components
+    ledger = app.state.ledger
+
+    def set_timestamps(
+        code: str,
+        *,
+        created_at: str,
+        submitted_at: str | None = None,
+        updated_at: str | None = None,
+        completed_at: str | None = None,
+    ) -> None:
+        with ledger.transaction(immediate=True) as conn:
+            conn.execute(
+                "UPDATE codes SET created_at=?, submitted_at=?, updated_at=?, completed_at=? WHERE code=?",
+                (created_at, submitted_at, updated_at or created_at, completed_at, code),
+            )
+
+    with client(app) as c:
+        # 1. Two in-stock codes with distinct created_at
+        stock_older = c.post(
+            "/api/v1/admin/codes/issue",
+            headers=ADMIN,
+            json={"sku_key": "ultra_shared_slot", "channel": "taobao", "external_order_id": "", "remark": "stock-old"},
+        ).json()["code"]
+        stock_newer = c.post(
+            "/api/v1/admin/codes/issue",
+            headers=ADMIN,
+            json={"sku_key": "ultra_shared_slot", "channel": "taobao", "external_order_id": "", "remark": "stock-new"},
+        ).json()["code"]
+        set_timestamps(stock_older, created_at="2026-11-25T08:00:00+08:00")
+        set_timestamps(stock_newer, created_at="2026-11-25T23:50:00+08:00")
+
+        # 2. Two waiting_fulfillment codes: older-created used MORE recently, and older-used polled MORE recently
+        wait_created_early_used_latest = issue(c, sku="ultra_shared_slot", external_order_id="TB-WAIT-1")
+        wait_created_late_used_earlier = issue(c, sku="ultra_shared_slot", external_order_id="TB-WAIT-2")
+        assert c.post(
+            f"/api/v1/public/codes/{wait_created_early_used_latest}/redeem",
+            json={"buyer_email": "wait.latest@example.com", "preflight_confirmed": True},
+        ).status_code == 200
+        assert c.post(
+            f"/api/v1/public/codes/{wait_created_late_used_earlier}/redeem",
+            json={"buyer_email": "wait.earlier@example.com", "preflight_confirmed": True},
+        ).status_code == 200
+        set_timestamps(
+            wait_created_early_used_latest,
+            created_at="2026-11-25T09:00:00+08:00",
+            submitted_at="2026-11-25T22:30:00+08:00",
+            updated_at="2026-11-25T22:31:00+08:00",
+        )
+        set_timestamps(
+            wait_created_late_used_earlier,
+            created_at="2026-11-25T20:00:00+08:00",
+            submitted_at="2026-11-25T20:10:00+08:00",
+            updated_at="2026-11-25T23:40:00+08:00",
+        )
+
+        # 3. Completed code used between the two waiting orders
+        completed_mid = issue(c, sku="ultra_shared_slot", external_order_id="TB-DONE-1")
+        assert c.post(
+            f"/api/v1/public/codes/{completed_mid}/redeem",
+            json={"buyer_email": "done.mid@example.com", "preflight_confirmed": True},
+        ).status_code == 200
+        upstream_done = ledger.get_code(completed_mid)["upstream_order_code"]
+        canboso.orders[upstream_done]["status"] = "completed"
+        canboso.orders[upstream_done]["deliveredAt"] = "2026-11-25T22:00:00+08:00"
+        assert c.post(f"/api/v1/admin/codes/{completed_mid}/poll", headers=ADMIN).status_code == 200
+        set_timestamps(
+            completed_mid,
+            created_at="2026-11-25T10:00:00+08:00",
+            submitted_at="2026-11-25T21:15:00+08:00",
+            updated_at="2026-11-25T22:00:00+08:00",
+            completed_at="2026-11-25T22:00:00+08:00",
+        )
+
+        # 4. Two dispatched_unused codes (no submitted_at; sorted by dispatch/updated_at DESC)
+        dispatched_older = issue(c, sku="ultra_shared_slot", external_order_id="TB-DISP-OLD")
+        dispatched_newer = issue(c, sku="ultra_shared_slot", external_order_id="TB-DISP-NEW")
+        set_timestamps(
+            dispatched_older,
+            created_at="2026-11-25T18:00:00+08:00",
+            updated_at="2026-11-25T19:00:00+08:00",
+        )
+        set_timestamps(
+            dispatched_newer,
+            created_at="2026-11-25T11:00:00+08:00",
+            updated_at="2026-11-25T23:45:00+08:00",
+        )
+
+        # 5. Unused-then-revoked stock code revoked very recently (must NOT jump ahead of buyer-used orders in "全部")
+        revoked_unused = c.post(
+            "/api/v1/admin/codes/issue",
+            headers=ADMIN,
+            json={"sku_key": "ultra_shared_slot", "channel": "taobao", "external_order_id": "", "remark": "bulk-revoke"},
+        ).json()["code"]
+        assert c.post(f"/api/v1/admin/codes/{revoked_unused}/revoke", headers=ADMIN, json={"reason": "批量置换作废"}).status_code == 200
+        set_timestamps(
+            revoked_unused,
+            created_at="2026-11-25T12:00:00+08:00",
+            updated_at="2026-11-25T23:55:00+08:00",
+        )
+
+        # Verify in_stock sorts by created_at DESC
+        in_stock_resp = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "in_stock"}).json()
+        assert [item["code"] for item in in_stock_resp["items"]] == [stock_newer, stock_older]
+        assert all(item["submitted_at"] is None for item in in_stock_resp["items"])
+
+        # Verify "全部" (omitted or blank status) excludes in_stock and sorts used orders by submitted_at DESC first
+        for all_params in ({}, {"status": ""}, {"status": "   "}):
+            all_resp = c.get("/api/v1/admin/codes", headers=ADMIN, params=all_params).json()
+            all_codes = [item["code"] for item in all_resp["items"]]
+            assert stock_older not in all_codes
+            assert stock_newer not in all_codes
+            assert all_codes == [
+                wait_created_early_used_latest,
+                completed_mid,
+                wait_created_late_used_earlier,
+                revoked_unused,
+                dispatched_newer,
+                dispatched_older,
+            ]
+            assert all_resp["total"] == 6
+
+        # Searching for an in-stock code inside "全部" must still exclude it; "in_stock" finds it
+        all_search_stock = c.get("/api/v1/admin/codes", headers=ADMIN, params={"q": stock_newer}).json()
+        assert all_search_stock["total"] == 0
+        in_stock_search = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "in_stock", "q": stock_newer}).json()
+        assert [item["code"] for item in in_stock_search["items"]] == [stock_newer]
+
+        # Verify waiting_fulfillment sorts by submitted_at DESC even when poll refreshed updated_at on the earlier-used order
+        waiting_resp = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "waiting_fulfillment"}).json()
+        assert [item["code"] for item in waiting_resp["items"]] == [
+            wait_created_early_used_latest,
+            wait_created_late_used_earlier,
+        ]
+        assert waiting_resp["items"][0]["submitted_at"] == "2026-11-25T22:30:00+08:00"
+        assert waiting_resp["items"][0]["completed_at"] is None
+
+        # Verify completed exposes submitted_at & completed_at
+        completed_resp = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "completed"}).json()
+        assert [item["code"] for item in completed_resp["items"]] == [completed_mid]
+        assert completed_resp["items"][0]["submitted_at"] == "2026-11-25T21:15:00+08:00"
+        assert completed_resp["items"][0]["completed_at"] == "2026-11-25T22:00:00+08:00"
+
+        # Verify dispatched_unused sorts by dispatch/updated_at DESC
+        dispatched_resp = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "dispatched_unused"}).json()
+        assert [item["code"] for item in dispatched_resp["items"]] == [dispatched_newer, dispatched_older]
+
+        # Verify revoked tab returns revoked codes sorted by usage/revoke recency
+        revoked_resp = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "revoked"}).json()
+        assert [item["code"] for item in revoked_resp["items"]] == [revoked_unused]
+

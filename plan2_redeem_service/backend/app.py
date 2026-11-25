@@ -44,6 +44,7 @@ from .service import (
     DISPATCHED_UNUSED_SQL,
     IN_STOCK_SQL,
     MANUAL_ATTENTION_SQL,
+    NON_IN_STOCK_SQL,
     PENDING_WARRANTY_ACK_SQL,
     Mailer,
     SKUS,
@@ -476,20 +477,26 @@ def create_app(
 
     @app.get("/api/v1/admin/codes", dependencies=[Depends(require_admin)])
     def list_codes(status: Optional[str] = None, channel: Optional[str] = None, sku_key: Optional[str] = None, q: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), svc: Service = Depends(get_service)) -> Any:
+        normalized_status = (status or "").strip()
         clauses, params = [], []
-        if status == "in_stock":
+        if normalized_status == "in_stock":
             clauses.append(IN_STOCK_SQL)
-        elif status == "dispatched_unused":
-            clauses.append(DISPATCHED_UNUSED_SQL)
-        elif status == "manual_attention":
-            clauses.append(MANUAL_ATTENTION_SQL)
-        elif status == "pending_warranty_ack":
-            clauses.append(PENDING_WARRANTY_ACK_SQL)
-        elif status == "completed":
-            clauses.append(COMPLETED_ADMIN_SQL)
-        elif status:
-            clauses.append("status=?")
-            params.append(status)
+            order_by = "created_at_desc"
+        else:
+            order_by = "used_at_desc"
+            if normalized_status == "dispatched_unused":
+                clauses.append(DISPATCHED_UNUSED_SQL)
+            elif normalized_status == "manual_attention":
+                clauses.append(MANUAL_ATTENTION_SQL)
+            elif normalized_status == "pending_warranty_ack":
+                clauses.append(PENDING_WARRANTY_ACK_SQL)
+            elif normalized_status == "completed":
+                clauses.append(COMPLETED_ADMIN_SQL)
+            elif normalized_status:
+                clauses.append("status=?")
+                params.append(normalized_status)
+            else:
+                clauses.append(NON_IN_STOCK_SQL)
         for field, value in (("channel", channel), ("sku_key", sku_key)):
             if value:
                 clauses.append(field + "=?"); params.append(value)
@@ -497,7 +504,13 @@ def create_app(
             pattern = f"%{q.strip()}%"
             clauses.append("(code LIKE ? OR external_order_id LIKE ? OR buyer_email LIKE ? OR upstream_order_code LIKE ? OR remark LIKE ? OR warranty_json LIKE ? OR delivery_json LIKE ?)")
             params.extend([pattern] * 7)
-        rows, total = ledger.list_codes(" AND ".join(clauses), tuple(params), page_size, (page - 1) * page_size)
+        rows, total = ledger.list_codes(
+            " AND ".join(clauses),
+            tuple(params),
+            page_size,
+            (page - 1) * page_size,
+            order_by=order_by,
+        )
         return {"items": [svc.admin_summary(row) for row in rows], "total": total, "page": page, "page_size": page_size}
 
     @app.get("/api/v1/admin/codes/{code}", dependencies=[Depends(require_admin)])

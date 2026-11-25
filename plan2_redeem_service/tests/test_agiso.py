@@ -582,17 +582,29 @@ def test_admin_agiso_endpoints_security_sync_remote_skus_and_push_cards(tmp_path
         assert all(row["status"] == "revoked" for row in rolled_back)
 
         agiso.fail_methods["card_pwd_add"] = AgisoError("Agiso timeout", status_code=504, transient=True)
-        before_transient = {row["code"] for row in client.get("/api/v1/admin/codes", params={"page_size": 100}, headers=ADMIN_HEADERS).json()["items"]}
+        before_transient = {
+            row["code"]
+            for row in client.get("/api/v1/admin/codes", params={"status": "in_stock", "page_size": 100}, headers=ADMIN_HEADERS).json()["items"]
+        }
         push_timeout = client.post(
             "/api/v1/admin/agiso/push-cards",
             json={"sku_key": "ultra_shared_slot", "cpc_id": 999, "count": 1, "batch_label": "batch-timeout"},
             headers=ADMIN_HEADERS,
         )
         assert push_timeout.status_code == 503
-        after_transient = client.get("/api/v1/admin/codes", params={"page_size": 100}, headers=ADMIN_HEADERS).json()["items"]
+        after_transient = client.get(
+            "/api/v1/admin/codes",
+            params={"status": "in_stock", "page_size": 100},
+            headers=ADMIN_HEADERS,
+        ).json()["items"]
         kept_codes = [row for row in after_transient if row["code"] not in before_transient]
         assert len(kept_codes) == 1
         assert kept_codes[0]["status"] == "unused"
+        all_tab_codes = {
+            row["code"]
+            for row in client.get("/api/v1/admin/codes", params={"page_size": 100}, headers=ADMIN_HEADERS).json()["items"]
+        }
+        assert kept_codes[0]["code"] not in all_tab_codes
 
         assert client.delete(f"/api/v1/admin/agiso/sku-mappings/{mapping_id}", headers=ADMIN_HEADERS).status_code == 200
         assert client.delete(f"/api/v1/admin/agiso/sku-mappings/{mapping_id}", headers=ADMIN_HEADERS).status_code == 404

@@ -11,6 +11,14 @@ from typing import Any, Callable, Iterator, Optional
 
 STATUSES = {"unused", "validating", "purchasing", "waiting_fulfillment", "delivered_pending_warranty", "completed", "needs_manual_review", "revoked"}
 
+LIST_CODES_ORDER_BY: dict[str, str] = {
+    "created_at_desc": "created_at DESC, code DESC",
+    "used_at_desc": (
+        "CASE WHEN submitted_at IS NOT NULL AND TRIM(submitted_at) <> '' THEN 0 ELSE 1 END ASC, "
+        "submitted_at DESC, updated_at DESC, created_at DESC, code DESC"
+    ),
+}
+
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds")
@@ -121,6 +129,7 @@ class Ledger:
             );
             CREATE INDEX IF NOT EXISTS idx_codes_status ON codes(status);
             CREATE INDEX IF NOT EXISTS idx_codes_filter ON codes(channel, sku_key, created_at);
+            CREATE INDEX IF NOT EXISTS idx_codes_submitted_at ON codes(submitted_at DESC);
             CREATE INDEX IF NOT EXISTS idx_codes_external_order ON codes(external_order_id);
             CREATE INDEX IF NOT EXISTS idx_agiso_deliveries_tid ON agiso_deliveries(tid);
             CREATE INDEX IF NOT EXISTS idx_agiso_deliveries_oid ON agiso_deliveries(oid);
@@ -211,10 +220,23 @@ class Ledger:
             )
             return result.rowcount == 1
 
-    def list_codes(self, where: str = "", params: tuple[Any, ...] = (), limit: int = 20, offset: int = 0) -> tuple[list[dict[str, Any]], int]:
+    def list_codes(
+        self,
+        where: str = "",
+        params: tuple[Any, ...] = (),
+        limit: int = 20,
+        offset: int = 0,
+        order_by: str = "created_at_desc",
+    ) -> tuple[list[dict[str, Any]], int]:
+        order_sql = LIST_CODES_ORDER_BY.get(order_by)
+        if not order_sql:
+            raise ValueError(f"Unsupported order_by: {order_by}")
         with self.connect() as c:
             total = c.execute("SELECT COUNT(*) FROM codes" + (" WHERE " + where if where else ""), params).fetchone()[0]
-            rows = c.execute("SELECT * FROM codes" + (" WHERE " + where if where else "") + " ORDER BY created_at DESC LIMIT ? OFFSET ?", params + (limit, offset)).fetchall()
+            rows = c.execute(
+                "SELECT * FROM codes" + (" WHERE " + where if where else "") + f" ORDER BY {order_sql} LIMIT ? OFFSET ?",
+                params + (limit, offset),
+            ).fetchall()
             return [dict(r) for r in rows], total
 
     def list_agiso_sku_mappings(self, enabled_only: bool = False) -> list[dict[str, Any]]:

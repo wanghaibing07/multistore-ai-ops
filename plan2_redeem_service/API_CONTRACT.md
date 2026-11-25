@@ -266,10 +266,14 @@
 ### 5.5 订单与兑换码列表
 `GET /api/v1/admin/codes?status=&channel=&sku_key=&q=&page=1&page_size=20`
 - 状态筛选 `status` 支持底层原始状态，以及管理台聚合/虚拟筛选值：
+  - 省略或传空字符串（管理台「全部」标签）：自动排除 `in_stock`（在库存未发出的兑换码不显示在「全部」中），按使用时间倒序排列。
   - `in_stock` / `dispatched_unused`：拆分未提货码池与已发出待提货订单。
   - `manual_attention`：统一返回需人工处理订单（`needs_manual_review` + `delivered_pending_warranty` + `pending_warranty_ack`），每行保留原始 `status` 与 `warranty_status` 以便前台徽章区分具体子状态，且 `/retry` 仍严格只允许原始 `needs_manual_review`。
   - `pending_warranty_ack`：仅返回独享买家已交保修、待商家向上游报备订单。
   - `completed`：排除 `pending_warranty_ack`（待商家报备订单在完成 `/warranty-ack` 后才进入「已完成」）。
+- 排序规则：
+  - `status=in_stock`：按兑换码生成时间 `created_at DESC` 排序。
+  - 其余全部筛选（含「全部」空 `status`、`dispatched_unused`、`waiting_fulfillment`、`completed`、`manual_attention`、`revoked` 等）：按使用时间从近到远排序（已提货的记录优先并按 `submitted_at DESC`，不受后台轮询刷新 `updated_at` 干扰；尚未提货的记录排在后面按 `updated_at DESC, created_at DESC` 兜底）。
 - 搜索参数 `q` 模糊匹配：`code`、`external_order_id`、`buyer_email`、`upstream_order_code`、`remark`、`warranty_json`、`delivery_json`（确保新旧独享单均可通过买家主邮箱或商店套餐邮箱 `store_email` 搜索命中）。
 - `200 OK`：
 ```json
@@ -296,6 +300,8 @@
       "last_error_message": null,
       "is_overdue_24h": false,
       "elapsed_minutes": 45,
+      "submitted_at": "2026-11-23T06:10:00+08:00",
+      "completed_at": null,
       "created_at": "2026-11-23T06:00:00+08:00",
       "updated_at": "2026-11-23T06:45:00+08:00"
     }

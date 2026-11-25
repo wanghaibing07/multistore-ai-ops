@@ -55,6 +55,7 @@ def is_valid_email(value: str) -> bool:
 
 
 IN_STOCK_SQL = "status='unused' AND COALESCE(TRIM(external_order_id), '') = ''"
+NON_IN_STOCK_SQL = f"NOT ({IN_STOCK_SQL})"
 DISPATCHED_UNUSED_SQL = "status='unused' AND COALESCE(TRIM(external_order_id), '') <> ''"
 PENDING_WARRANTY_ACK_SQL = (
     "status='completed' AND sku_key='ultra_exclusive_admin' "
@@ -694,6 +695,8 @@ class Service:
             "last_error_message": row.get("last_error_message"),
             "is_overdue_24h": bool(elapsed is not None and elapsed > 24 * 60 and row["status"] == "waiting_fulfillment"),
             "elapsed_minutes": elapsed,
+            "submitted_at": row.get("submitted_at"),
+            "completed_at": row.get("completed_at"),
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }

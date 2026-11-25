@@ -469,6 +469,12 @@ export function AdminOrderDrawer({
                       <span className="kv-value mono">{formatDateTime(detail.created_at)}</span>
                     </div>
                     <div className="kv-item">
+                      <span className="kv-label">使用时间</span>
+                      <span className="kv-value mono">
+                        {detail.submitted_at ? formatDateTime(detail.submitted_at) : "尚未使用"}
+                      </span>
+                    </div>
+                    <div className="kv-item">
                       <span className="kv-label">最近更新</span>
                       <span className="kv-value mono">{formatDateTime(detail.updated_at)}</span>
                     </div>

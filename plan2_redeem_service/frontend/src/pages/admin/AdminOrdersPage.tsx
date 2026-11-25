@@ -104,6 +104,72 @@ function renderOrderEmails(item: AdminCodeSummary) {
   );
 }
 
+function getTimeColumnLabel(statusFilter: AdminOrderStatusFilter | ""): string {
+  if (statusFilter === "in_stock") {
+    return "生成时间";
+  }
+  if (statusFilter === "dispatched_unused") {
+    return "发出时间";
+  }
+  return "使用时间";
+}
+
+function renderOrderTimeCell(
+  item: AdminCodeSummary,
+  statusFilter: AdminOrderStatusFilter | ""
+) {
+  if (statusFilter === "in_stock") {
+    return (
+      <span className="mono" style={{ fontSize: 12.5 }}>
+        {formatDateTime(item.created_at)}
+      </span>
+    );
+  }
+  if (statusFilter === "dispatched_unused") {
+    return (
+      <div className="stack-sm" style={{ gap: 3 }}>
+        <span className="mono" style={{ fontSize: 12.5 }}>
+          {formatDateTime(item.updated_at)}
+        </span>
+        <span style={{ fontSize: 12, color: "var(--ink-3)" }}>尚未提货</span>
+      </div>
+    );
+  }
+  if (item.submitted_at) {
+    return (
+      <span className="mono" style={{ fontSize: 12.5 }}>
+        {formatDateTime(item.submitted_at)}
+      </span>
+    );
+  }
+  const fallbackLabel = item.status === "revoked" ? "作废" : "发出";
+  return (
+    <div className="stack-sm" style={{ gap: 3 }}>
+      <span style={{ fontSize: 12.5, color: "var(--ink-3)" }}>未使用</span>
+      <span className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>
+        {fallbackLabel} {formatDateTime(item.updated_at)}
+      </span>
+    </div>
+  );
+}
+
+function formatMobileOrderTime(
+  item: AdminCodeSummary,
+  statusFilter: AdminOrderStatusFilter | ""
+): string {
+  if (statusFilter === "in_stock") {
+    return `生成 ${formatDateTime(item.created_at)}`;
+  }
+  if (statusFilter === "dispatched_unused") {
+    return `发出 ${formatDateTime(item.updated_at)}`;
+  }
+  if (item.submitted_at) {
+    return `使用 ${formatDateTime(item.submitted_at)}`;
+  }
+  const fallbackLabel = item.status === "revoked" ? "作废" : "发出";
+  return `未使用 · ${fallbackLabel} ${formatDateTime(item.updated_at)}`;
+}
+
 export function AdminOrdersPage({
   token,
   initialStatus,
@@ -283,7 +349,11 @@ export function AdminOrdersPage({
           <h2 className="card-title" style={{ fontSize: 16 }}>
             当前条件下暂无订单记录
           </h2>
-          <p className="card-subtitle">可尝试清空搜索词或切换上方状态标签页查看全部记录。</p>
+          <p className="card-subtitle">
+            {statusFilter === ""
+              ? "「全部」不包含在库存码；可清空搜索词或切到「在库存」查看库存码。"
+              : "可尝试清空搜索词或切换上方状态标签页查看其他记录。"}
+          </p>
           {(statusFilter || channelFilter || skuFilter || searchQuery) && (
             <button
               type="button"
@@ -312,7 +382,7 @@ export function AdminOrdersPage({
                   <th>当前状态</th>
                   <th>买家 / 商店邮箱</th>
                   <th>上游单号与成本</th>
-                  <th>兑换码生成时间</th>
+                  <th>{getTimeColumnLabel(statusFilter)}</th>
                 </tr>
               </thead>
               <tbody>
@@ -378,11 +448,7 @@ export function AdminOrdersPage({
                         </span>
                       </div>
                     </td>
-                    <td>
-                      <span className="mono" style={{ fontSize: 12.5 }}>
-                        {formatDateTime(item.created_at)}
-                      </span>
-                    </td>
+                    <td>{renderOrderTimeCell(item, statusFilter)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -432,7 +498,7 @@ export function AdminOrdersPage({
                   <div className="row" style={{ gap: 6 }}>
                     {item.is_overdue_24h && <span className="badge badge-danger">超 24 小时</span>}
                   </div>
-                  <span className="mono">{formatDateTime(item.created_at)}</span>
+                  <span className="mono">{formatMobileOrderTime(item, statusFilter)}</span>
                 </div>
               </button>
             ))}

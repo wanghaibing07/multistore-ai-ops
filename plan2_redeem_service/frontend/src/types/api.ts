@@ -154,6 +154,8 @@ export interface AdminCodeSummary {
   last_error_message: string | null;
   is_overdue_24h: boolean;
   elapsed_minutes: number | null;
+  submitted_at: string | null;
+  completed_at: string | null;
   created_at: string;
   updated_at: string;
 }
