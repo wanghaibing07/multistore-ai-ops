@@ -1020,3 +1020,52 @@ def test_admin_batch_taobao_persists_atomically_without_calling_16688(components
             assert conn.execute("SELECT COUNT(*) FROM codes WHERE batch_id=?", (body["batch_id"],)).fetchone()[0] == 4
             assert conn.execute("SELECT COUNT(*) FROM batches WHERE batch_id=?", (body["batch_id"],)).fetchone()[0] == 1
 
+
+def test_admin_distinguishes_in_stock_and_dispatched_unused_codes(components):
+    app, _, _, _, _ = components
+    with client(app) as c:
+        stock_shared = c.post(
+            "/api/v1/admin/codes/issue",
+            headers=ADMIN,
+            json={"sku_key": "ultra_shared_slot", "channel": "taobao", "external_order_id": "", "remark": "stock-pool"},
+        ).json()["code"]
+        dispatched_shared = c.post(
+            "/api/v1/admin/codes/issue",
+            headers=ADMIN,
+            json={"sku_key": "ultra_shared_slot", "channel": "taobao", "external_order_id": "TB-ORDER-1001", "remark": "sent"},
+        ).json()["code"]
+        stock_exclusive = c.post(
+            "/api/v1/admin/codes/issue",
+            headers=ADMIN,
+            json={"sku_key": "ultra_exclusive_admin", "channel": "16688", "external_order_id": "   ", "remark": "stock-16688"},
+        ).json()["code"]
+
+        overview = c.get("/api/v1/admin/overview", headers=ADMIN).json()
+        assert overview["counts"]["unused"] == 3
+        assert overview["counts"]["in_stock"] == 2
+        assert overview["counts"]["dispatched_unused"] == 1
+        sku_map = {sku["sku_key"]: sku for sku in overview["skus"]}
+        assert sku_map["ultra_shared_slot"]["in_stock_codes_taobao"] == 1
+        assert sku_map["ultra_shared_slot"]["dispatched_unused_codes_taobao"] == 1
+        assert sku_map["ultra_exclusive_admin"]["in_stock_codes_16688"] == 1
+        assert sku_map["ultra_exclusive_admin"]["dispatched_unused_codes_16688"] == 0
+
+        in_stock_resp = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "in_stock"}).json()
+        assert in_stock_resp["total"] == 2
+        assert {item["code"] for item in in_stock_resp["items"]} == {stock_shared, stock_exclusive}
+        assert all(item["display_status"] == "in_stock" and item["is_dispatched"] is False for item in in_stock_resp["items"])
+
+        dispatched_resp = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "dispatched_unused"}).json()
+        assert dispatched_resp["total"] == 1
+        assert dispatched_resp["items"][0]["code"] == dispatched_shared
+        assert dispatched_resp["items"][0]["display_status"] == "dispatched_unused"
+        assert dispatched_resp["items"][0]["is_dispatched"] is True
+
+        legacy_unused = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "unused"}).json()
+        assert legacy_unused["total"] == 3
+
+        assert app.state.ledger.bind_code_external_order(stock_shared, "TB-ORDER-1002") == "bound"
+        after_bind = c.get("/api/v1/admin/overview", headers=ADMIN).json()
+        assert after_bind["counts"]["in_stock"] == 1
+        assert after_bind["counts"]["dispatched_unused"] == 2
+

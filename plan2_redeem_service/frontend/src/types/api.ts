@@ -12,6 +12,8 @@ export type CodeStatus =
   | "needs_manual_review"
   | "revoked";
 
+export type AdminOrderStatusFilter = CodeStatus | "in_stock" | "dispatched_unused";
+
 export type WarrantyStatus = "pending" | "submitted" | "registered_upstream";
 
 export interface ApiErrorEnvelope {
@@ -96,11 +98,17 @@ export interface AdminSkuStatus {
   price_exceeded: boolean;
   unused_codes_taobao: number;
   unused_codes_16688: number;
+  in_stock_codes_taobao?: number;
+  dispatched_unused_codes_taobao?: number;
+  in_stock_codes_16688?: number;
+  dispatched_unused_codes_16688?: number;
 }
 
 export interface AdminOverviewCounts {
   total: number;
   unused: number;
+  in_stock: number;
+  dispatched_unused: number;
   waiting_fulfillment: number;
   delivered_pending_warranty: number;
   completed: number;
@@ -126,6 +134,8 @@ export interface AdminCodeSummary {
   external_order_id: string | null;
   remark: string | null;
   status: CodeStatus;
+  display_status?: AdminOrderStatusFilter;
+  is_dispatched?: boolean;
   buyer_email: string | null;
   buyer_email_masked: string | null;
   store_email: string | null;

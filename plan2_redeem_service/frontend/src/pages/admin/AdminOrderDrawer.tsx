@@ -309,6 +309,8 @@ export function AdminOrderDrawer({
                     skuKey={detail.sku_key}
                     status={detail.status}
                     warrantyStatus={detail.warranty_status}
+                    externalOrderId={detail.external_order_id}
+                    isDispatched={detail.is_dispatched}
                   />
                 </>
               )}

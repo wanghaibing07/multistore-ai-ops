@@ -455,7 +455,14 @@ def create_app(
     @app.get("/api/v1/admin/codes", dependencies=[Depends(require_admin)])
     def list_codes(status: Optional[str] = None, channel: Optional[str] = None, sku_key: Optional[str] = None, q: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), svc: Service = Depends(get_service)) -> Any:
         clauses, params = [], []
-        for field, value in (("status", status), ("channel", channel), ("sku_key", sku_key)):
+        if status == "in_stock":
+            clauses.append("status='unused' AND COALESCE(TRIM(external_order_id), '') = ''")
+        elif status == "dispatched_unused":
+            clauses.append("status='unused' AND COALESCE(TRIM(external_order_id), '') <> ''")
+        elif status:
+            clauses.append("status=?")
+            params.append(status)
+        for field, value in (("channel", channel), ("sku_key", sku_key)):
             if value:
                 clauses.append(field + "=?"); params.append(value)
         if q and q.strip():

@@ -8,13 +8,13 @@ import {
   ShieldAlert,
   Wallet,
 } from "lucide-react";
-import type { AdminOverviewResponse, CodeStatus } from "../../types/api";
+import type { AdminOrderStatusFilter, AdminOverviewResponse } from "../../types/api";
 import { formatDateTime, formatUsd, getSkuShortLabel } from "../../utils/format";
 
 interface AdminOverviewPageProps {
   overview: AdminOverviewResponse;
   onRefreshUpstream: () => Promise<void>;
-  onJumpToOrders: (statusFilter?: CodeStatus | "") => void;
+  onJumpToOrders: (statusFilter?: AdminOrderStatusFilter | "") => void;
   onJumpToSettings: () => void;
 }
 
@@ -42,16 +42,16 @@ export function AdminOverviewPage({
     label: string;
     value: number;
     meta: string;
-    status?: CodeStatus | "";
+    status?: AdminOrderStatusFilter | "";
     highlight: "idle" | "purple" | "amber" | "alert";
   }> = [
     {
-      key: "unused",
-      label: "待提货",
-      value: counts.unused,
-      meta: "码已发出，买家还没领",
-      status: "unused",
-      highlight: counts.unused > 0 ? "purple" : "idle",
+      key: "dispatched_unused",
+      label: "已发出待提货",
+      value: counts.dispatched_unused ?? 0,
+      meta: "已发给买家，等买家自助提货",
+      status: "dispatched_unused",
+      highlight: (counts.dispatched_unused ?? 0) > 0 ? "purple" : "idle",
     },
     {
       key: "waiting",
@@ -84,9 +84,17 @@ export function AdminOverviewPage({
     label: string;
     value: number;
     meta: string;
-    status?: CodeStatus | "";
+    status?: AdminOrderStatusFilter | "";
     highlight: "idle" | "amber" | "success";
   }> = [
+    {
+      key: "in_stock",
+      label: "在库存",
+      value: counts.in_stock ?? 0,
+      meta: "还在库存池里，尚未发给买家",
+      status: "in_stock",
+      highlight: "idle",
+    },
     {
       key: "total",
       label: "总发码量",
@@ -271,9 +279,15 @@ export function AdminOverviewPage({
                   </span>
                 </div>
                 <div className="ops-meta-row">
-                  <span className="ops-meta-key">未提货码余量</span>
+                  <span className="ops-meta-key">在库存余量</span>
                   <span className="mono tabular ops-meta-val">
-                    淘宝 {sku.unused_codes_taobao} · 16688 {sku.unused_codes_16688}
+                    淘宝 {sku.in_stock_codes_taobao ?? sku.unused_codes_taobao} · 16688 {sku.in_stock_codes_16688 ?? sku.unused_codes_16688}
+                  </span>
+                </div>
+                <div className="ops-meta-row">
+                  <span className="ops-meta-key">已发出待提货</span>
+                  <span className="mono tabular ops-meta-val">
+                    淘宝 {sku.dispatched_unused_codes_taobao ?? 0} · 16688 {sku.dispatched_unused_codes_16688 ?? 0}
                   </span>
                 </div>
                 <div className="ops-meta-row">

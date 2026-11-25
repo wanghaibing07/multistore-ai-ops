@@ -41,15 +41,21 @@ export function OrderDisplayStatusBadge({
   skuKey,
   status,
   warrantyStatus,
+  externalOrderId,
+  isDispatched,
 }: {
   skuKey: SkuKey;
   status: CodeStatus;
   warrantyStatus?: WarrantyStatus | null;
+  externalOrderId?: string | null;
+  isDispatched?: boolean;
 }) {
   const meta = getOrderDisplayStatusMeta({
     sku_key: skuKey,
     status,
     warranty_status: warrantyStatus,
+    external_order_id: externalOrderId,
+    is_dispatched: isDispatched,
   });
   const pulse = status === "waiting_fulfillment" || status === "validating" || status === "purchasing";
   return <ToneBadge label={meta.label} tone={meta.tone} pulse={pulse} />;

@@ -584,6 +584,12 @@ class Service:
         delivery = json.loads(row["delivery_json"]) if row.get("delivery_json") else None
         resolved_email = row.get("buyer_email") or (warranty.get("admin_email") if isinstance(warranty, dict) else None) or None
         store_email = (delivery.get("account_text") if isinstance(delivery, dict) else None) or None
+        is_dispatched = bool((row.get("external_order_id") or "").strip())
+        display_status = (
+            "dispatched_unused"
+            if row["status"] == "unused" and is_dispatched
+            else ("in_stock" if row["status"] == "unused" else row["status"])
+        )
         return {
             "code": row["code"],
             "sku_key": row["sku_key"],
@@ -594,6 +600,8 @@ class Service:
             "external_order_id": row.get("external_order_id"),
             "remark": row.get("remark") or "",
             "status": row["status"],
+            "display_status": display_status,
+            "is_dispatched": is_dispatched,
             "buyer_email": resolved_email,
             "buyer_email_masked": row.get("buyer_email_masked") or mask_email(resolved_email),
             "store_email": store_email,
@@ -641,7 +649,12 @@ class Service:
         for key in SKUS:
             skus.append(self.sku_status(key, catalog))
         counts = {status: self._count("status=?", (status,)) for status in ("unused", "waiting_fulfillment", "delivered_pending_warranty", "completed", "needs_manual_review", "revoked")}
-        counts.update({"total": self._count(), "overdue_24h": self._count("status='waiting_fulfillment' AND submitted_at < ?", ((datetime.now(timezone.utc).astimezone() - timedelta(hours=24)).isoformat(),))})
+        counts.update({
+            "in_stock": self._count("status='unused' AND COALESCE(TRIM(external_order_id), '') = ''"),
+            "dispatched_unused": self._count("status='unused' AND COALESCE(TRIM(external_order_id), '') <> ''"),
+            "total": self._count(),
+            "overdue_24h": self._count("status='waiting_fulfillment' AND submitted_at < ?", ((datetime.now(timezone.utc).astimezone() - timedelta(hours=24)).isoformat(),)),
+        })
         if balance_usd < self.settings.canboso_low_balance_threshold_usd and self.ledger.claim_notification("low-balance"):
             self._safe_send("Canboso 低余额报警", f"Canboso 余额低于配置阈值，请及时处理。当前余额为 ${balance_usd:.2f}。")
         return {"execution_mode": self.settings.execution_mode, "public_base_url": self.settings.public_base_url, "canboso": {"balance_usd": balance_usd, "low_balance_threshold_usd": self.settings.canboso_low_balance_threshold_usd, "is_low_balance": balance_usd < self.settings.canboso_low_balance_threshold_usd, "checked_at": now_iso(), "error": None}, "skus": skus, "counts": counts}
@@ -654,7 +667,24 @@ class Service:
         p = next((x for x in catalog.get("products", []) if x.get("productId") == s["product_id"]), {})
         price = float((p.get("price") or {}).get("amount", 0)) if p else None
         available = (p.get("availability") or {}).get("available") if p else None
-        return {"sku_key": sku_key, "title": s["title"], "product_type": s["product_type"], "canboso_product_id": s["product_id"], "goods_no": s.get("goods_no"), "current_price_usd": price, "max_cost_usd": s["max_cost_usd"], "available": available, "is_available": available != 0, "price_exceeded": price is not None and price > s["max_cost_usd"], "unused_codes_taobao": self._count("sku_key=? AND channel='taobao' AND status='unused'", (sku_key,)), "unused_codes_16688": self._count("sku_key=? AND channel='16688' AND status='unused'", (sku_key,))}
+        return {
+            "sku_key": sku_key,
+            "title": s["title"],
+            "product_type": s["product_type"],
+            "canboso_product_id": s["product_id"],
+            "goods_no": s.get("goods_no"),
+            "current_price_usd": price,
+            "max_cost_usd": s["max_cost_usd"],
+            "available": available,
+            "is_available": available != 0,
+            "price_exceeded": price is not None and price > s["max_cost_usd"],
+            "unused_codes_taobao": self._count("sku_key=? AND channel='taobao' AND status='unused'", (sku_key,)),
+            "unused_codes_16688": self._count("sku_key=? AND channel='16688' AND status='unused'", (sku_key,)),
+            "in_stock_codes_taobao": self._count("sku_key=? AND channel='taobao' AND status='unused' AND COALESCE(TRIM(external_order_id), '') = ''", (sku_key,)),
+            "dispatched_unused_codes_taobao": self._count("sku_key=? AND channel='taobao' AND status='unused' AND COALESCE(TRIM(external_order_id), '') <> ''", (sku_key,)),
+            "in_stock_codes_16688": self._count("sku_key=? AND channel='16688' AND status='unused' AND COALESCE(TRIM(external_order_id), '') = ''", (sku_key,)),
+            "dispatched_unused_codes_16688": self._count("sku_key=? AND channel='16688' AND status='unused' AND COALESCE(TRIM(external_order_id), '') <> ''", (sku_key,)),
+        }
 
     def _count(self, where: str = "", params: tuple[Any, ...] = ()) -> int:
         with self.ledger.connect() as c:
@@ -1909,6 +1939,14 @@ class Service:
                     "planned_push": planned_push,
                     "local_unused_taobao": self._count(
                         "sku_key=? AND channel='taobao' AND status='unused'",
+                        (sku_key,),
+                    ),
+                    "local_in_stock_taobao": self._count(
+                        "sku_key=? AND channel='taobao' AND status='unused' AND COALESCE(TRIM(external_order_id), '') = ''",
+                        (sku_key,),
+                    ),
+                    "local_dispatched_unused_taobao": self._count(
+                        "sku_key=? AND channel='taobao' AND status='unused' AND COALESCE(TRIM(external_order_id), '') <> ''",
                         (sku_key,),
                     ),
                 }

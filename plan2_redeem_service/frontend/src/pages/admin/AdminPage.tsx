@@ -15,7 +15,7 @@ import {
   refreshAdminUpstream,
 } from "../../api/client";
 import { useToast } from "../../components/ToastProvider";
-import type { AdminOverviewResponse, CodeStatus } from "../../types/api";
+import type { AdminOrderStatusFilter, AdminOverviewResponse } from "../../types/api";
 import "../../styles/admin-glass.css";
 import { AdminIssuePage } from "./AdminIssuePage";
 import { AdminLoginPage } from "./AdminLoginPage";
@@ -71,7 +71,7 @@ export function AdminPage() {
   const [activeTab, setActiveTab] = useState<AdminTab>(() =>
     resolveTabFromPath(location.pathname)
   );
-  const [orderStatusFilter, setOrderStatusFilter] = useState<CodeStatus | "">("");
+  const [orderStatusFilter, setOrderStatusFilter] = useState<AdminOrderStatusFilter | "">("");
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
   const [ordersRefreshKey, setOrdersRefreshKey] = useState(0);
 

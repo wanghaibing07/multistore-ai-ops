@@ -828,10 +828,10 @@
   color: #be123c;
 }
 
-/* Row 2: Compact 4-Capsule Summary Strip (frees vertical breathing room for wallpaper) */
+/* Row 2: Compact Capsule Summary Strip (frees vertical breathing room for wallpaper) */
 .kpi-summary-strip {
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 

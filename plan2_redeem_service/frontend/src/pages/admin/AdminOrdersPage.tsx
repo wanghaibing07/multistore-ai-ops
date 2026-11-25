@@ -11,7 +11,7 @@ import {
 } from "lucide-react";
 import { ApiError, listAdminCodes } from "../../api/client";
 import { OrderDisplayStatusBadge } from "../../components/StatusBadge";
-import type { AdminCodeListResponse, AdminCodeSummary, CodeStatus } from "../../types/api";
+import type { AdminCodeListResponse, AdminCodeSummary, AdminOrderStatusFilter } from "../../types/api";
 import {
   formatDateTime,
   formatUsd,
@@ -22,15 +22,16 @@ import { isImeComposing } from "../../utils/ime";
 
 interface AdminOrdersPageProps {
   token: string;
-  initialStatus: CodeStatus | "";
+  initialStatus: AdminOrderStatusFilter | "";
   refreshKey: number;
   onUnauthorized: () => void;
   onSelectCode: (code: string) => void;
 }
 
-const STATUS_TABS: Array<{ value: CodeStatus | ""; label: string }> = [
+const STATUS_TABS: Array<{ value: AdminOrderStatusFilter | ""; label: string }> = [
   { value: "", label: "全部" },
-  { value: "unused", label: "待提货" },
+  { value: "in_stock", label: "在库存" },
+  { value: "dispatched_unused", label: "已发出待提货" },
   { value: "waiting_fulfillment", label: "排队拉人中" },
   { value: "delivered_pending_warranty", label: "待交保修" },
   { value: "completed", label: "已完成" },
@@ -52,12 +53,17 @@ function renderSkuTag(skuKey: AdminCodeSummary["sku_key"]) {
 function renderOrderEmails(item: AdminCodeSummary) {
   const buyerEmail = item.buyer_email || item.buyer_email_masked;
   const storeEmail = item.store_email;
+  const isInStock =
+    item.status === "unused" &&
+    !(typeof item.is_dispatched === "boolean"
+      ? item.is_dispatched
+      : Boolean(item.external_order_id && item.external_order_id.trim()));
 
   if (item.sku_key === "ultra_exclusive_admin") {
     if (!buyerEmail && !storeEmail) {
       return (
         <span className="muted" style={{ color: "var(--ink-3)", fontSize: 12.5 }}>
-          还没提货
+          {isInStock ? "在库存未发出" : "还没提货"}
         </span>
       );
     }
@@ -87,7 +93,7 @@ function renderOrderEmails(item: AdminCodeSummary) {
   if (!buyerEmail) {
     return (
       <span className="muted" style={{ color: "var(--ink-3)", fontSize: 12.5 }}>
-        还没提货
+        {isInStock ? "在库存未发出" : "还没提货"}
       </span>
     );
   }
@@ -106,7 +112,7 @@ export function AdminOrdersPage({
   onUnauthorized,
   onSelectCode,
 }: AdminOrdersPageProps) {
-  const [statusFilter, setStatusFilter] = useState<CodeStatus | "">(initialStatus);
+  const [statusFilter, setStatusFilter] = useState<AdminOrderStatusFilter | "">(initialStatus);
   const [channelFilter, setChannelFilter] = useState("");
   const [skuFilter, setSkuFilter] = useState("");
   const [searchDraft, setSearchDraft] = useState("");
@@ -330,7 +336,9 @@ export function AdminOrdersPage({
                           {item.code}
                         </strong>
                         <span style={{ fontSize: 12, color: "var(--ink-3)" }}>
-                          {item.external_order_id || item.remark || "未绑定外部单号"}
+                          {item.external_order_id ||
+                            item.remark ||
+                            (item.status === "unused" ? "在库存（未绑定订单）" : "未绑定外部单号")}
                         </span>
                       </div>
                     </td>
@@ -349,6 +357,8 @@ export function AdminOrdersPage({
                           skuKey={item.sku_key}
                           status={item.status}
                           warrantyStatus={item.warranty_status}
+                          externalOrderId={item.external_order_id}
+                          isDispatched={item.is_dispatched}
                         />
                         {item.is_overdue_24h && (
                           <span className="badge badge-danger">
@@ -396,6 +406,8 @@ export function AdminOrdersPage({
                     skuKey={item.sku_key}
                     status={item.status}
                     warrantyStatus={item.warranty_status}
+                    externalOrderId={item.external_order_id}
+                    isDispatched={item.is_dispatched}
                   />
                 </div>
 

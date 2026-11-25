@@ -45,11 +45,20 @@ export function getOrderDisplayStatusMeta(item: {
   sku_key: SkuKey;
   status: CodeStatus;
   warranty_status?: WarrantyStatus | null;
+  external_order_id?: string | null;
+  is_dispatched?: boolean;
 }): StatusMeta {
-  if (item.sku_key === "ultra_exclusive_admin") {
-    if (item.status === "unused") {
-      return { label: "待领商店邮箱", tone: "neutral" };
+  if (item.status === "unused") {
+    const isDispatched =
+      typeof item.is_dispatched === "boolean"
+        ? item.is_dispatched
+        : Boolean(item.external_order_id && item.external_order_id.trim());
+    if (!isDispatched) {
+      return { label: "在库存", tone: "neutral" };
     }
+    return { label: "已发出待提货", tone: "info" };
+  }
+  if (item.sku_key === "ultra_exclusive_admin") {
     if (item.status === "validating" || item.status === "purchasing") {
       return { label: "正在出货", tone: "info" };
     }
@@ -94,6 +103,8 @@ export function getUpstreamStatusLabel(status: string | null | undefined): strin
 
 const STATUS_LABELS: Record<string, string> = {
   unused: "待提货",
+  in_stock: "在库存",
+  dispatched_unused: "已发出待提货",
   validating: "核对中",
   purchasing: "正在下单",
   waiting_fulfillment: "排队拉人中",
@@ -125,6 +136,12 @@ function translateAuditReason(rawReason: string): { title?: string; detail: stri
   switch (reason) {
     case "issued":
       return { title: "生成兑换码", detail: "已建好兑换码，等买家打开链接提货" };
+    case "agiso_card_pool_push":
+      return { title: "推送至阿奇索库存", detail: "已入库等待自动发卡" };
+    case "agiso_card_bound":
+      return { title: "阿奇索自动发卡", detail: "已绑定淘宝订单号，等待买家提货" };
+    case "qianniu_agiso_backfill":
+      return { title: "补录淘宝订单号", detail: "已根据千牛与阿奇索核对结果补齐外部单号" };
     case "redeem_claimed":
       return { title: "买家发起提货", detail: "买家点了确认提货，系统开始向上游下单" };
     case "exclusive_delivered":
