@@ -33,9 +33,8 @@ const STATUS_TABS: Array<{ value: AdminOrderStatusFilter | ""; label: string }> 
   { value: "in_stock", label: "在库存" },
   { value: "dispatched_unused", label: "已发出待提货" },
   { value: "waiting_fulfillment", label: "排队拉人中" },
-  { value: "delivered_pending_warranty", label: "待交保修" },
   { value: "completed", label: "已完成" },
-  { value: "needs_manual_review", label: "需人工处理" },
+  { value: "manual_attention", label: "需人工处理" },
   { value: "revoked", label: "已作废" },
 ];
 

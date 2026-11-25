@@ -1069,3 +1069,112 @@ def test_admin_distinguishes_in_stock_and_dispatched_unused_codes(components):
         assert after_bind["counts"]["in_stock"] == 1
         assert after_bind["counts"]["dispatched_unused"] == 2
 
+
+def test_admin_manual_attention_unifies_exception_and_warranty_states(components):
+    app, _, canboso, _, _ = components
+    with client(app) as c:
+        # 1. Raw exception order -> needs_manual_review
+        failed_code = issue(c, sku="ultra_shared_slot")
+        slot_product_id = SKUS["ultra_shared_slot"]["product_id"]
+        original_price = canboso.products[slot_product_id]["price"]["amount"]
+        canboso.products[slot_product_id]["price"]["amount"] = 99.0
+        failed_resp = c.post(
+            f"/api/v1/public/codes/{failed_code}/redeem",
+            json={"buyer_email": "fail.user@gmail.com", "buyer_email_confirm": "fail.user@gmail.com", "preflight_confirmed": True},
+        )
+        assert failed_resp.status_code == 200 and failed_resp.json()["status"] == "needs_manual_review"
+        canboso.products[slot_product_id]["price"]["amount"] = original_price
+
+        # 2. Exclusive order delivered, waiting for buyer warranty -> delivered_pending_warranty
+        pending_warranty_code = issue(c, sku="ultra_exclusive_admin")
+        pending_resp = c.post(
+            f"/api/v1/public/codes/{pending_warranty_code}/redeem",
+            json={"preflight_confirmed": True},
+        )
+        assert pending_resp.status_code == 200 and pending_resp.json()["status"] == "delivered_pending_warranty"
+
+        # 3. Exclusive order with buyer warranty submitted, waiting for merchant ack -> pending_warranty_ack
+        pending_ack_code = issue(c, sku="ultra_exclusive_admin")
+        ack_redeem = c.post(
+            f"/api/v1/public/codes/{pending_ack_code}/redeem",
+            json={"preflight_confirmed": True},
+        )
+        assert ack_redeem.status_code == 200 and ack_redeem.json()["status"] == "delivered_pending_warranty"
+        ack_war = c.post(
+            f"/api/v1/public/codes/{pending_ack_code}/warranty",
+            data={"admin_email": "exclusive.owner@gmail.com", "admin_email_confirm": "exclusive.owner@gmail.com", "note": "invited"},
+            files={"screenshot": ("proof.png", b"\x89PNG\r\n\x1a\nfake", "image/png")},
+        )
+        assert ack_war.status_code == 200 and ack_war.json()["status"] == "completed"
+
+        # 4. Shared order fully completed -> completed
+        shared_done_code = issue(c, sku="ultra_shared_slot")
+        shared_redeem = c.post(
+            f"/api/v1/public/codes/{shared_done_code}/redeem",
+            json={"buyer_email": "done.user@gmail.com", "buyer_email_confirm": "done.user@gmail.com", "preflight_confirmed": True},
+        )
+        assert shared_redeem.status_code == 200 and shared_redeem.json()["status"] == "waiting_fulfillment"
+        shared_row = app.state.ledger.get_code(shared_done_code)
+        canboso.orders[shared_row["upstream_order_code"]]["status"] = "completed"
+        canboso.orders[shared_row["upstream_order_code"]]["deliveredAt"] = now_iso()
+        poll_done = c.post(f"/api/v1/admin/codes/{shared_done_code}/poll", headers=ADMIN)
+        assert poll_done.status_code == 200 and poll_done.json()["status"] == "completed"
+
+        overview = c.get("/api/v1/admin/overview", headers=ADMIN).json()
+        counts = overview["counts"]
+        assert counts["needs_manual_review"] == 1
+        assert counts["delivered_pending_warranty"] == 1
+        assert counts["pending_warranty_ack"] == 1
+        assert counts["manual_attention"] == 3
+        assert counts["completed"] == 1
+
+        manual_list = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "manual_attention"}).json()
+        assert manual_list["total"] == 3
+        manual_by_code = {item["code"]: item for item in manual_list["items"]}
+        assert set(manual_by_code) == {failed_code, pending_warranty_code, pending_ack_code}
+        assert manual_by_code[failed_code]["status"] == "needs_manual_review"
+        assert manual_by_code[failed_code]["display_status"] == "needs_manual_review"
+        assert manual_by_code[pending_warranty_code]["status"] == "delivered_pending_warranty"
+        assert manual_by_code[pending_warranty_code]["display_status"] == "delivered_pending_warranty"
+        assert manual_by_code[pending_ack_code]["status"] == "completed"
+        assert manual_by_code[pending_ack_code]["warranty_status"] == "submitted"
+        assert manual_by_code[pending_ack_code]["display_status"] == "pending_warranty_ack"
+
+        completed_list = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "completed"}).json()
+        assert completed_list["total"] == 1
+        assert [item["code"] for item in completed_list["items"]] == [shared_done_code]
+
+        # Legacy raw filters still work cleanly
+        raw_manual = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "needs_manual_review"}).json()
+        assert [item["code"] for item in raw_manual["items"]] == [failed_code]
+        raw_pending_warranty = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "delivered_pending_warranty"}).json()
+        assert [item["code"] for item in raw_pending_warranty["items"]] == [pending_warranty_code]
+        pending_ack_only = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "pending_warranty_ack"}).json()
+        assert [item["code"] for item in pending_ack_only["items"]] == [pending_ack_code]
+
+        # Retry must stay strictly gated on raw needs_manual_review
+        charges_before = canboso.charge_count
+        retry_pending = c.post(f"/api/v1/admin/codes/{pending_warranty_code}/retry", headers=ADMIN, json={"note": "noop"})
+        retry_ack = c.post(f"/api/v1/admin/codes/{pending_ack_code}/retry", headers=ADMIN, json={"note": "noop"})
+        assert retry_pending.status_code == 200 and retry_pending.json()["status"] == "delivered_pending_warranty"
+        assert retry_ack.status_code == 200 and retry_ack.json()["status"] == "completed"
+        assert canboso.charge_count == charges_before
+
+        # After merchant marks warranty registered upstream, order leaves manual_attention and enters completed
+        acked = c.post(f"/api/v1/admin/codes/{pending_ack_code}/warranty-ack", headers=ADMIN, json={"note": "已转发上游"})
+        assert acked.status_code == 200
+        assert acked.json()["warranty_status"] == "registered_upstream"
+        assert acked.json()["display_status"] == "completed"
+
+        after_counts = c.get("/api/v1/admin/overview", headers=ADMIN).json()["counts"]
+        assert after_counts["needs_manual_review"] == 1
+        assert after_counts["delivered_pending_warranty"] == 1
+        assert after_counts["pending_warranty_ack"] == 0
+        assert after_counts["manual_attention"] == 2
+        assert after_counts["completed"] == 2
+
+        after_manual = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "manual_attention"}).json()
+        assert {item["code"] for item in after_manual["items"]} == {failed_code, pending_warranty_code}
+        after_completed = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "completed"}).json()
+        assert {item["code"] for item in after_completed["items"]} == {shared_done_code, pending_ack_code}
+

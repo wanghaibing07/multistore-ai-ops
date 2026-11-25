@@ -109,6 +109,8 @@ const STATUS_LABELS: Record<string, string> = {
   purchasing: "正在下单",
   waiting_fulfillment: "排队拉人中",
   delivered_pending_warranty: "已发商店邮箱 · 待交保修",
+  pending_warranty_ack: "买家已交保修 · 待你报备",
+  manual_attention: "需人工处理",
   completed: "已完成",
   needs_manual_review: "需人工处理",
   revoked: "已作废",

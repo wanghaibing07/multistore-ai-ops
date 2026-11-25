@@ -37,6 +37,17 @@ from .gateways import UpstreamError, UpstreamTimeout
 logger = logging.getLogger(__name__)
 
 EMAIL_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._%+-]*@(gmail\.com|googlemail\.com)$", re.IGNORECASE)
+IN_STOCK_SQL = "status='unused' AND COALESCE(TRIM(external_order_id), '') = ''"
+DISPATCHED_UNUSED_SQL = "status='unused' AND COALESCE(TRIM(external_order_id), '') <> ''"
+PENDING_WARRANTY_ACK_SQL = (
+    "status='completed' AND sku_key='ultra_exclusive_admin' "
+    "AND warranty_json IS NOT NULL AND json_valid(warranty_json) = 1 "
+    "AND json_extract(warranty_json, '$.status') = 'submitted'"
+)
+MANUAL_ATTENTION_SQL = (
+    f"(status IN ('needs_manual_review', 'delivered_pending_warranty') OR ({PENDING_WARRANTY_ACK_SQL}))"
+)
+COMPLETED_ADMIN_SQL = f"(status='completed' AND NOT ({PENDING_WARRANTY_ACK_SQL}))"
 SKUS = {
     "ultra_shared_slot": {"title": "Google Ultra x20 共享车位", "product_type": "slot", "product_id": "6ac26aaeec73a42d6430a837", "reference_price_usd": 13.47, "max_cost_usd": 16.0},
     "ultra_exclusive_admin": {"title": "Google Ultra x20 独享整组（管理员版）", "product_type": "account", "product_id": "6ae03419c0080f9e15f695a8", "reference_price_usd": 67.50, "max_cost_usd": 72.0},
@@ -584,12 +595,14 @@ class Service:
         delivery = json.loads(row["delivery_json"]) if row.get("delivery_json") else None
         resolved_email = row.get("buyer_email") or (warranty.get("admin_email") if isinstance(warranty, dict) else None) or None
         store_email = (delivery.get("account_text") if isinstance(delivery, dict) else None) or None
+        warranty_status = warranty.get("status") if isinstance(warranty, dict) else None
         is_dispatched = bool((row.get("external_order_id") or "").strip())
-        display_status = (
-            "dispatched_unused"
-            if row["status"] == "unused" and is_dispatched
-            else ("in_stock" if row["status"] == "unused" else row["status"])
-        )
+        if row["status"] == "unused":
+            display_status = "dispatched_unused" if is_dispatched else "in_stock"
+        elif row["status"] == "completed" and row["sku_key"] == "ultra_exclusive_admin" and warranty_status == "submitted":
+            display_status = "pending_warranty_ack"
+        else:
+            display_status = row["status"]
         return {
             "code": row["code"],
             "sku_key": row["sku_key"],
@@ -608,7 +621,7 @@ class Service:
             "upstream_order_code": row.get("upstream_order_code"),
             "upstream_status": row.get("upstream_status"),
             "cost_usd": row.get("cost_usd"),
-            "warranty_status": warranty.get("status") if isinstance(warranty, dict) else None,
+            "warranty_status": warranty_status,
             "last_error_code": row.get("last_error_code"),
             "last_error_message": row.get("last_error_message"),
             "is_overdue_24h": bool(elapsed is not None and elapsed > 24 * 60 and row["status"] == "waiting_fulfillment"),
@@ -648,10 +661,16 @@ class Service:
         skus = []
         for key in SKUS:
             skus.append(self.sku_status(key, catalog))
-        counts = {status: self._count("status=?", (status,)) for status in ("unused", "waiting_fulfillment", "delivered_pending_warranty", "completed", "needs_manual_review", "revoked")}
+        counts = {
+            status: self._count("status=?", (status,))
+            for status in ("unused", "waiting_fulfillment", "delivered_pending_warranty", "needs_manual_review", "revoked")
+        }
         counts.update({
-            "in_stock": self._count("status='unused' AND COALESCE(TRIM(external_order_id), '') = ''"),
-            "dispatched_unused": self._count("status='unused' AND COALESCE(TRIM(external_order_id), '') <> ''"),
+            "completed": self._count(COMPLETED_ADMIN_SQL),
+            "pending_warranty_ack": self._count(PENDING_WARRANTY_ACK_SQL),
+            "manual_attention": self._count(MANUAL_ATTENTION_SQL),
+            "in_stock": self._count(IN_STOCK_SQL),
+            "dispatched_unused": self._count(DISPATCHED_UNUSED_SQL),
             "total": self._count(),
             "overdue_24h": self._count("status='waiting_fulfillment' AND submitted_at < ?", ((datetime.now(timezone.utc).astimezone() - timedelta(hours=24)).isoformat(),)),
         })

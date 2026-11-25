@@ -191,8 +191,12 @@
   "counts": {
     "total": 0,
     "unused": 0,
+    "in_stock": 0,
+    "dispatched_unused": 0,
     "waiting_fulfillment": 0,
     "delivered_pending_warranty": 0,
+    "pending_warranty_ack": 0,
+    "manual_attention": 0,
     "completed": 0,
     "needs_manual_review": 0,
     "revoked": 0,
@@ -200,6 +204,10 @@
   }
 }
 ```
+- 计数口径说明：
+  - `manual_attention`：管理台「需人工处理」统一计数，包含异常停单（`needs_manual_review`）、独享待交保修（`delivered_pending_warranty`）与独享买家已交保修待报备（`pending_warranty_ack`，即 `status="completed"` 且 `warranty.status="submitted"`）。
+  - `completed`：排除 `pending_warranty_ack`，仅统计共享车位已完成或独享已向官方报备（`warranty.status="registered_upstream"`）的订单，避免与 `manual_attention` 重复计数。
+  - `needs_manual_review` 与 `delivered_pending_warranty` 继续保留底层原始状态计数。
 
 ### 5.2 强制刷新上游余额与 SKU 行情
 `POST /api/v1/admin/upstream/refresh`
@@ -257,6 +265,11 @@
 
 ### 5.5 订单与兑换码列表
 `GET /api/v1/admin/codes?status=&channel=&sku_key=&q=&page=1&page_size=20`
+- 状态筛选 `status` 支持底层原始状态，以及管理台聚合/虚拟筛选值：
+  - `in_stock` / `dispatched_unused`：拆分未提货码池与已发出待提货订单。
+  - `manual_attention`：统一返回需人工处理订单（`needs_manual_review` + `delivered_pending_warranty` + `pending_warranty_ack`），每行保留原始 `status` 与 `warranty_status` 以便前台徽章区分具体子状态，且 `/retry` 仍严格只允许原始 `needs_manual_review`。
+  - `pending_warranty_ack`：仅返回独享买家已交保修、待商家向上游报备订单。
+  - `completed`：排除 `pending_warranty_ack`（待商家报备订单在完成 `/warranty-ack` 后才进入「已完成」）。
 - 搜索参数 `q` 模糊匹配：`code`、`external_order_id`、`buyer_email`、`upstream_order_code`、`remark`、`warranty_json`、`delivery_json`（确保新旧独享单均可通过买家主邮箱或商店套餐邮箱 `store_email` 搜索命中）。
 - `200 OK`：
 ```json

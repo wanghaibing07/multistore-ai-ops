@@ -219,6 +219,12 @@ export function AdminPage() {
     );
   }
 
+  const manualAttentionCount =
+    overview.counts.manual_attention ??
+    overview.counts.needs_manual_review +
+      overview.counts.delivered_pending_warranty +
+      (overview.counts.pending_warranty_ack ?? 0);
+
   const navItems: Array<{
     id: AdminTab;
     label: string;
@@ -231,7 +237,7 @@ export function AdminPage() {
       id: "orders",
       label: "订单和保修",
       icon: ClipboardList,
-      count: overview.counts.needs_manual_review,
+      count: manualAttentionCount,
     },
     { id: "settings", label: "价格与设置", icon: Sliders },
   ];

@@ -36,6 +36,11 @@ export function AdminOverviewPage({
   };
 
   const { canboso, counts, skus } = overview;
+  const manualAttentionCount =
+    counts.manual_attention ??
+    counts.needs_manual_review +
+      counts.delivered_pending_warranty +
+      (counts.pending_warranty_ack ?? 0);
 
   const priorityItems: Array<{
     key: string;
@@ -64,10 +69,10 @@ export function AdminOverviewPage({
     {
       key: "review",
       label: "需人工处理",
-      value: counts.needs_manual_review,
-      meta: "超价停单、余额不够或上游出错",
-      status: "needs_manual_review",
-      highlight: counts.needs_manual_review > 0 ? "alert" : "idle",
+      value: manualAttentionCount,
+      meta: "异常停单、独享待交保修与待你报备",
+      status: "manual_attention",
+      highlight: manualAttentionCount > 0 ? "alert" : "idle",
     },
     {
       key: "overdue",
@@ -107,17 +112,9 @@ export function AdminOverviewPage({
       key: "completed",
       label: "已完成",
       value: counts.completed,
-      meta: "共享已拉群，独享已交保修",
+      meta: "共享已拉群，独享已报备",
       status: "completed",
       highlight: counts.completed > 0 ? "success" : "idle",
-    },
-    {
-      key: "warranty",
-      label: "待交保修 / 待报备",
-      value: counts.delivered_pending_warranty,
-      meta: "独享已发商店邮箱，等买家交保修",
-      status: "delivered_pending_warranty",
-      highlight: counts.delivered_pending_warranty > 0 ? "amber" : "idle",
     },
     {
       key: "revoked",

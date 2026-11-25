@@ -38,7 +38,16 @@ from .models import (
     SkuPatchRequest,
     WarrantyAckRequest,
 )
-from .service import Mailer, SKUS, Service
+from .service import (
+    COMPLETED_ADMIN_SQL,
+    DISPATCHED_UNUSED_SQL,
+    IN_STOCK_SQL,
+    MANUAL_ATTENTION_SQL,
+    PENDING_WARRANTY_ACK_SQL,
+    Mailer,
+    SKUS,
+    Service,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -456,9 +465,15 @@ def create_app(
     def list_codes(status: Optional[str] = None, channel: Optional[str] = None, sku_key: Optional[str] = None, q: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), svc: Service = Depends(get_service)) -> Any:
         clauses, params = [], []
         if status == "in_stock":
-            clauses.append("status='unused' AND COALESCE(TRIM(external_order_id), '') = ''")
+            clauses.append(IN_STOCK_SQL)
         elif status == "dispatched_unused":
-            clauses.append("status='unused' AND COALESCE(TRIM(external_order_id), '') <> ''")
+            clauses.append(DISPATCHED_UNUSED_SQL)
+        elif status == "manual_attention":
+            clauses.append(MANUAL_ATTENTION_SQL)
+        elif status == "pending_warranty_ack":
+            clauses.append(PENDING_WARRANTY_ACK_SQL)
+        elif status == "completed":
+            clauses.append(COMPLETED_ADMIN_SQL)
         elif status:
             clauses.append("status=?")
             params.append(status)

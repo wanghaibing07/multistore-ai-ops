@@ -12,7 +12,12 @@ export type CodeStatus =
   | "needs_manual_review"
   | "revoked";
 
-export type AdminOrderStatusFilter = CodeStatus | "in_stock" | "dispatched_unused";
+export type AdminOrderStatusFilter =
+  | CodeStatus
+  | "in_stock"
+  | "dispatched_unused"
+  | "manual_attention"
+  | "pending_warranty_ack";
 
 export type WarrantyStatus = "pending" | "submitted" | "registered_upstream";
 
@@ -111,6 +116,8 @@ export interface AdminOverviewCounts {
   dispatched_unused: number;
   waiting_fulfillment: number;
   delivered_pending_warranty: number;
+  pending_warranty_ack: number;
+  manual_attention: number;
   completed: number;
   needs_manual_review: number;
   revoked: number;
