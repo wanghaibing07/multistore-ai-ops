@@ -53,9 +53,13 @@ class Settings:
     agiso_auto_send_tb_card: bool = True
     agiso_auto_send_ww_msg: bool = False
     agiso_auto_revoke_on_refund: bool = True
+    agiso_auto_restore_on_refund_close: bool = True
     agiso_poll_enabled: bool = False
     agiso_poll_interval_seconds: int = 120
     agiso_sku_rules_json: str = ""
+    agiso_restock_enabled: bool = False
+    agiso_restock_interval_seconds: int = 900
+    agiso_restock_rules_json: str = ""
 
     @classmethod
     def from_env(cls) -> "Settings":
@@ -85,8 +89,11 @@ class Settings:
             "agiso_auto_send_tb_card": _parse_bool,
             "agiso_auto_send_ww_msg": _parse_bool,
             "agiso_auto_revoke_on_refund": _parse_bool,
+            "agiso_auto_restore_on_refund_close": _parse_bool,
             "agiso_poll_enabled": _parse_bool,
             "agiso_poll_interval_seconds": int,
+            "agiso_restock_enabled": _parse_bool,
+            "agiso_restock_interval_seconds": int,
         }
         for key in values:
             env_name = "PLAN2_" + key.upper()

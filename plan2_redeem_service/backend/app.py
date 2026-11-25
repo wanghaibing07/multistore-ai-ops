@@ -2,16 +2,18 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 import json
 import logging
 from pathlib import Path
 import time
 from typing import Any, Optional
 
-from fastapi import Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
 
 from .agiso import (
+    AOPIC_AUTO_SEND_SUCCESS,
     AgisoClient,
     AgisoError,
     DryRunAgisoClient,
@@ -25,6 +27,7 @@ from .gateways import CanbosoClient, Channel16688Client, DryRun16688, DryRunCanb
 from .models import (
     AgisoOrderRetryRequest,
     AgisoPushCardsRequest,
+    AgisoRestockRequest,
     AgisoSkuMappingRequest,
     AgisoSyncOrdersRequest,
     BatchRequest,
@@ -104,12 +107,47 @@ def create_app(
                 await asyncio.to_thread(service.sync_agiso_orders)
             except Exception as exc:
                 logger.warning("background agiso sync failed error=%s", type(exc).__name__)
+                hour_bucket = datetime.now(timezone.utc).strftime("%Y%m%d%H")
+                detail = str(exc)[:300]
+
+                def _record_poll_error() -> None:
+                    ledger.record_agiso_event(
+                        source="poll",
+                        from_platform="TbAlds",
+                        aopic=None,
+                        tid="",
+                        oid="",
+                        status="poll_error",
+                        detail=detail,
+                    )
+                    service._agiso_alert(
+                        f"poll-error:{hour_bucket}",
+                        "阿奇索定时补漏巡检失败（需排查）",
+                        f"后台定时同步阿奇索订单失败（{type(exc).__name__}）：{detail}",
+                    )
+
+                try:
+                    await asyncio.to_thread(_record_poll_error)
+                except Exception:
+                    logger.warning("recording agiso poll error failed")
+
+    async def agiso_restocker() -> None:
+        while True:
+            await asyncio.sleep(max(30, settings.agiso_restock_interval_seconds))
+            if not settings.agiso_restock_enabled or not getattr(agiso, "is_ready", False):
+                continue
+            try:
+                await asyncio.to_thread(service.check_and_restock_agiso_cards, trigger="scheduler")
+            except Exception as exc:
+                logger.warning("background agiso restock failed error=%s", type(exc).__name__)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         tasks = [asyncio.create_task(poller())]
         if settings.agiso_poll_enabled:
             tasks.append(asyncio.create_task(agiso_poller()))
+        if settings.agiso_restock_enabled:
+            tasks.append(asyncio.create_task(agiso_restocker()))
         try:
             yield
         finally:
@@ -139,7 +177,11 @@ def create_app(
         return {"status": "ok", "execution_mode": settings.execution_mode}
 
     @app.post("/api/v1/webhooks/agiso")
-    async def agiso_webhook(request: Request, svc: Service = Depends(get_service)) -> PlainTextResponse:
+    async def agiso_webhook(
+        request: Request,
+        background_tasks: BackgroundTasks,
+        svc: Service = Depends(get_service),
+    ) -> PlainTextResponse:
         if not settings.agiso_app_secret.strip():
             return PlainTextResponse("服务未配置", status_code=503)
         try:
@@ -234,7 +276,7 @@ def create_app(
             )
             return PlainTextResponse("参数错误", status_code=400)
 
-        status_code, body_text, _ = await asyncio.to_thread(
+        status_code, body_text, outcome = await asyncio.to_thread(
             svc.handle_agiso_webhook,
             from_platform=from_platform,
             aopic=aopic,
@@ -242,6 +284,27 @@ def create_app(
             timestamp=timestamp_raw,
             sign=sign,
         )
+        if (
+            status_code == 200
+            and aopic == AOPIC_AUTO_SEND_SUCCESS
+            and settings.agiso_restock_enabled
+            and getattr(agiso, "is_ready", False)
+            and isinstance(outcome, dict)
+            and outcome.get("bound_sku_keys")
+        ):
+            bound_sku_keys = list(outcome["bound_sku_keys"])
+
+            def _run_webhook_restock() -> None:
+                try:
+                    svc.check_and_restock_agiso_cards(sku_keys=bound_sku_keys, trigger="webhook_2048")
+                except Exception as exc:
+                    logger.warning(
+                        "webhook-triggered agiso restock failed skus=%s error=%s",
+                        bound_sku_keys,
+                        type(exc).__name__,
+                    )
+
+            background_tasks.add_task(_run_webhook_restock)
         return PlainTextResponse(body_text, status_code=status_code)
 
     @app.get("/api/v1/public/codes/{code}")
@@ -432,7 +495,8 @@ def create_app(
             return error("CODE_NOT_FOUND", "没找到这个兑换码", 404)
         if row["status"] == "completed":
             return error("CANNOT_REVOKE_COMPLETED", "这笔单已经完成了，不能作废", 409)
-        svc.ledger.transition(code, "revoked", body.reason, {"last_error_code": "REVOKED"})
+        if svc.ledger.transition(code, "revoked", body.reason, {"last_error_code": "REVOKED"}):
+            svc.ledger.mark_agiso_delivery_revoked(code)
         return svc.admin_detail(ledger.get_code(code))
 
     @app.post("/api/v1/admin/codes/{code}/retry", dependencies=[Depends(require_admin)])
@@ -597,6 +661,32 @@ def create_app(
                 "UNKNOWN_SKU": "找不到这个商品 SKU",
             }
             return error(str(exc), messages.get(str(exc), "推送卡密参数不对"), 422)
+        except AgisoError as exc:
+            return error("AGISO_ERROR", exc.message, 503)
+
+    @app.get("/api/v1/admin/agiso/stock", dependencies=[Depends(require_admin)])
+    def admin_agiso_stock(
+        sku_keys: Optional[str] = Query(default=None),
+        svc: Service = Depends(get_service),
+    ) -> Any:
+        parsed_skus = [item.strip() for item in sku_keys.split(",") if item.strip()] if sku_keys else None
+        try:
+            return svc.get_agiso_card_stock(sku_keys=parsed_skus)
+        except AgisoError as exc:
+            return error("AGISO_ERROR", exc.message, 503)
+
+    @app.post("/api/v1/admin/agiso/restock", dependencies=[Depends(require_admin)])
+    def admin_agiso_restock(
+        body: Optional[AgisoRestockRequest] = None,
+        svc: Service = Depends(get_service),
+    ) -> Any:
+        req = body or AgisoRestockRequest()
+        try:
+            return svc.check_and_restock_agiso_cards(
+                sku_keys=req.sku_keys,
+                dry_check=req.dry_check,
+                trigger="manual",
+            )
         except AgisoError as exc:
             return error("AGISO_ERROR", exc.message, 503)
 

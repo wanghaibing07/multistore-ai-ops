@@ -689,18 +689,21 @@ def test_issue_wangwang_message_contains_link_and_code_for_both_skus(components)
             f"点链接自助填 Gmail 提货（不用在旺旺发邮箱）：{slot_resp['redeem_url']}\n"
             f"兑换码：{slot_resp['code']}\n"
             "\n"
-            "【提货前准备】\n"
-            "1. 关闭付款资料：https://payments.google.com/gp/w/home/settings\n"
+            "【重要提醒】\n"
+            "本单为虚拟服务，淘宝显示“无需物流已发货”即代表已发出提货码与提货链接（非实物、非空包裹），请直接点击上方链接自助提货。\n"
+            "\n"
+            "【提货前必查（缺一不可）】\n"
+            "1. 关闭 Google 付款资料：https://payments.google.com/gp/w/home/settings\n"
             "2. 退出原有家庭组：https://g.co/yourfamily\n"
-            "3. 近 12 个月内没换过家庭组，不然可能进不来\n"
+            "3. 近 12 个月内从未加入、退出或被重拉进任何 Google 家庭组（Google 官方限制每 12 个月仅可更换 1 次家庭组，哪怕仅 1 次或原组掉线重拉也会触发冷却导致无法进组）。\n"
             "\n"
-            "【发货与进度】\n"
-            "提交邮箱后一般 2-6 小时内发家庭组邀请（最晚 24 小时），未超时勿催；随时可点链接看进度，收到邮件接受邀请即可。\n"
+            "【发货与排队时效】\n"
+            "提交 Gmail 后即锁定上游车位，一般 2-6 小时内发家庭组邀请（最晚 24 小时），排队期间属正常履约，未超时勿催；随时可点提货链接查看进度，收到邮件接受邀请即可。\n"
             "\n"
-            "【使用须知】\n"
+            "【质保与退款/换号规则】\n"
             "1. 质保 30 天会员权益，不质保您的 Google 账号；自行反代或违反官方条款导致封号不负责。\n"
             "2. 本款为 0 积分/点数车位，使用积分或点数会被机器人检测踢出家庭组且不退款。\n"
-            "3. 确认后非商品问题不退款；买家原因填错邮箱或需换号，需补 39.9 元手续费。"
+            "3. 提交邮箱后非商品问题（含 12 个月换组冷却、未退旧家庭组、未关付款资料、填错邮箱等买家自身原因）不支持全额退款；买家可补 49.9 元手续费更换新 Gmail 履约，或协商扣除 49.9 元车位实损后退还余款。"
         )
         assert "Gmail" in slot_resp["wangwang_message"]
         slot_public = c.get(f"/api/v1/public/codes/{slot_resp['code']}").json()
@@ -716,21 +719,24 @@ def test_issue_wangwang_message_contains_link_and_code_for_both_skus(components)
             f"点链接自助秒领会员邮箱：{excl_resp['redeem_url']}\n"
             f"兑换码：{excl_resp['code']}\n"
             "\n"
-            "【开通前准备】\n"
-            "1. 关闭付款资料：https://payments.google.com/gp/w/home/settings\n"
+            "【重要提醒】\n"
+            "本单为虚拟服务，淘宝显示“无需物流已发货”即代表已发出提货码与提货链接（非实物、非空包裹），请直接点击上方链接自助秒领会员邮箱。\n"
+            "\n"
+            "【开通前必查】\n"
+            "1. 关闭 Google 付款资料：https://payments.google.com/gp/w/home/settings\n"
             "2. 退出原有家庭组：https://g.co/yourfamily\n"
-            "3. 准备一个稳定的主力 Gmail，自己当管理员\n"
+            "3. 准备一个稳定的主力 Gmail 自己当管理员，且近 12 个月内未触发 Google 家庭组更换冷却（官方每 12 个月仅限更换 1 次，含原组重拉）。\n"
             "\n"
             "【开通流程】\n"
             "1. 点上面链接秒领会员邮箱。\n"
             "2. 用主力 Gmail 创建家庭组并邀请该会员邮箱加入，通过后即享 Ultra 权益，自己还能再拉 4 人。\n"
             "3. 发出邀请后，务必回到同一提货页上传「已发出邀请」截图登记 30 天质保（一般 2-6 小时内处理，最晚 24 小时，未超时勿催）。\n"
             "\n"
-            "【质保与须知】\n"
+            "【质保与退款/换号规则】\n"
             "1. 千万别踢掉我们给的会员邮箱！踢掉会失去会员，不保修。\n"
-            "2. 质保 30 天（从领号起算），非本人原因掉会员免费保修；确认后非商品问题不退款。\n"
+            "2. 质保 30 天（从领号起算），非本人原因掉会员免费保修；确认领号后非商品问题不支持全额退款。\n"
             "3. 自己的 Gmail 被封、无法登录不保修。\n"
-            "4. 自己号被封、无法登录或误踢权益号导致掉权益，补救/换号收 79.9 元手续费，且不保证成功恢复。"
+            "4. 自己号被封、无法登录、账号冷却受限或误踢权益号导致无法使用/掉权益，补救/换号收 79.9 元手续费，且不保证成功恢复。"
         )
         excl_public = c.get(f"/api/v1/public/codes/{excl_resp['code']}").json()
         assert excl_public["sku_title"] == "Google Ultra x20 独享整组（管理员版）"
@@ -748,7 +754,7 @@ def test_issue_wangwang_message_contains_link_and_code_for_both_skus(components)
         assert "点链接自助秒领会员邮箱：" in merged_msg
         assert "https://payments.google.com/gp/w/home/settings" in merged_msg
         assert "https://g.co/yourfamily" in merged_msg
-        assert "39.9 元手续费" in merged_msg
+        assert "49.9 元手续费" in merged_msg
         assert "79.9 元手续费" in merged_msg
         assert "千万别踢掉我们给的会员邮箱" in merged_msg
         assert "2-6 小时" in merged_msg
@@ -766,7 +772,7 @@ def test_issue_wangwang_message_contains_link_and_code_for_both_skus(components)
         )
         assert "https://payments.google.com/gp/w/home/settings" in multi_slot_msg
         assert "https://g.co/yourfamily" in multi_slot_msg
-        assert "39.9 元手续费" in multi_slot_msg
+        assert "49.9 元手续费" in multi_slot_msg
         assert "【共享车位·提货与使用须知】" not in multi_slot_msg
         assert "79.9 元手续费" not in multi_slot_msg
 

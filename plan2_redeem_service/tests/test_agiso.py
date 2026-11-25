@@ -17,6 +17,7 @@ from backend.agiso import (
     AgisoError,
     DryRunAgisoClient,
     match_agiso_sku,
+    parse_env_restock_rules,
     sign_agiso_api_params,
     verify_agiso_push_signature,
 )
@@ -648,3 +649,529 @@ def test_agiso_client_headers_redaction_and_trades_buyer_pay_shapes(monkeypatch:
     assert TEST_ACCESS_TOKEN not in exc_info.value.message
     assert TEST_APP_SECRET not in exc_info.value.message
     assert "[REDACTED]" in exc_info.value.message
+
+
+def test_parse_env_restock_rules_validation():
+    assert parse_env_restock_rules("") == []
+    parsed = parse_env_restock_rules(
+        json.dumps(
+            [
+                {
+                    "sku_key": "ultra_shared_slot",
+                    "cpc_id": "3007871",
+                    "min_stock": 5,
+                    "target_stock": 20,
+                    "max_push": 15,
+                    "is_use_first": True,
+                }
+            ]
+        )
+    )
+    assert len(parsed) == 1
+    assert parsed[0]["sku_key"] == "ultra_shared_slot"
+    assert parsed[0]["cpc_id"] == 3007871
+    assert parsed[0]["min_stock"] == 5
+    assert parsed[0]["target_stock"] == 20
+    assert parsed[0]["max_push"] == 15
+    assert parsed[0]["enabled"] is True
+    assert parsed[0]["is_use_first"] is True
+
+    for bad_json in (
+        "{}",
+        json.dumps([{"cpc_id": 10, "target_stock": 5}]),
+        json.dumps([{"sku_key": "ultra_shared_slot", "cpc_id": 0, "target_stock": 5}]),
+        json.dumps([{"sku_key": "ultra_shared_slot", "cpc_id": 10, "min_stock": 10, "target_stock": 5}]),
+        json.dumps([{"sku_key": "ultra_shared_slot", "cpc_id": 10, "target_stock": 5, "max_push": 501}]),
+        json.dumps([{"sku_key": "ultra_shared_slot", "cpc_id": True, "target_stock": 5}]),
+    ):
+        with pytest.raises(ValueError):
+            parse_env_restock_rules(bad_json)
+
+
+def test_aopic_2048_native_delivery_conflict_alert_and_prevents_double_fulfillment(tmp_path: Path):
+    env_rules = json.dumps([{"sku_key": "ultra_shared_slot", "num_iid": "1100001"}])
+    app, _, _, _, mailer, agiso = build_agiso_env(tmp_path, agiso_sku_rules_json=env_rules)
+    with TestClient(app) as client:
+        code_slot = client.post(
+            "/api/v1/admin/codes/issue",
+            json={"sku_key": "ultra_shared_slot", "channel": "taobao"},
+            headers=ADMIN_HEADERS,
+        ).json()["code"]
+
+        payload_2048 = {
+            "Tid": "9300",
+            "BuyerNick": "tb_native_buyer",
+            "Orders": [
+                {
+                    "Oid": "9301",
+                    "NumIid": "1100001",
+                    "SkuId": "SKU-9301",
+                    "SendCards": [
+                        {
+                            "CpcId": 3007871,
+                            "Cards": [
+                                {"Card": f"http://testserver/r/{code_slot}", "Pwd": code_slot},
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        first_resp = post_webhook(client, payload_2048, aopic=2048)
+        assert first_resp.status_code == 200
+        deliveries = app.state.ledger.list_agiso_deliveries_by_tid("9300")
+        assert len(deliveries) == 1
+        assert deliveries[0]["delivery_key"] == f"native:9300:9301:{code_slot}"
+        assert deliveries[0]["delivery_status"] == "delivered"
+        assert len(mailer.sent) == 0
+
+        pay_resp = post_webhook(
+            client,
+            {
+                "Tid": "9300",
+                "Status": "WAIT_SELLER_SEND_GOODS",
+                "Orders": [{"Oid": "9301", "NumIid": "1100001", "Num": 1}],
+            },
+            aopic=2,
+        )
+        assert pay_resp.status_code == 200
+        assert len(agiso.calls) == 0
+        assert len(app.state.ledger.list_agiso_deliveries_by_tid("9300")) == 1
+
+        retry_resp = client.post(
+            "/api/v1/admin/agiso/orders/9300/retry",
+            json={"fetch_from_agiso": True},
+            headers=ADMIN_HEADERS,
+        )
+        assert retry_resp.status_code == 200
+        assert retry_resp.json()["status"] == "already_bound_external"
+        assert len(agiso.calls) == 0
+
+        conflict_resp = post_webhook(client, {**payload_2048, "Tid": "9399"}, aopic=2048)
+        assert conflict_resp.status_code == 200
+        assert len(mailer.sent) == 1
+        assert "冲突" in mailer.sent[0]["subject"]
+
+
+def test_out_of_order_refund_before_2048_replays_and_respects_refund_close(tmp_path: Path):
+    app, _, _, _, mailer, _ = build_agiso_env(tmp_path)
+    with TestClient(app) as client:
+        code_revoked = client.post(
+            "/api/v1/admin/codes/issue",
+            json={"sku_key": "ultra_shared_slot", "channel": "taobao"},
+            headers=ADMIN_HEADERS,
+        ).json()["code"]
+
+        early_refund_1 = post_webhook(
+            client,
+            {"Tid": "9400", "Oid": "9401", "RefundId": "RF-9400", "RefundFee": "199.90"},
+            aopic=256,
+        )
+        early_refund_2 = post_webhook(
+            client,
+            {"Tid": "9400", "Oid": "9401", "RefundId": "RF-9400", "RefundFee": "199.90"},
+            aopic=256,
+        )
+        assert early_refund_1.status_code == 200
+        assert early_refund_2.status_code == 200
+
+        send_2048 = post_webhook(
+            client,
+            {
+                "Tid": "9400",
+                "Orders": [
+                    {
+                        "Oid": "9401",
+                        "SendCards": [
+                            {"CpcId": 3007871, "Cards": [{"Card": f"http://testserver/r/{code_revoked}", "Pwd": code_revoked}]}
+                        ],
+                    }
+                ],
+            },
+            aopic=2048,
+        )
+        assert send_2048.status_code == 200
+        assert app.state.ledger.get_code(code_revoked)["status"] == "revoked"
+        deliveries = app.state.ledger.list_agiso_deliveries_by_tid("9400")
+        assert deliveries[0]["delivery_status"] == "revoked"
+        events_9400 = client.get("/api/v1/admin/agiso/events", params={"tid": "9400"}, headers=ADMIN_HEADERS).json()["items"]
+        replayed_revokes = [item for item in events_9400 if item["status"] == "refund_revoked"]
+        assert len(replayed_revokes) == 1
+        assert len(mailer.sent) == 0
+
+        code_closed = client.post(
+            "/api/v1/admin/codes/issue",
+            json={"sku_key": "ultra_shared_slot", "channel": "taobao"},
+            headers=ADMIN_HEADERS,
+        ).json()["code"]
+        assert post_webhook(
+            client,
+            {"Tid": "9450", "Oid": "9451", "RefundId": "RF-9450", "RefundFee": "199.90"},
+            aopic=256,
+        ).status_code == 200
+        assert post_webhook(
+            client,
+            {"Tid": "9450", "Oid": "9451", "RefundId": "RF-9450", "RefundFee": "199.90"},
+            aopic=32768,
+        ).status_code == 200
+        assert post_webhook(
+            client,
+            {
+                "Tid": "9450",
+                "Orders": [
+                    {
+                        "Oid": "9451",
+                        "SendCards": [
+                            {"CpcId": 3007871, "Cards": [{"Card": f"http://testserver/r/{code_closed}", "Pwd": code_closed}]}
+                        ],
+                    }
+                ],
+            },
+            aopic=2048,
+        ).status_code == 200
+        assert app.state.ledger.get_code(code_closed)["status"] == "unused"
+        assert app.state.ledger.list_agiso_deliveries_by_tid("9450")[0]["delivery_status"] == "delivered"
+
+
+def test_aopic_32768_refund_close_safe_restore_and_guards(tmp_path: Path):
+    app, _, _, _, mailer, _ = build_agiso_env(tmp_path)
+    with TestClient(app) as client:
+        code_restore = client.post(
+            "/api/v1/admin/codes/issue",
+            json={"sku_key": "ultra_shared_slot", "channel": "taobao"},
+            headers=ADMIN_HEADERS,
+        ).json()["code"]
+        assert post_webhook(
+            client,
+            {
+                "Tid": "9600",
+                "Orders": [
+                    {
+                        "Oid": "9601",
+                        "SendCards": [
+                            {"CpcId": 3007871, "Cards": [{"Card": f"http://testserver/r/{code_restore}", "Pwd": code_restore}]}
+                        ],
+                    }
+                ],
+            },
+            aopic=2048,
+        ).status_code == 200
+        assert post_webhook(
+            client,
+            {"Tid": "9600", "Oid": "9601", "RefundId": "RF-9600", "RefundFee": "199.90"},
+            aopic=256,
+        ).status_code == 200
+        assert app.state.ledger.get_code(code_restore)["status"] == "revoked"
+        assert app.state.ledger.list_agiso_deliveries_by_tid("9600")[0]["delivery_status"] == "revoked"
+
+        close_resp = post_webhook(
+            client,
+            {"Tid": "9600", "Oid": "9601", "RefundId": "RF-9600", "RefundFee": "199.90"},
+            aopic=32768,
+        )
+        assert close_resp.status_code == 200
+        restored_row = app.state.ledger.get_code(code_restore)
+        assert restored_row["status"] == "unused"
+        assert restored_row["last_error_code"] is None
+        assert restored_row["last_error_message"] is None
+        assert app.state.ledger.list_agiso_deliveries_by_tid("9600")[0]["delivery_status"] == "delivered"
+        assert len(mailer.sent) == 0
+
+        noop_resp = post_webhook(
+            client,
+            {"Tid": "9600", "Oid": "9601", "RefundId": "RF-9600", "RefundFee": "199.90"},
+            aopic=32768,
+        )
+        assert noop_resp.status_code == 200
+        events_9600 = client.get("/api/v1/admin/agiso/events", params={"tid": "9600"}, headers=ADMIN_HEADERS).json()["items"]
+        assert events_9600[0]["status"] == "refund_close_noop"
+
+        code_manual = client.post(
+            "/api/v1/admin/codes/issue",
+            json={"sku_key": "ultra_shared_slot", "channel": "taobao"},
+            headers=ADMIN_HEADERS,
+        ).json()["code"]
+        assert post_webhook(
+            client,
+            {
+                "Tid": "9610",
+                "Orders": [
+                    {
+                        "Oid": "9611",
+                        "SendCards": [
+                            {"CpcId": 3007871, "Cards": [{"Card": f"http://testserver/r/{code_manual}", "Pwd": code_manual}]}
+                        ],
+                    }
+                ],
+            },
+            aopic=2048,
+        ).status_code == 200
+        revoke_resp = client.post(
+            f"/api/v1/admin/codes/{code_manual}/revoke",
+            json={"reason": "运营手动作废"},
+            headers=ADMIN_HEADERS,
+        )
+        assert revoke_resp.status_code == 200
+        assert app.state.ledger.list_agiso_deliveries_by_tid("9610")[0]["delivery_status"] == "revoked"
+        assert post_webhook(
+            client,
+            {"Tid": "9610", "Oid": "9611", "RefundId": "RF-9610"},
+            aopic=32768,
+        ).status_code == 200
+        assert app.state.ledger.get_code(code_manual)["status"] == "revoked"
+        assert len(mailer.sent) == 1
+        assert "撤销退款" in mailer.sent[0]["subject"]
+
+        code_refunded_ok = client.post(
+            "/api/v1/admin/codes/issue",
+            json={"sku_key": "ultra_shared_slot", "channel": "taobao"},
+            headers=ADMIN_HEADERS,
+        ).json()["code"]
+        assert post_webhook(
+            client,
+            {
+                "Tid": "9620",
+                "Orders": [
+                    {
+                        "Oid": "9621",
+                        "SendCards": [
+                            {"CpcId": 3007871, "Cards": [{"Card": f"http://testserver/r/{code_refunded_ok}", "Pwd": code_refunded_ok}]}
+                        ],
+                    }
+                ],
+            },
+            aopic=2048,
+        ).status_code == 200
+        assert post_webhook(client, {"Tid": "9620", "Oid": "9621", "RefundId": "RF-9620"}, aopic=256).status_code == 200
+        assert post_webhook(client, {"Tid": "9620", "Oid": "9621", "RefundId": "RF-9620"}, aopic=65536).status_code == 200
+        assert post_webhook(client, {"Tid": "9620", "Oid": "9621", "RefundId": "RF-9620"}, aopic=32768).status_code == 200
+        assert app.state.ledger.get_code(code_refunded_ok)["status"] == "revoked"
+        assert len(mailer.sent) == 2
+
+    app_disabled, _, _, _, mailer_disabled, _ = build_agiso_env(
+        tmp_path / "disabled_flags",
+        agiso_auto_revoke_on_refund=False,
+        agiso_auto_restore_on_refund_close=False,
+    )
+    with TestClient(app_disabled) as client:
+        code_no_auto = client.post(
+            "/api/v1/admin/codes/issue",
+            json={"sku_key": "ultra_shared_slot", "channel": "taobao"},
+            headers=ADMIN_HEADERS,
+        ).json()["code"]
+        assert post_webhook(
+            client,
+            {
+                "Tid": "9630",
+                "Orders": [
+                    {
+                        "Oid": "9631",
+                        "SendCards": [
+                            {"CpcId": 3007871, "Cards": [{"Card": f"http://testserver/r/{code_no_auto}", "Pwd": code_no_auto}]}
+                        ],
+                    }
+                ],
+            },
+            aopic=2048,
+        ).status_code == 200
+        assert post_webhook(client, {"Tid": "9630", "Oid": "9631", "RefundId": "RF-9630"}, aopic=256).status_code == 200
+        assert app_disabled.state.ledger.get_code(code_no_auto)["status"] == "unused"
+        assert len(mailer_disabled.sent) == 1
+        assert "未开启自动作废" in mailer_disabled.sent[0]["subject"]
+
+
+def test_push_cards_partial_and_zero_success_handling(tmp_path: Path):
+    app, _, _, _, mailer, agiso = build_agiso_env(tmp_path)
+    with TestClient(app) as client:
+        agiso.card_pwd_add_response = {
+            "AddSuccessCount": 0,
+            "AddFailCount": 2,
+            "ReplaceUnSoldSuccessCount": 0,
+            "ReplaceSoldSuccessCount": 0,
+            "ReplaceFailCount": 0,
+            "ResultMsg": "重复卡号",
+        }
+        zero_resp = client.post(
+            "/api/v1/admin/agiso/push-cards",
+            json={"sku_key": "ultra_shared_slot", "cpc_id": 3007871, "count": 2, "batch_label": "zero-ok"},
+            headers=ADMIN_HEADERS,
+        )
+        assert zero_resp.status_code == 503
+        all_after_zero = client.get("/api/v1/admin/codes", params={"page_size": 100}, headers=ADMIN_HEADERS).json()["items"]
+        assert len(all_after_zero) == 2
+        assert all(item["status"] == "revoked" for item in all_after_zero)
+
+        agiso.card_pwd_add_response = {
+            "AddSuccessCount": 2,
+            "AddFailCount": 1,
+            "ReplaceUnSoldSuccessCount": 0,
+            "ReplaceSoldSuccessCount": 0,
+            "ReplaceFailCount": 0,
+            "ResultMsg": "1条重复",
+        }
+        partial_resp = client.post(
+            "/api/v1/admin/agiso/push-cards",
+            json={"sku_key": "ultra_shared_slot", "cpc_id": 3007871, "count": 3, "batch_label": "partial-ok"},
+            headers=ADMIN_HEADERS,
+        )
+        assert partial_resp.status_code == 201
+        partial_body = partial_resp.json()
+        assert partial_body["partial_failure"] is True
+        assert partial_body["add_success_count"] == 2
+        assert partial_body["add_fail_count"] == 1
+        assert len(mailer.sent) == 1
+        assert "部分失败" in mailer.sent[0]["subject"]
+        for code in partial_body["codes"]:
+            assert app.state.ledger.get_code(code)["status"] == "unused"
+
+
+def test_agiso_stock_and_auto_restock_manual_dry_check_and_2048_trigger(tmp_path: Path):
+    restock_rules = json.dumps(
+        [
+            {
+                "sku_key": "ultra_shared_slot",
+                "cpc_id": 3007871,
+                "min_stock": 3,
+                "target_stock": 10,
+                "max_push": 5,
+            },
+            {
+                "sku_key": "ultra_exclusive_admin",
+                "cpc_id": 3007872,
+                "min_stock": 2,
+                "target_stock": 6,
+                "max_push": 5,
+            },
+        ]
+    )
+    app, _, _, _, mailer, agiso = build_agiso_env(
+        tmp_path,
+        agiso_restock_enabled=True,
+        agiso_restock_rules_json=restock_rules,
+    )
+    agiso.storage = {3007871: 2, 3007872: 4}
+    with TestClient(app) as client:
+        assert client.get("/api/v1/admin/agiso/stock").status_code == 401
+        assert client.post("/api/v1/admin/agiso/restock").status_code == 401
+
+        status_body = client.get("/api/v1/admin/agiso/status", headers=ADMIN_HEADERS).json()
+        assert status_body["restock_enabled"] is True
+        assert status_body["restock_rules_count"] == 2
+        assert status_body["auto_restore_on_refund_close"] is True
+
+        stock_resp = client.get("/api/v1/admin/agiso/stock", headers=ADMIN_HEADERS)
+        assert stock_resp.status_code == 200
+        stock_by_sku = {item["sku_key"]: item for item in stock_resp.json()["items"]}
+        assert stock_by_sku["ultra_shared_slot"]["current_qty"] == 2
+        assert stock_by_sku["ultra_shared_slot"]["needs_restock"] is True
+        assert stock_by_sku["ultra_shared_slot"]["planned_push"] == 5
+        assert stock_by_sku["ultra_exclusive_admin"]["current_qty"] == 4
+        assert stock_by_sku["ultra_exclusive_admin"]["needs_restock"] is False
+        assert stock_by_sku["ultra_exclusive_admin"]["planned_push"] == 0
+
+        dry_resp = client.post("/api/v1/admin/agiso/restock", json={"dry_check": True}, headers=ADMIN_HEADERS)
+        assert dry_resp.status_code == 200
+        dry_body = dry_resp.json()
+        assert dry_body["checked"] == 2
+        assert dry_body["restocked"] == 0
+        assert dry_body["total_pushed"] == 0
+        dry_by_sku = {item["sku_key"]: item for item in dry_body["items"]}
+        assert dry_by_sku["ultra_shared_slot"]["action"] == "would_restock"
+        assert dry_by_sku["ultra_shared_slot"]["planned_push"] == 5
+        assert dry_by_sku["ultra_exclusive_admin"]["action"] == "sufficient"
+        assert client.get("/api/v1/admin/codes", headers=ADMIN_HEADERS).json()["total"] == 0
+
+        real_resp = client.post("/api/v1/admin/agiso/restock", json={"dry_check": False}, headers=ADMIN_HEADERS)
+        assert real_resp.status_code == 200
+        real_body = real_resp.json()
+        assert real_body["restocked"] == 1
+        assert real_body["total_pushed"] == 5
+        assert agiso.storage[3007871] == 7
+        assert agiso.storage[3007872] == 4
+        assert len(mailer.sent) == 0
+
+        code_trigger = client.post(
+            "/api/v1/admin/codes/issue",
+            json={"sku_key": "ultra_shared_slot", "channel": "taobao"},
+            headers=ADMIN_HEADERS,
+        ).json()["code"]
+        agiso.storage[3007871] = 3
+        agiso.storage[3007872] = 1
+        push_calls_before = len([call for call in agiso.calls if call["method"] == "card_pwd_add"])
+        webhook_2048 = post_webhook(
+            client,
+            {
+                "Tid": "9700",
+                "Orders": [
+                    {
+                        "Oid": "9701",
+                        "SendCards": [
+                            {"CpcId": 3007871, "Cards": [{"Card": f"http://testserver/r/{code_trigger}", "Pwd": code_trigger}]}
+                        ],
+                    }
+                ],
+            },
+            aopic=2048,
+        )
+        assert webhook_2048.status_code == 200
+        push_calls_after = [call for call in agiso.calls if call["method"] == "card_pwd_add"]
+        assert len(push_calls_after) == push_calls_before + 1
+        assert push_calls_after[-1]["cpc_id"] == "3007871"
+        assert agiso.storage[3007871] == 8
+        assert agiso.storage[3007872] == 1
+
+        agiso.storage[3007871] = 2
+        dup_2048 = post_webhook(
+            client,
+            {
+                "Tid": "9700",
+                "Orders": [
+                    {
+                        "Oid": "9701",
+                        "SendCards": [
+                            {"CpcId": 3007871, "Cards": [{"Card": f"http://testserver/r/{code_trigger}", "Pwd": code_trigger}]}
+                        ],
+                    }
+                ],
+            },
+            aopic=2048,
+        )
+        assert dup_2048.status_code == 200
+        assert agiso.storage[3007871] == 2
+
+
+def test_agiso_restock_missing_cpc_and_push_error_alerts(tmp_path: Path):
+    restock_rules = json.dumps(
+        [
+            {"sku_key": "ultra_shared_slot", "cpc_id": 3007871, "min_stock": 3, "target_stock": 8, "max_push": 10},
+            {"sku_key": "ultra_exclusive_admin", "cpc_id": 9999999, "min_stock": 2, "target_stock": 5, "max_push": 10},
+        ]
+    )
+    app, _, _, _, mailer, agiso = build_agiso_env(
+        tmp_path,
+        agiso_restock_enabled=True,
+        agiso_restock_rules_json=restock_rules,
+    )
+    agiso.storage = {3007871: 1}
+    original_get_storage = agiso.card_pwd_category_get_storage
+
+    def partial_storage(id_nos):
+        return [row for row in original_get_storage(id_nos) if row["IdNo"] == 3007871]
+
+    agiso.card_pwd_category_get_storage = partial_storage
+    agiso.fail_methods["card_pwd_add"] = AgisoError("Agiso error 12: 模拟推送失败", error_code=12, status_code=200, transient=False)
+
+    with TestClient(app) as client:
+        resp = client.post("/api/v1/admin/agiso/restock", headers=ADMIN_HEADERS)
+        assert resp.status_code == 200
+        body = resp.json()
+        assert body["checked"] == 2
+        assert body["restocked"] == 0
+        assert len(body["errors"]) == 2
+        by_sku = {item["sku_key"]: item for item in body["items"]}
+        assert by_sku["ultra_shared_slot"]["action"] == "failed"
+        assert by_sku["ultra_exclusive_admin"]["action"] == "missing_cpc"
+        assert len(mailer.sent) == 2
+        subjects = [mail["subject"] for mail in mailer.sent]
+        assert any("推送失败" in subject for subject in subjects)
+        assert any("未找到对应卡种" in subject for subject in subjects)

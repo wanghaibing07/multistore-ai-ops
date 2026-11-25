@@ -33,36 +33,42 @@ def build_redeem_url(public_base_url: str, code: str) -> str:
 
 
 SLOT_DELIVERY_GUIDE = (
-    "【提货前准备】\n"
-    "1. 关闭付款资料：https://payments.google.com/gp/w/home/settings\n"
+    "【重要提醒】\n"
+    "本单为虚拟服务，淘宝显示“无需物流已发货”即代表已发出提货码与提货链接（非实物、非空包裹），请直接点击上方链接自助提货。\n"
+    "\n"
+    "【提货前必查（缺一不可）】\n"
+    "1. 关闭 Google 付款资料：https://payments.google.com/gp/w/home/settings\n"
     "2. 退出原有家庭组：https://g.co/yourfamily\n"
-    "3. 近 12 个月内没换过家庭组，不然可能进不来\n"
+    "3. 近 12 个月内从未加入、退出或被重拉进任何 Google 家庭组（Google 官方限制每 12 个月仅可更换 1 次家庭组，哪怕仅 1 次或原组掉线重拉也会触发冷却导致无法进组）。\n"
     "\n"
-    "【发货与进度】\n"
-    "提交邮箱后一般 2-6 小时内发家庭组邀请（最晚 24 小时），未超时勿催；随时可点链接看进度，收到邮件接受邀请即可。\n"
+    "【发货与排队时效】\n"
+    "提交 Gmail 后即锁定上游车位，一般 2-6 小时内发家庭组邀请（最晚 24 小时），排队期间属正常履约，未超时勿催；随时可点提货链接查看进度，收到邮件接受邀请即可。\n"
     "\n"
-    "【使用须知】\n"
+    "【质保与退款/换号规则】\n"
     "1. 质保 30 天会员权益，不质保您的 Google 账号；自行反代或违反官方条款导致封号不负责。\n"
     "2. 本款为 0 积分/点数车位，使用积分或点数会被机器人检测踢出家庭组且不退款。\n"
-    "3. 确认后非商品问题不退款；买家原因填错邮箱或需换号，需补 39.9 元手续费。"
+    "3. 提交邮箱后非商品问题（含 12 个月换组冷却、未退旧家庭组、未关付款资料、填错邮箱等买家自身原因）不支持全额退款；买家可补 49.9 元手续费更换新 Gmail 履约，或协商扣除 49.9 元车位实损后退还余款。"
 )
 
 EXCLUSIVE_DELIVERY_GUIDE = (
-    "【开通前准备】\n"
-    "1. 关闭付款资料：https://payments.google.com/gp/w/home/settings\n"
+    "【重要提醒】\n"
+    "本单为虚拟服务，淘宝显示“无需物流已发货”即代表已发出提货码与提货链接（非实物、非空包裹），请直接点击上方链接自助秒领会员邮箱。\n"
+    "\n"
+    "【开通前必查】\n"
+    "1. 关闭 Google 付款资料：https://payments.google.com/gp/w/home/settings\n"
     "2. 退出原有家庭组：https://g.co/yourfamily\n"
-    "3. 准备一个稳定的主力 Gmail，自己当管理员\n"
+    "3. 准备一个稳定的主力 Gmail 自己当管理员，且近 12 个月内未触发 Google 家庭组更换冷却（官方每 12 个月仅限更换 1 次，含原组重拉）。\n"
     "\n"
     "【开通流程】\n"
     "1. 点上面链接秒领会员邮箱。\n"
     "2. 用主力 Gmail 创建家庭组并邀请该会员邮箱加入，通过后即享 Ultra 权益，自己还能再拉 4 人。\n"
     "3. 发出邀请后，务必回到同一提货页上传「已发出邀请」截图登记 30 天质保（一般 2-6 小时内处理，最晚 24 小时，未超时勿催）。\n"
     "\n"
-    "【质保与须知】\n"
+    "【质保与退款/换号规则】\n"
     "1. 千万别踢掉我们给的会员邮箱！踢掉会失去会员，不保修。\n"
-    "2. 质保 30 天（从领号起算），非本人原因掉会员免费保修；确认后非商品问题不退款。\n"
+    "2. 质保 30 天（从领号起算），非本人原因掉会员免费保修；确认领号后非商品问题不支持全额退款。\n"
     "3. 自己的 Gmail 被封、无法登录不保修。\n"
-    "4. 自己号被封、无法登录或误踢权益号导致掉权益，补救/换号收 79.9 元手续费，且不保证成功恢复。"
+    "4. 自己号被封、无法登录、账号冷却受限或误踢权益号导致无法使用/掉权益，补救/换号收 79.9 元手续费，且不保证成功恢复。"
 )
 
 
@@ -209,6 +215,55 @@ def _norm_id(value: Any) -> str:
     return str(value).strip()
 
 
+def _parse_int_field(entry: dict[str, Any], key: str, *, default: Optional[int] = None, minimum: Optional[int] = None, maximum: Optional[int] = None, idx: int = 0) -> int:
+    raw = entry.get(key, default)
+    if raw is None or isinstance(raw, bool):
+        raise ValueError(f"Restock rule at index {idx} has invalid integer field {key!r}")
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Restock rule at index {idx} has invalid integer field {key!r}") from exc
+    if minimum is not None and value < minimum:
+        raise ValueError(f"Restock rule at index {idx} field {key!r} must be >= {minimum}")
+    if maximum is not None and value > maximum:
+        raise ValueError(f"Restock rule at index {idx} field {key!r} must be <= {maximum}")
+    return value
+
+
+def parse_env_restock_rules(raw_json: str) -> list[dict[str, Any]]:
+    text = (raw_json or "").strip()
+    if not text:
+        return []
+    parsed = json.loads(text)
+    if not isinstance(parsed, list):
+        raise ValueError("PLAN2_AGISO_RESTOCK_RULES_JSON must be a JSON array")
+    normalized: list[dict[str, Any]] = []
+    for idx, entry in enumerate(parsed):
+        if not isinstance(entry, dict):
+            raise ValueError(f"Restock rule at index {idx} must be an object")
+        sku_key = _norm_id(entry.get("sku_key"))
+        if not sku_key:
+            raise ValueError(f"Restock rule at index {idx} requires sku_key")
+        cpc_id = _parse_int_field(entry, "cpc_id", minimum=1, idx=idx)
+        min_stock = _parse_int_field(entry, "min_stock", default=0, minimum=0, idx=idx)
+        target_stock = _parse_int_field(entry, "target_stock", minimum=max(1, min_stock), idx=idx)
+        max_push = _parse_int_field(entry, "max_push", default=20, minimum=1, maximum=500, idx=idx)
+        normalized.append(
+            {
+                "sku_key": sku_key,
+                "cpc_id": cpc_id,
+                "min_stock": min_stock,
+                "target_stock": target_stock,
+                "max_push": max_push,
+                "enabled": bool(entry.get("enabled", True)),
+                "is_use_first": bool(entry.get("is_use_first", False)),
+                "allow_replace": bool(entry.get("allow_replace", False)),
+                "note": _norm_id(entry.get("note")),
+            }
+        )
+    return normalized
+
+
 def parse_env_sku_rules(raw_json: str) -> list[dict[str, Any]]:
     text = (raw_json or "").strip()
     if not text:
@@ -315,8 +370,8 @@ def match_agiso_sku(
     return best_rule
 
 
-def extract_plan2_codes_from_sent_cards(payload: dict[str, Any]) -> list[tuple[str, str]]:
-    found: list[tuple[str, str]] = []
+def extract_sent_card_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
     seen: set[str] = set()
     orders = payload.get("Orders")
     if not isinstance(orders, list):
@@ -325,12 +380,15 @@ def extract_plan2_codes_from_sent_cards(payload: dict[str, Any]) -> list[tuple[s
         if not isinstance(order, dict):
             continue
         oid = _norm_id(order.get("Oid"))
+        num_iid = _norm_id(order.get("NumIid"))
+        sku_id = _norm_id(order.get("SkuId"))
         send_cards = order.get("SendCards")
         if not isinstance(send_cards, list):
             continue
         for group in send_cards:
             if not isinstance(group, dict):
                 continue
+            cpc_id = _norm_id(group.get("CpcId"))
             cards = group.get("Cards")
             if not isinstance(cards, list):
                 continue
@@ -342,8 +400,20 @@ def extract_plan2_codes_from_sent_cards(payload: dict[str, Any]) -> list[tuple[s
                     for match in PLAN2_CODE_RE.findall(text):
                         if match not in seen:
                             seen.add(match)
-                            found.append((oid, match))
+                            found.append(
+                                {
+                                    "oid": oid,
+                                    "num_iid": num_iid,
+                                    "sku_id": sku_id,
+                                    "cpc_id": cpc_id,
+                                    "code": match,
+                                }
+                            )
     return found
+
+
+def extract_plan2_codes_from_sent_cards(payload: dict[str, Any]) -> list[tuple[str, str]]:
+    return [(entry["oid"], entry["code"]) for entry in extract_sent_card_entries(payload)]
 
 
 class AgisoError(RuntimeError):
@@ -558,6 +628,8 @@ class DryRunAgisoClient:
         self.pending_trades: list[dict[str, Any]] = []
         self.remote_skus: list[dict[str, Any]] = []
         self.categories: list[dict[str, Any]] = []
+        self.storage: dict[int, int] = {}
+        self.card_pwd_add_response: Optional[dict[str, Any]] = None
         self.fail_methods: dict[str, Exception] = {}
 
     @property
@@ -611,7 +683,14 @@ class DryRunAgisoClient:
 
     def card_pwd_category_get_storage(self, id_nos: list[int | str]) -> list[dict[str, Any]]:
         self._record("card_pwd_category_get_storage", id_nos=[str(i) for i in id_nos])
-        return [{"IdNo": int(i) if str(i).isdigit() else i, "Qty": 0} for i in id_nos]
+        rows: list[dict[str, Any]] = []
+        for item in id_nos:
+            if str(item).isdigit():
+                cpc_id = int(item)
+                rows.append({"IdNo": cpc_id, "Qty": int(self.storage.get(cpc_id, 0))})
+            else:
+                rows.append({"IdNo": item, "Qty": 0})
+        return rows
 
     def card_pwd_add(
         self,
@@ -630,10 +709,19 @@ class DryRunAgisoClient:
             allow_replace=allow_replace,
             summary=summary,
         )
-        return {
-            "AddSuccessCount": len(lines),
-            "AddFailCount": 0,
-            "ReplaceUnSoldSuccessCount": 0,
-            "ReplaceSoldSuccessCount": 0,
-            "ReplaceFailCount": 0,
-        }
+        if self.card_pwd_add_response is not None:
+            response = dict(self.card_pwd_add_response)
+        else:
+            response = {
+                "AddSuccessCount": len(lines),
+                "AddFailCount": 0,
+                "ReplaceUnSoldSuccessCount": 0,
+                "ReplaceSoldSuccessCount": 0,
+                "ReplaceFailCount": 0,
+            }
+        if str(cpc_id).isdigit():
+            key = int(cpc_id)
+            added = int(response.get("AddSuccessCount") or 0)
+            if added > 0:
+                self.storage[key] = int(self.storage.get(key, 0)) + added
+        return response

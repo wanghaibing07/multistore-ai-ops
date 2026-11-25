@@ -221,7 +221,7 @@
 {
   "code": "U20S-8K3M-9P2Q",
   "redeem_url": "https://redeem.example.com/r/U20S-8K3M-9P2Q",
-  "wangwang_message": "感谢下单 Google Ultra x20 共享车位！\n点链接自助填 Gmail 提货（不用在旺旺发邮箱）：https://redeem.example.com/r/U20S-8K3M-9P2Q\n兑换码：U20S-8K3M-9P2Q\n\n【提货前准备】\n1. 关闭付款资料：https://payments.google.com/gp/w/home/settings\n2. 退出原有家庭组：https://g.co/yourfamily\n3. 近 12 个月内没换过家庭组，不然可能进不来\n\n【发货与进度】\n提交邮箱后一般 2-6 小时内发家庭组邀请（最晚 24 小时），未超时勿催；随时可点链接看进度，收到邮件接受邀请即可。\n\n【使用须知】\n1. 质保 30 天会员权益，不质保您的 Google 账号；自行反代或违反官方条款导致封号不负责。\n2. 本款为 0 积分/点数车位，使用积分或点数会被机器人检测踢出家庭组且不退款。\n3. 确认后非商品问题不退款；买家原因填错邮箱或需换号，需补 39.9 元手续费。",
+  "wangwang_message": "感谢下单 Google Ultra x20 共享车位！\n点链接自助填 Gmail 提货（不用在旺旺发邮箱）：https://redeem.example.com/r/U20S-8K3M-9P2Q\n兑换码：U20S-8K3M-9P2Q\n\n【重要提醒】\n本单为虚拟服务，淘宝显示“无需物流已发货”即代表已发出提货码与提货链接（非实物、非空包裹），请直接点击上方链接自助提货。\n\n【提货前必查（缺一不可）】\n1. 关闭 Google 付款资料：https://payments.google.com/gp/w/home/settings\n2. 退出原有家庭组：https://g.co/yourfamily\n3. 近 12 个月内从未加入、退出或被重拉进任何 Google 家庭组（Google 官方限制每 12 个月仅可更换 1 次家庭组，哪怕仅 1 次或原组掉线重拉也会触发冷却导致无法进组）。\n\n【发货与排队时效】\n提交 Gmail 后即锁定上游车位，一般 2-6 小时内发家庭组邀请（最晚 24 小时），排队期间属正常履约，未超时勿催；随时可点提货链接查看进度，收到邮件接受邀请即可。\n\n【质保与退款/换号规则】\n1. 质保 30 天会员权益，不质保您的 Google 账号；自行反代或违反官方条款导致封号不负责。\n2. 本款为 0 积分/点数车位，使用积分或点数会被机器人检测踢出家庭组且不退款。\n3. 提交邮箱后非商品问题（含 12 个月换组冷却、未退旧家庭组、未关付款资料、填错邮箱等买家自身原因）不支持全额退款；买家可补 49.9 元手续费更换新 Gmail 履约，或协商扣除 49.9 元车位实损后退还余款。",
   "item": { "...AdminCodeSummary..." }
 }
 ```
@@ -336,9 +336,10 @@
   - `503 Service Unavailable`：`"服务未配置"`（未配 `PLAN2_AGISO_APP_SECRET`）、`"未配置AccessToken"`、`"订单查询失败"` 或瞬态核心发货失败（触发阿奇索重试）。
 - 事件行为：
   - `fromPlatform=Open`：开放平台「模拟推送」验签探测，直接落审计事件 `simulated_verified` 并返回 `200 ""`，不生成兑换码。
-  - `aopic=2`（付款推送含明细）/ `aopic=2097152`（简化付款推送，自动调用 `TradeInfo` 反查）：仅处理 `Status=WAIT_SELLER_SEND_GOODS`；严格按已启用 SKU 映射匹配（优先级 `outer_sku_id > sku_id > num_iid+sku_props_contains > outer_iid > sku_props_contains > num_iid`，未命中商品安全忽略，单子单数量超过 50 暂停并告警）。按 `delivery_key = "{tid}:{oid}:{seq}"` 原子幂等签发兑换码，合并同单所有命中子单执行 `CreateOrderResult` -> `LogisticsDummySend` -> 可选 `SendTbAppCard` / `WwMsg/Send`。自动发货成功**不发邮件**，失败或部分失败才告警。
-  - `aopic=256`（申请退款）/ `aopic=65536`（退款成功）：按 `Oid` 精确匹配（避免多子单混合订单跨子单误伤）；`unused` 码自动作废且不发邮件，已使用/履约中/已完成码不作废并发送人工核对告警邮件。
-  - `aopic=2048`（阿奇索卡密池自动发货成功）：从已发卡密中提取 `U20S-...` / `U20E-...` 并绑定 `external_order_id`。
+  - `aopic=2`（付款推送含明细）/ `aopic=2097152`（简化付款推送，自动调用 `TradeInfo` 反查）：仅处理 `Status=WAIT_SELLER_SEND_GOODS`；严格按已启用 SKU 映射匹配（优先级 `outer_sku_id > sku_id > num_iid+sku_props_contains > outer_iid > sku_props_contains > num_iid`，未命中商品安全忽略，单子单数量超过 50 暂停并告警）。按 `delivery_key = "{tid}:{oid}:{seq}"` 原子幂等签发兑换码，合并同单所有命中子单执行 `CreateOrderResult` -> `LogisticsDummySend` -> 可选 `SendTbAppCard` / `WwMsg/Send`。若订单已存在原生卡密库绑定记录或外部绑定码，自动跳过重复发码（`already_bound_external`）。自动发货成功**不发邮件**，失败或部分失败才告警。
+  - `aopic=256`（申请退款）/ `aopic=65536`（退款成功）：按 `Oid` 精确匹配（避免多子单混合订单跨子单误伤）；`unused` 码自动作废且不发邮件，已使用/履约中/已完成码（或未开启自动作废时）不作废并发送人工核对告警邮件。
+  - `aopic=32768`（撤销退款/退款关闭）：仅当开启 `PLAN2_AGISO_AUTO_RESTORE_ON_REFUND_CLOSE`、该子单未发生 `aopic=65536` 退款成功、兑换码从未提交提货/无上游单号、且最近一次作废确由同订单/同退款单 `aopic=256` 自动触发（`last_error_code=REFUNDED`）时，安全恢复为 `unused` 并恢复 `agiso_deliveries` 状态；其余人工作废或异常情况不自动恢复并发送人工核对告警邮件。
+  - `aopic=2048`（阿奇索卡密池自动发货成功）：从已发卡密中提取 `U20S-...` / `U20E-...` 并绑定 `external_order_id` 及 `native:{tid}:{oid}:{code}` 发货记录；发现跨单冲突时发送告警邮件；若同子单此前乱序收到未匹配的退款推送（且尚未撤销），绑定后自动重放退款核对；开启 `PLAN2_AGISO_RESTOCK_ENABLED` 时，响应 `200 ""` 后在后台触发对应 SKU 的低水位补卡检查。
 
 ### 6.2 阿奇索集成状态（管理员鉴权）
 `GET /api/v1/admin/agiso/status`
@@ -360,8 +361,12 @@
   "auto_send_tb_card": true,
   "auto_send_ww_msg": false,
   "auto_revoke_on_refund": true,
+  "auto_restore_on_refund_close": true,
   "poll_enabled": false,
   "poll_interval_seconds": 120,
+  "restock_enabled": false,
+  "restock_interval_seconds": 900,
+  "restock_rules_count": 0,
   "sku_mappings_count": 1,
   "deliveries_summary": {
     "issued": 0,
@@ -461,8 +466,27 @@
 }
 ```
 - `count` 范围 `1..500`。批量签发兑换码并调用 `CardPwd/Add`（每行 `提货链接,兑换码`）。
-- 若阿奇索返回确定性业务拒绝（HTTP 200 且 `IsSuccess=false` 且非瞬态），自动作废本次新建的 `unused` 码防止孤儿库存；网络/瞬态异常则保留以便核对。
-- `201 Created`：`{ "batch_id", "sku_key", "cpc_id", "count", "codes", "agiso_result" }`；校验错误 `422`，上游失败 `503 AGISO_ERROR`。
+- 若阿奇索返回确定性业务拒绝（HTTP 200 且 `IsSuccess=false` 且非瞬态，或 `AddSuccessCount + Replace*SuccessCount == 0` 且存在失败计数），自动作废本次新建的 `unused` 码防止孤儿库存；若部分入库失败（既有成功也有失败），保留本次码不自动回滚并发送告警邮件提示人工核对；网络/瞬态异常则保留以便核对。
+- `201 Created`：`{ "batch_id", "sku_key", "cpc_id", "count", "codes", "partial_failure", "add_success_count", "add_fail_count", "replace_fail_count", "agiso_result" }`；校验错误 `422`，上游失败 `503 AGISO_ERROR`。
+
+### 6.9 查询阿奇索卡密库实时库存（管理员鉴权）
+`GET /api/v1/admin/agiso/stock?sku_keys=ultra_shared_slot,ultra_exclusive_admin`
+- 读取 `PLAN2_AGISO_RESTOCK_RULES_JSON` 规则并调用阿奇索 `CardPwdCategory/GetStorage`，返回每个卡种的 `current_qty`、`storage_found`、`needs_restock`、`planned_push` 及本地淘宝未用码数 `local_unused_taobao`。
+- `sku_keys` 可选，逗号分隔；上游失败返回 `503 AGISO_ERROR`。
+
+### 6.10 手动检查并触发低水位自动补卡（管理员鉴权）
+`POST /api/v1/admin/agiso/restock`
+- 请求体（可选）：
+```json
+{
+  "dry_check": false,
+  "sku_keys": ["ultra_shared_slot"]
+}
+```
+- 按 `PLAN2_AGISO_RESTOCK_RULES_JSON` 中已启用的规则查询实时库存；当 `current_qty <= min_stock` 时计算 `needed = min(target_stock - current_qty, max_push)`：
+  - `dry_check=true`：只返回预演结果（`action="would_restock"` / `"sufficient"` / `"missing_cpc"`），不制码不推卡。
+  - `dry_check=false`：加锁防并发，自动批量签发并调用 `CardPwd/Add` 入库，失败或卡种缺失时记录事件并发送商家告警邮件。
+- `200 OK`：`{ "trigger": "manual", "dry_check", "checked", "restocked", "total_pushed", "errors", "items" }`；上游失败返回 `503 AGISO_ERROR`。
 
 ## 7. 健康检查
 `GET /api/v1/health` -> `{ "status": "ok", "execution_mode": "dry_run" }`

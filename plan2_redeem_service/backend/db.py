@@ -195,6 +195,14 @@ class Ledger:
         with self.connect() as c:
             return [dict(r) for r in c.execute("SELECT * FROM audit_events WHERE code=? ORDER BY event_id", (code,))]
 
+    def latest_revoke_audit(self, code: str) -> Optional[dict[str, Any]]:
+        with self.connect() as c:
+            row = c.execute(
+                "SELECT * FROM audit_events WHERE code=? AND to_status='revoked' ORDER BY event_id DESC LIMIT 1",
+                (code,),
+            ).fetchone()
+            return dict(row) if row else None
+
     def claim_notification(self, dedupe_key: str) -> bool:
         with self.transaction(immediate=True) as c:
             result = c.execute(
@@ -412,6 +420,126 @@ class Ledger:
                 "UPDATE agiso_deliveries SET delivery_status='revoked', updated_at=? WHERE code=?",
                 (now_iso(), code),
             )
+
+    def mark_agiso_delivery_restored(self, code: str) -> None:
+        with self.transaction(immediate=True) as c:
+            c.execute(
+                "UPDATE agiso_deliveries SET delivery_status='delivered', updated_at=? WHERE code=? AND delivery_status='revoked'",
+                (now_iso(), code),
+            )
+
+    def record_agiso_native_delivery(
+        self,
+        *,
+        tid: str,
+        oid: str,
+        code: str,
+        sku_key: str,
+        buyer_nick: str = "",
+        num_iid: str = "",
+        sku_id: str = "",
+        delivery_status: str = "delivered",
+    ) -> dict[str, Any]:
+        resolved_oid = oid.strip() or tid.strip()
+        with self.transaction(immediate=True) as c:
+            existing = c.execute("SELECT * FROM agiso_deliveries WHERE code=?", (code,)).fetchone()
+            if existing:
+                return dict(existing)
+            next_seq = int(
+                c.execute(
+                    "SELECT COALESCE(MAX(seq), 0) + 1 FROM agiso_deliveries WHERE tid=? AND oid=?",
+                    (tid, resolved_oid),
+                ).fetchone()[0]
+            )
+            t = now_iso()
+            delivery_key = f"native:{tid}:{resolved_oid}:{code}"
+            c.execute(
+                """INSERT INTO agiso_deliveries(
+                    delivery_key, tid, oid, seq, num_iid, sku_id, sku_key, code,
+                    buyer_nick, delivery_status, result_created, card_sent, ww_sent,
+                    dummy_sent, last_error, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    delivery_key,
+                    tid,
+                    resolved_oid,
+                    next_seq,
+                    num_iid,
+                    sku_id,
+                    sku_key,
+                    code,
+                    buyer_nick,
+                    delivery_status,
+                    1,
+                    1,
+                    0,
+                    1,
+                    None,
+                    t,
+                    t,
+                ),
+            )
+            row = c.execute("SELECT * FROM agiso_deliveries WHERE delivery_key=?", (delivery_key,)).fetchone()
+            return dict(row)
+
+    def find_pending_unmatched_refund(self, tid: str, oid: str = "") -> list[dict[str, Any]]:
+        if not tid:
+            return []
+        with self.connect() as c:
+            rows = [
+                dict(r)
+                for r in c.execute(
+                    "SELECT * FROM agiso_events WHERE tid=? AND aopic IN (256, 65536, 32768) ORDER BY event_id ASC",
+                    (tid,),
+                ).fetchall()
+            ]
+        pending: list[dict[str, Any]] = []
+        for row in rows:
+            row_oid = (row.get("oid") or "").strip()
+            if oid and row_oid and row_oid not in {oid, tid}:
+                continue
+            aopic = int(row["aopic"]) if row.get("aopic") is not None else 0
+            if aopic in (256, 65536) and row.get("status") == "refund_no_code":
+                pending.append(row)
+            elif aopic == 32768:
+                closed_rid = ""
+                try:
+                    closed_rid = str((json.loads(row.get("payload_summary") or "{}")).get("RefundId") or "").strip()
+                except ValueError:
+                    closed_rid = ""
+                remaining: list[dict[str, Any]] = []
+                for item in pending:
+                    if int(item.get("aopic") or 0) != 256:
+                        remaining.append(item)
+                        continue
+                    item_rid = ""
+                    try:
+                        item_rid = str((json.loads(item.get("payload_summary") or "{}")).get("RefundId") or "").strip()
+                    except ValueError:
+                        item_rid = ""
+                    if closed_rid and item_rid == closed_rid:
+                        continue
+                    if not closed_rid and not item_rid and (item.get("oid") or "").strip() == row_oid:
+                        continue
+                    remaining.append(item)
+                pending = remaining
+        return pending
+
+    def has_agiso_refund_success(self, tid: str, oid: str = "") -> bool:
+        if not tid:
+            return False
+        with self.connect() as c:
+            if oid:
+                row = c.execute(
+                    "SELECT 1 FROM agiso_events WHERE tid=? AND aopic=65536 AND (oid=? OR oid='' OR oid=tid) LIMIT 1",
+                    (tid, oid),
+                ).fetchone()
+            else:
+                row = c.execute(
+                    "SELECT 1 FROM agiso_events WHERE tid=? AND aopic=65536 LIMIT 1",
+                    (tid,),
+                ).fetchone()
+            return row is not None
 
     def record_agiso_event(
         self,

@@ -80,6 +80,11 @@ class AgisoPushCardsRequest(BaseModel):
     allow_replace: bool = False
 
 
+class AgisoRestockRequest(BaseModel):
+    dry_check: bool = False
+    sku_keys: Optional[list[str]] = None
+
+
 class PublicCodeResponse(BaseModel):
     model_config = ConfigDict(extra="allow")
     code: str
