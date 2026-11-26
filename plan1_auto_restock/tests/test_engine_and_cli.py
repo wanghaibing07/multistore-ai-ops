@@ -373,7 +373,9 @@ def test_live_restock_dual_db_isolation_and_csv_export(tmp_path: Path) -> None:
     assert "secret_user_" not in csv_text
     rows = list(csv.DictReader(csv_text.splitlines()))
     assert list(rows[0].keys()) == EXPORT_COLUMNS
+    assert EXPORT_COLUMNS.index("来源") == EXPORT_COLUMNS.index("商家名称") + 1
     assert rows[0]["采购单号"] == "CB-TEST-0001"
+    assert rows[0]["来源"] == "tg_fatbunny"
     assert rows[0]["实付金额"] == "10.95"  # 1.50 * 7.30
 
     vault_conn = sqlite3.connect(tmp_path / "secrets_vault.db")
@@ -742,3 +744,58 @@ def test_email_alert_skips_excluded_event_types_like_complaint_16688(tmp_path: P
             assert len(sent_messages) == 1
         finally:
             dispatcher.close()
+
+
+def test_export_multistore_csv_resolves_source_column(tmp_path: Path) -> None:
+    suppliers = {
+        "primary": SupplierConfig(name="primary", api_key_env="K_PRIMARY", label="主号"),
+        "secondary": SupplierConfig(name="secondary", api_key_env="K_SECONDARY", label="备号"),
+        "bunny_backup": SupplierConfig(name="bunny_backup", api_key_env="K_BUNNY", label="FatBunny 备用"),
+        "rabbit_cn": SupplierConfig(name="rabbit_cn", api_key_env="K_RABBIT", label="大兔子机器人"),
+        "chuga_alt": SupplierConfig(name="chuga_alt", api_key_env="K_CHUGA", label="ChugaX Hub"),
+        "Alpha-Bot 02": SupplierConfig(name="Alpha-Bot 02", api_key_env="K_ALPHA", label="Alpha 渠道"),
+        "---": SupplierConfig(name="---", api_key_env="K_FALLBACK", label="未知渠道"),
+    }
+    cases = [
+        ("idem-1", "CB-1", "primary", "tg_fatbunny", "Canboso-主号"),
+        ("idem-2", "CB-2", "secondary", "tg_chugax", "Canboso-备号"),
+        ("idem-3", "CB-3", "bunny_backup", "tg_fatbunny", "Canboso-FatBunny 备用"),
+        ("idem-4", "CB-4", "rabbit_cn", "tg_fatbunny", "Canboso-大兔子机器人"),
+        ("idem-5", "CB-5", "chuga_alt", "tg_chugax", "Canboso-ChugaX Hub"),
+        ("idem-6", "CB-6", "Alpha-Bot 02", "tg_alpha_bot_02", "Canboso-Alpha 渠道"),
+        ("idem-7", "CB-7", "---", "tg_canboso", "Canboso-未知渠道"),
+    ]
+    csv_path = tmp_path / "sources.csv"
+    with DualDatabaseStore(tmp_path / "ledger.db", tmp_path / "vault.db") as store:
+        for idem_key, order_code, supplier_name, _, _ in cases:
+            store.create_restock_intent(
+                idempotency_key=idem_key,
+                sku_id="sku_test",
+                goods_no_16688="G90001",
+                supplier=supplier_name,
+                product_id="prod_1",
+                product_name="Test Product",
+                requested_qty=1,
+                estimated_cost_usd=Decimal("2.00"),
+            )
+            store.mark_intent_purchased(
+                idempotency_key=idem_key,
+                canboso_order_code=order_code,
+                product_name="Test Product",
+                actual_qty=1,
+                bonus_qty=0,
+                actual_amount=Decimal("2.00"),
+                currency="USD",
+                amount_usd=Decimal("2.00"),
+                amount_cny=Decimal("14.60"),
+            )
+        count = export_multistore_csv(store=store, suppliers=suppliers, output_path=csv_path)
+        assert count == len(cases)
+
+    rows = list(csv.DictReader(csv_path.read_text(encoding="utf-8-sig").splitlines()))
+    assert list(rows[0].keys()) == EXPORT_COLUMNS
+    assert EXPORT_COLUMNS.index("来源") == EXPORT_COLUMNS.index("商家名称") + 1
+    rows_by_order = {row["采购单号"]: row for row in rows}
+    for _, order_code, _, expected_source, expected_seller in cases:
+        assert rows_by_order[order_code]["来源"] == expected_source
+        assert rows_by_order[order_code]["商家名称"] == expected_seller

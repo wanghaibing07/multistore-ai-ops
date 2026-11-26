@@ -3,6 +3,7 @@ from __future__ import annotations
 import csv
 from decimal import Decimal, ROUND_HALF_UP
 from pathlib import Path
+import re
 
 from .config import SupplierConfig
 from .storage import DualDatabaseStore
@@ -11,6 +12,7 @@ EXPORT_COLUMNS = [
     "采购单号",
     "商品名称",
     "商家名称",
+    "来源",
     "数量",
     "实付金额",
     "退款金额",
@@ -21,6 +23,17 @@ EXPORT_COLUMNS = [
     "SKU",
     "补库状态",
 ]
+
+
+def resolve_source(supplier: str, supplier_label: str) -> str:
+    supplier_norm = (supplier or "").strip().lower()
+    label_norm = (supplier_label or "").strip().lower()
+    if supplier_norm == "primary" or "fatbunny" in label_norm or "兔子" in label_norm:
+        return "tg_fatbunny"
+    if supplier_norm == "secondary" or "chugax" in label_norm:
+        return "tg_chugax"
+    slug = re.sub(r"[^a-z0-9_]+", "_", supplier_norm).strip("_") or "canboso"
+    return f"tg_{slug}"
 
 
 def export_multistore_csv(
@@ -47,6 +60,7 @@ def export_multistore_csv(
                     "采购单号": intent.canboso_order_code or intent.idempotency_key,
                     "商品名称": intent.product_name or intent.sku_id,
                     "商家名称": f"Canboso-{supplier_label}",
+                    "来源": resolve_source(intent.supplier, supplier_label),
                     "数量": str(qty),
                     "实付金额": f"{amount_cny:.2f}",
                     "退款金额": "0.00",
