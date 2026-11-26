@@ -204,6 +204,52 @@ class Ledger:
         with self.connect() as c:
             return [dict(r) for r in c.execute("SELECT * FROM audit_events WHERE code=? ORDER BY event_id", (code,))]
 
+    def claim_purchase_retry(self, code: str, idempotency_key: str, reason: str, trade_no: str = "") -> str:
+        with self.transaction(immediate=True) as c:
+            row = c.execute(
+                "SELECT status, upstream_order_code, idempotency_key, request_payload_json, external_order_id FROM codes WHERE code=?",
+                (code,),
+            ).fetchone()
+            if (not row or row["status"] != "needs_manual_review" or row["upstream_order_code"]
+                    or row["idempotency_key"] != idempotency_key or not row["request_payload_json"]):
+                return "RETRY_NOT_AVAILABLE"
+            existing = (row["external_order_id"] or "").strip()
+            if trade_no and existing and existing != trade_no:
+                return "ORDER_NOT_ELIGIBLE"
+            t = now_iso()
+            c.execute(
+                """UPDATE codes SET status='purchasing', external_order_id=?, last_error_code=NULL,
+                   last_error_message=NULL, updated_at=? WHERE code=?""",
+                (trade_no or row["external_order_id"], t, code),
+            )
+            c.execute(
+                "INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)",
+                (code, "needs_manual_review", "purchasing", reason, t),
+            )
+            return ""
+
+    def canboso_purchase_totals(self, shanghai_day: str) -> dict[str, Any]:
+        with closing(self.connect()) as c:
+            row = c.execute(
+                """
+                WITH purchases AS (
+                    SELECT c.upstream_order_code, MAX(c.cost_usd) AS gross_usd,
+                           MAX(CASE WHEN lower(c.upstream_status) IN ('cancelled', 'canceled', 'refunded') THEN 1 ELSE 0 END) AS cancelled,
+                           MIN(julianday(a.created_at)) AS accepted_at
+                    FROM audit_events a JOIN codes c ON c.code=a.code
+                    WHERE a.reason IN ('shared_order_accepted', 'exclusive_delivered', 'canboso_purchase_cancelled')
+                      AND COALESCE(c.upstream_order_code, '') <> '' AND c.cost_usd IS NOT NULL
+                    GROUP BY c.upstream_order_code
+                )
+                SELECT COUNT(*) AS order_count, ROUND(COALESCE(SUM(gross_usd), 0), 2) AS gross_usd,
+                       COALESCE(SUM(cancelled), 0) AS cancelled_count,
+                       ROUND(COALESCE(SUM(cancelled * gross_usd), 0), 2) AS cancelled_gross_usd
+                FROM purchases WHERE date(accepted_at, '+8 hours')=?
+                """,
+                (shanghai_day,),
+            ).fetchone()
+            return dict(row)
+
     def latest_revoke_audit(self, code: str) -> Optional[dict[str, Any]]:
         with self.connect() as c:
             row = c.execute(

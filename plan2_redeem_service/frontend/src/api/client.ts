@@ -247,7 +247,7 @@ export async function revokeAdminCode(
 export async function retryAdminCode(
   token: string,
   code: string,
-  payload: { override_price_limit?: boolean; note?: string }
+  payload: { override_price_limit?: boolean; note?: string; merchant_verified_order_no?: string }
 ): Promise<AdminCodeDetail> {
   return requestJson<AdminCodeDetail>(`/api/v1/admin/codes/${encodeURIComponent(code)}/retry`, {
     method: "POST",

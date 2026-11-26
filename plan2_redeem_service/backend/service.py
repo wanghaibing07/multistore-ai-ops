@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import re
 import secrets
 import threading
@@ -40,6 +41,9 @@ logger = logging.getLogger(__name__)
 
 CHANNEL16688_OPENAPI_PAUSED_KEY = "channel16688:restock-openapi-paused"
 CHANNEL16688_OPENAPI_PAUSED_RE = re.compile(r"暂停\s*openapi", re.IGNORECASE)
+CHANNEL16688_EXPLICIT_PAUSE_RE = re.compile(r"系统长时间超负载[，,]\s*已影响平台稳定性[，,]\s*暂停\s*openapi[。.!！]?", re.IGNORECASE)
+CHANNEL16688_TRADE_NO_RE = re.compile(r"[A-Za-z0-9_-]{1,100}")
+CANBOSO_CANCELLED_STATUSES = {"cancelled", "canceled", "refunded"}
 
 EMAIL_RE = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9._%+-]{0,62}[A-Za-z0-9])?@"
@@ -318,9 +322,15 @@ class Service:
                 return {}, "ORDER_NOT_ELIGIBLE"
             try:
                 order = self.channel.verify_order(code, order_goods)
-            except Exception:
-                self.ledger.transition(code, "needs_manual_review", "16688_unavailable", {"last_error_code": "UPSTREAM_ERROR", "last_error_message": "16688 verification unavailable"}, ("purchasing",))
-                self.alert(code, "UPSTREAM_ERROR")
+            except Exception as exc:
+                paused = self._channel16688_paused(exc)
+                error = "CHANNEL16688_OPENAPI_PAUSED" if paused else "UPSTREAM_ERROR"
+                message = "16688 暂停 OpenAPI，订单待核验" if paused else "16688 核验服务暂不可用"
+                if self.ledger.transition(code, "needs_manual_review", "16688_unavailable", {"last_error_code": error, "last_error_message": message}, ("purchasing",)):
+                    if paused:
+                        self._alert_16688_paused()
+                    else:
+                        self.alert(code, error)
                 return self.public_row(self.ledger.get_code(code)), None
             if not order.get("ok"):
                 if order.get("error") == "ORDER_NOT_ELIGIBLE":
@@ -387,19 +397,36 @@ class Service:
             self.alert(code, "UPSTREAM_ERROR")
             return self.public_row(self.ledger.get_code(code))
         order = result.get("order") or {}
-        updates: dict[str, Any] = {"upstream_order_code": order.get("orderCode"), "upstream_status": order.get("status"), "cost_usd": cost, "request_payload_json": None}
-        if sku["product_type"] == "account":
+        if not order.get("orderCode"):
+            self.ledger.transition(code, "needs_manual_review", "upstream_purchase_unconfirmed", {"last_error_code": "UPSTREAM_ERROR", "last_error_message": "Canboso 未返回订单号，需核对原请求"}, ("purchasing",))
+            self.alert(code, "UPSTREAM_ERROR")
+            return self.public_row(self.ledger.get_code(code))
+        payment = result.get("payment") or {}
+        confirmed_cost = self._canboso_usd_amount(payment.get("amountUsd"))
+        if confirmed_cost is None and str(payment.get("currency")).upper() in {"USD", "USDT"}:
+            confirmed_cost = self._canboso_usd_amount(payment.get("amount"))
+        status = str(order.get("status") or "").strip().lower()
+        updates: dict[str, Any] = {"upstream_order_code": order["orderCode"], "upstream_status": status, "cost_usd": cost if confirmed_cost is None else confirmed_cost, "request_payload_json": None}
+        if status in CANBOSO_CANCELLED_STATUSES:
+            target, reason = "needs_manual_review", "canboso_purchase_cancelled"
+            updates.update(self._canboso_cancellation(status))
+        elif sku["product_type"] == "account":
             delivery = self._safe_delivery(result.get("delivery") or {})
-            updates.update({"status": "delivered_pending_warranty", "delivery_json": json.dumps(delivery, ensure_ascii=False), "completed_at": None})
-            self.ledger.transition(code, "delivered_pending_warranty", "exclusive_delivered", updates, ("purchasing",))
+            updates.update({"delivery_json": json.dumps(delivery, ensure_ascii=False), "completed_at": None})
+            target, reason = "delivered_pending_warranty", "exclusive_delivered"
         else:
-            self.ledger.transition(code, "waiting_fulfillment", "shared_order_accepted", updates, ("purchasing",))
+            target, reason = "waiting_fulfillment", "shared_order_accepted"
+        if not self.ledger.transition(code, target, reason, updates, ("purchasing",)):
+            logger.error("Canboso accepted purchase but order could not be recorded")
         return self.public_row(self.ledger.get_code(code))
 
-    def replay(self, code: str, override: bool = False, note: str = "") -> tuple[dict[str, Any], Optional[str]]:
+    def replay(self, code: str, override: bool = False, note: str = "", merchant_verified_order_no: str = "") -> tuple[dict[str, Any], Optional[str]]:
         row = self.ledger.get_code(code)
-        if not row or row["status"] != "needs_manual_review" or not row.get("idempotency_key") or not row.get("request_payload_json"):
+        if not row or row["status"] != "needs_manual_review" or row.get("upstream_order_code") or not row.get("idempotency_key") or not row.get("request_payload_json"):
             return (self.admin_detail(row) if row else {}), "RETRY_NOT_AVAILABLE"
+        manual_trade_no = merchant_verified_order_no.strip()
+        if manual_trade_no and (row["channel"] != "16688" or not CHANNEL16688_TRADE_NO_RE.fullmatch(manual_trade_no)):
+            return self.admin_detail(row), "ORDER_NOT_ELIGIBLE"
         sku = self.ledger.get_sku(row["sku_key"])
         try:
             ok, reason, cost = self.upstream_preflight(sku, override)
@@ -412,6 +439,8 @@ class Service:
             self.ledger.transition(code, "needs_manual_review", f"admin_retry_failed:{reason}", {"last_error_code": reason, "last_error_message": error_message}, ("needs_manual_review",))
             self.alert(code, reason)
             return self.admin_detail(self.ledger.get_code(code)), reason
+        verified_trade_no = ""
+        manually_verified = False
         if row["channel"] == "16688":
             order_goods = row.get("goods_no") or sku.get("goods_no")
             if not order_goods:
@@ -427,16 +456,18 @@ class Service:
             try:
                 order = self.channel.verify_order(code, order_goods)
             except Exception as exc:
-                logger.warning("admin retry 16688 verify failed code=%s sku=%s error_type=%s detail=%s", code, sku["sku_key"], type(exc).__name__, exc)
-                self.ledger.transition(
-                    code,
-                    "needs_manual_review",
-                    "admin_retry_failed:UPSTREAM_ERROR",
-                    {"last_error_code": "UPSTREAM_ERROR", "last_error_message": self._format_upstream_exception("16688 核验失败", exc)},
-                    ("needs_manual_review",),
-                )
-                self.alert(code, "UPSTREAM_ERROR")
-                return self.admin_detail(self.ledger.get_code(code)), "UPSTREAM_ERROR"
+                paused = self._channel16688_paused(exc)
+                if not paused or not manual_trade_no:
+                    error = "CHANNEL16688_OPENAPI_PAUSED" if paused else "UPSTREAM_ERROR"
+                    message = "16688 暂停 OpenAPI，需到商家后台核验订单" if paused else self._format_upstream_exception("16688 核验失败", exc)
+                    if self.ledger.transition(code, "needs_manual_review", f"admin_retry_failed:{error}", {"last_error_code": error, "last_error_message": message}, ("needs_manual_review",)):
+                        if paused:
+                            self._alert_16688_paused()
+                        else:
+                            self.alert(code, error)
+                    return self.admin_detail(self.ledger.get_code(code)), error
+                order = {"ok": True, "trade_no": manual_trade_no}
+                manually_verified = True
             if not order.get("ok"):
                 verify_err = "ORDER_NOT_ELIGIBLE" if order.get("error") == "ORDER_NOT_ELIGIBLE" else "UPSTREAM_ERROR"
                 verify_msg = "16688 订单不符合领货条件" if verify_err == "ORDER_NOT_ELIGIBLE" else "16688 核验失败"
@@ -450,19 +481,28 @@ class Service:
                 self.alert(code, verify_err)
                 return self.admin_detail(self.ledger.get_code(code)), verify_err
             verified_trade_no = str(order.get("trade_no") or "").strip()
-            if verified_trade_no:
-                bind_res = self.ledger.bind_code_external_order(code, verified_trade_no, reason="channel16688_order_verified")
-                if bind_res == "conflict":
-                    logger.warning("16688 verified trade_no conflicts with existing external_order_id code=%s", code)
-        audit_reason = "admin_retry" if not note.strip() else f"admin_retry:{note.strip()[:200]}"
-        self.ledger.transition(code, "purchasing", audit_reason, {"last_error_code": None, "last_error_message": None}, ("needs_manual_review",))
+        audit_reason = "admin_retry_16688_merchant_verified" if manually_verified else "admin_retry"
+        if note.strip():
+            audit_reason += f":{note.strip()[:200]}"
+        claim_error = self.ledger.claim_purchase_retry(code, row["idempotency_key"], audit_reason, verified_trade_no)
+        if claim_error:
+            return self.admin_detail(self.ledger.get_code(code)), claim_error
         self._purchase(code, self.ledger.get_code(code), sku, cost)
-        return self.admin_detail(self.ledger.get_code(code)), None
+        updated = self.ledger.get_code(code)
+        if updated["status"] == "needs_manual_review" or not updated["upstream_order_code"]:
+            error = {
+                "UPSTREAM_TIMEOUT": "UPSTREAM_TIMEOUT",
+                "CANBOSO_ORDER_CANCELLED": "CANBOSO_ORDER_CANCELLED",
+            }.get(updated["last_error_code"], "CANBOSO_PURCHASE_UNCONFIRMED")
+            return self.admin_detail(updated), error
+        return self.admin_detail(updated), None
 
     def poll(self, code: str) -> dict[str, Any]:
         row = self.ledger.get_code(code)
         if not row or row["status"] != "waiting_fulfillment":
             return self.public_row(row) if row else {}
+        if row.get("upstream_status") in CANBOSO_CANCELLED_STATUSES:
+            return self._record_canboso_cancellation(code, row["upstream_status"])
         if row.get("submitted_at") and datetime.fromisoformat(row["submitted_at"]) < datetime.now(timezone.utc).astimezone() - timedelta(hours=24):
             self.ledger.transition(code, "needs_manual_review", "fulfillment_over_24h", {"last_error_code": "FULFILLMENT_TIMEOUT"}, ("waiting_fulfillment",))
             self.alert(code, "FULFILLMENT_TIMEOUT")
@@ -476,11 +516,40 @@ class Service:
         item = (response.get("orders") or [{}])[0]
         status = str(item.get("status") or "").lower()
         updates = {"upstream_status": status, "last_polled_at": now_iso()}
+        confirmed_cost = self._canboso_usd_amount((item.get("payment") or {}).get("amountUsd"))
+        if confirmed_cost is not None:
+            updates["cost_usd"] = confirmed_cost
+        if status in CANBOSO_CANCELLED_STATUSES:
+            return self._record_canboso_cancellation(code, status, updates)
         if status in {"completed", "delivered"} or item.get("deliveredAt"):
             updates.update({"completed_at": now_iso(), "delivery_json": None})
             self.ledger.transition(code, "completed", "shared_fulfillment_completed", updates, ("waiting_fulfillment",))
         else:
             self.ledger.transition(code, "waiting_fulfillment", "shared_poll", updates, ("waiting_fulfillment",))
+        return self.public_row(self.ledger.get_code(code))
+
+    @staticmethod
+    def _canboso_usd_amount(value: Any) -> Optional[float]:
+        if isinstance(value, bool):
+            return None
+        try:
+            amount = float(value)
+        except (TypeError, ValueError, OverflowError):
+            return None
+        return amount if math.isfinite(amount) and amount >= 0 else None
+
+    @staticmethod
+    def _canboso_cancellation(status: str) -> dict[str, Any]:
+        return {
+            "upstream_status": status,
+            "last_error_code": "CANBOSO_ORDER_CANCELLED",
+            "last_error_message": "Canboso 已终止订单，请核对钱包退款和买家交付。",
+        }
+
+    def _record_canboso_cancellation(self, code: str, status: str, updates: Optional[dict[str, Any]] = None) -> dict[str, Any]:
+        self.ledger.transition(code, "needs_manual_review", "canboso_order_cancelled", {
+            **(updates or {}), **self._canboso_cancellation(status),
+        }, ("waiting_fulfillment",))
         return self.public_row(self.ledger.get_code(code))
 
     def _handle_poll_failure(self, code: str, error_message: str = "upstream error") -> dict[str, Any]:
@@ -783,6 +852,22 @@ class Service:
         if self.ledger.claim_notification(f"alert:{code}:{reason}"):
             self._safe_send("Plan 2 异常报警", f"兑换码 {code} 需要人工处理。事件：{reason}。")
 
+    @staticmethod
+    def _channel16688_paused(exc: Exception) -> bool:
+        return (
+            isinstance(exc, UpstreamError)
+            and exc.status_code == 502
+            and exc.rejected
+            and bool(CHANNEL16688_EXPLICIT_PAUSE_RE.fullmatch(exc.message.strip()))
+        )
+
+    def _alert_16688_paused(self) -> None:
+        if self.ledger.claim_notification(CHANNEL16688_OPENAPI_PAUSED_KEY) and not self._safe_send(
+            "16688 暂停 OpenAPI，库存查询和验单受影响",
+            "16688 报告已暂停 OpenAPI。自动补卡任务会继续检查，待人工订单可到商家后台核验。",
+        ):
+            self.ledger.clear_notification(CHANNEL16688_OPENAPI_PAUSED_KEY)
+
     def _safe_send(self, subject: str, body: str, attachment: Optional[tuple[str, bytes, str]] = None) -> bool:
         try:
             self.mailer.send(subject, body, attachment)
@@ -966,6 +1051,7 @@ class Service:
                 "is_low_balance": balance_usd < self.settings.canboso_low_balance_threshold_usd,
                 "checked_at": now_iso(),
                 "error": None,
+                "today_purchases": self.ledger.canboso_purchase_totals(datetime.now(timezone(timedelta(hours=8))).date().isoformat()),
             },
             "telegram_warranty": {
                 "enabled": bool(self.settings.tg_warranty_enabled),
@@ -2936,13 +3022,7 @@ class Service:
 
             if not dry_check and openapi_paused:
                 logger.warning("16688 OpenAPI is paused (restock trigger=%s)", trigger)
-                if not self.ledger.has_notification(CHANNEL16688_OPENAPI_PAUSED_KEY):
-                    sent = self._safe_send(
-                        "16688 暂停 OpenAPI，自动补卡查询受影响",
-                        "16688 报告已暂停 OpenAPI。定时任务会继续查询库存，受影响的商品在查询恢复后按原规则补卡。",
-                    )
-                    if sent:
-                        self.ledger.claim_notification(CHANNEL16688_OPENAPI_PAUSED_KEY)
+                self._alert_16688_paused()
             elif not dry_check and checked_stock:
                 self.ledger.clear_notification(CHANNEL16688_OPENAPI_PAUSED_KEY)
 

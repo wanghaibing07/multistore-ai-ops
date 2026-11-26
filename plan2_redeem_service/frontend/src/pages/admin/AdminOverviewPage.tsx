@@ -28,6 +28,7 @@ export function AdminOverviewPage({
   };
 
   const { canboso, counts, skus } = overview;
+  const todayPurchases = canboso.today_purchases;
   const manualAttentionCount =
     counts.manual_attention ??
     counts.needs_manual_review +
@@ -226,6 +227,29 @@ export function AdminOverviewPage({
               </div>
             )}
           </div>
+
+          {todayPurchases && (
+            <section className="ops-meta-list" aria-labelledby="canboso-today-purchases">
+              <h3 id="canboso-today-purchases" className="ops-price-label" style={{ margin: 0 }}>
+                今日采购（上海时间）
+              </h3>
+              <div className="ops-meta-row">
+                <span className="ops-meta-key">采购记录合计</span>
+                <span className="mono tabular ops-meta-val">
+                  {todayPurchases.order_count} 单 · {formatUsd(todayPurchases.gross_usd)}
+                </span>
+              </div>
+              <div className="ops-meta-row">
+                <span className="ops-meta-key">其中上游已取消</span>
+                <span className="mono tabular ops-meta-val">
+                  {todayPurchases.cancelled_count} 单 · {formatUsd(todayPurchases.cancelled_gross_usd)}
+                </span>
+              </div>
+              <p className="ops-price-label" style={{ margin: 0 }}>
+                合计包含已取消订单和按报价记账的金额，退款以钱包到账为准。
+              </p>
+            </section>
+          )}
         </article>
 
         {skus.map((sku) => {

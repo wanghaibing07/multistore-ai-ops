@@ -129,6 +129,10 @@ function translateAuditReason(rawReason: string): { title?: string; detail: stri
     const note = reason.slice("admin_retry:".length).trim();
     return { title: "商家手动重试", detail: note ? `重新向上游下单（备注：${note}）` : "重新向上游下单" };
   }
+  if (reason === "admin_retry_16688_merchant_verified" || reason.startsWith("admin_retry_16688_merchant_verified:")) {
+    const note = reason.slice("admin_retry_16688_merchant_verified".length + 1).trim();
+    return { title: "商家人工核验后重试", detail: note || "16688 OpenAPI 暂停，商家在后台核验订单后续单" };
+  }
   if (reason.startsWith("admin_retry_failed:")) {
     const sub = reason.slice("admin_retry_failed:".length).trim();
     const mapped = translateAuditReason(sub).detail;
@@ -136,6 +140,13 @@ function translateAuditReason(rawReason: string): { title?: string; detail: stri
   }
 
   switch (reason) {
+    case "canboso_order_cancelled":
+    case "canboso_purchase_cancelled":
+      return { title: "上游订单已终止", detail: "请核对钱包是否收到退款，并跟进买家交付" };
+    case "CHANNEL16688_OPENAPI_PAUSED":
+      return { detail: "16688 暂停 OpenAPI，待商家核验" };
+    case "upstream_purchase_unconfirmed":
+      return { title: "上游下单待核对", detail: "Canboso 没有返回订单号，原请求已保留" };
     case "issued":
       return { title: "生成兑换码", detail: "已建好兑换码，等买家打开链接提货" };
     case "agiso_card_pool_push":

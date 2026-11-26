@@ -173,7 +173,13 @@
     "low_balance_threshold_usd": 80.0,
     "is_low_balance": true,
     "checked_at": "2026-11-23T06:00:00+08:00",
-    "error": null
+    "error": null,
+    "today_purchases": {
+      "order_count": 2,
+      "gross_usd": 26.94,
+      "cancelled_count": 1,
+      "cancelled_gross_usd": 13.47
+    }
   },
   "telegram_warranty": {
     "enabled": false,
@@ -339,9 +345,9 @@
 - 返回图片二进制流与对应 `Content-Type`（前端带 Bearer Token 拉取 Blob 展示，不公开暴露静态 URL）。
 
 ### 5.8 后台操作动作
-- `POST /api/v1/admin/codes/{code}/poll`：立即查一次 Canboso 订单状态，返回最新 `AdminCodeDetail`。
+- `POST /api/v1/admin/codes/{code}/poll`：立即查一次 Canboso 订单状态。上游终止的订单转待人工，保留订单号和采购记录，退款以钱包入账为准。
 - `POST /api/v1/admin/codes/{code}/revoke`：请求 `{ "reason": "买家退款" }`，作废兑换码，返回最新 `AdminCodeDetail`。
-- `POST /api/v1/admin/codes/{code}/retry`：请求 `{ "override_price_limit": false, "note": "" }`，对 `needs_manual_review` 订单安全重试（复用已落库 `Idempotency-Key` 防重复扣款），返回最新 `AdminCodeDetail`。
+- `POST /api/v1/admin/codes/{code}/retry`：对有原始请求、尚无上游单号的 `needs_manual_review` 订单复用已落库 `Idempotency-Key`。请求可带 `override_price_limit`、`note` 和 `merchant_verified_order_no`。仅在 16688 明确暂停 OpenAPI 时使用商家核验的单号，实时验单明确拒绝时会拦截。上游未确认或返回取消时返回对应错误，订单详情保留核对信息。
 - `POST /api/v1/admin/codes/{code}/warranty-ack`：请求 `{ "note": "已发Canboso管理员" }`，将独享保修状态标记为 `registered_upstream`，返回最新 `AdminCodeDetail`。
 - `POST /api/v1/admin/codes/{code}/warranty-forward`：管理员手动触发 / 重试 Telegram 私聊保修报备（带单号锁幂等防重发）。成功返回 `200 AdminCodeDetail`（状态流转为 `registered_upstream`）；未配置/未就绪返回 `503 TG_NOT_CONFIGURED`，发送失败返回 `503 TG_FORWARD_FAILED`（返回脱敏错误并记录 `warranty_tg_forward_failed` 审计），已报备返回 `409 WARRANTY_LOCKED`。
 

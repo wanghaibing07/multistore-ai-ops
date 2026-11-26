@@ -39,6 +39,7 @@ class RevokeRequest(BaseModel):
 class RetryRequest(BaseModel):
     override_price_limit: bool = False
     note: str = ""
+    merchant_verified_order_no: str = Field(default="", max_length=100)
 
 
 class WarrantyAckRequest(BaseModel):

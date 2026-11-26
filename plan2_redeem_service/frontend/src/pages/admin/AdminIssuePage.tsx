@@ -358,8 +358,11 @@ export function AdminIssuePage({
                 onChange={(event) => setBatchChannel(event.target.value as Channel)}
               >
                 <option value="16688">16688 自动发卡上货</option>
-                <option value="taobao">淘宝提前备码</option>
+                <option value="taobao">淘宝 / 手动发货备码</option>
               </select>
+              <span className="field-hint">
+                {batchChannel === "16688" ? "生成后会上架到 16688，买家提货时会核验 16688 订单。" : "生成后可手动发给买家，提货时无需 16688 订单。"}
+              </span>
             </div>
 
             <div className="field-group">

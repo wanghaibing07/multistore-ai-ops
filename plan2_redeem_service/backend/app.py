@@ -71,6 +71,7 @@ def status_for(code: str) -> int:
         "ORDER_NOT_ELIGIBLE": 409,
         "CANNOT_REVOKE_COMPLETED": 409,
         "RETRY_NOT_AVAILABLE": 409,
+        "CANBOSO_ORDER_CANCELLED": 409,
         "WARRANTY_LOCKED": 409,
         "WARRANTY_NOT_APPLICABLE": 409,
         "WARRANTY_NOT_ALLOWED": 409,
@@ -618,8 +619,11 @@ def create_app(
             return error("CODE_NOT_FOUND", "没找到这个兑换码", 404)
         if row["status"] == "completed":
             return error("CANNOT_REVOKE_COMPLETED", "这笔单已经完成了，不能作废", 409)
-        if svc.ledger.transition(code, "revoked", body.reason, {"last_error_code": "REVOKED"}):
-            svc.ledger.mark_agiso_delivery_revoked(code)
+        if not svc.ledger.transition(code, "revoked", body.reason, {"last_error_code": "REVOKED"}, (
+            "unused", "validating", "waiting_fulfillment", "delivered_pending_warranty", "needs_manual_review", "revoked",
+        )):
+            return error("CONCURRENT_IN_PROGRESS", "订单正在处理，请等下单结果落账后再作废", 409)
+        svc.ledger.mark_agiso_delivery_revoked(code)
         return svc.admin_detail(ledger.get_code(code))
 
     @app.post("/api/v1/admin/codes/{code}/retry", dependencies=[Depends(require_admin)])
@@ -629,18 +633,22 @@ def create_app(
             return error("CODE_NOT_FOUND", "没找到这个兑换码", 404)
         if row["status"] != "needs_manual_review":
             return svc.admin_detail(row)
-        _, err_code = svc.replay(code, body.override_price_limit, body.note)
+        detail, err_code = svc.replay(code, body.override_price_limit, body.note, body.merchant_verified_order_no)
         if err_code:
             messages = {
-                "RETRY_NOT_AVAILABLE": "这笔单没有可重试的原始请求，请先核对详情",
-                "ORDER_NOT_ELIGIBLE": "16688 订单状态不符合领货条件（可能未售出、已退款或有投诉），已拦截重试",
+                "RETRY_NOT_AVAILABLE": "这笔单已有上游订单、正在处理，或没有可重试的原始请求，请核对详情",
+                "ORDER_NOT_ELIGIBLE": "16688 单号或订单状态不符合领货条件，已拦截重试",
+                "CHANNEL16688_OPENAPI_PAUSED": "16688 暂停 OpenAPI，请在商家后台核验订单后再试",
                 "PRICE_LIMIT_EXCEEDED": "上游现价还是高于上限，确认接受再勾选放行重试",
                 "LOW_BALANCE": "Canboso 余额不够，充值后再试",
                 "UPSTREAM_OUT_OF_STOCK": "上游暂时没货，等补货后再试",
                 "UPSTREAM_ERROR": "上游暂时连不上，请稍后再试",
+                "UPSTREAM_TIMEOUT": "Canboso 下单超时，请在订单详情核对状态。重试会沿用原请求。",
+                "CANBOSO_PURCHASE_UNCONFIRMED": "Canboso 未确认下单，请查看订单详情。重试会沿用原请求。",
+                "CANBOSO_ORDER_CANCELLED": "Canboso 返回的订单已终止，请核对钱包退款和买家交付。",
             }
             return error(err_code, messages.get(err_code, "重试没成功，点开详情看看原因"), status_for(err_code))
-        return svc.admin_detail(ledger.get_code(code))
+        return detail
 
     @app.post("/api/v1/admin/codes/{code}/warranty-ack", dependencies=[Depends(require_admin)])
     def warranty_ack(code: str, body: WarrantyAckRequest, svc: Service = Depends(get_service)) -> Any:

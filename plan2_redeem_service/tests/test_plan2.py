@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 from datetime import datetime, timedelta, timezone
+from threading import Event
 
 import httpx
 import pytest
@@ -70,6 +71,57 @@ def test_shared_redeem_and_poll_completion(components):
         assert done.json()["status"] == "completed"
         assert done.json()["delivery"] is None
         assert mailer.sent == []
+
+
+def test_canboso_cancelled_purchase_enters_manual_review_and_stays_in_gross(components):
+    app, _, canboso, _, _ = components
+    with client(app) as c:
+        code = issue(c)
+        assert c.post(f"/api/v1/public/codes/{code}/redeem", json={
+            "buyer_email": "buyer@example.com", "preflight_confirmed": True,
+        }).json()["status"] == "waiting_fulfillment"
+        ledger = app.state.ledger
+        row = ledger.get_code(code)
+        canboso.orders[row["upstream_order_code"]]["status"] = "cancelled"
+        cancelled = c.post(f"/api/v1/admin/codes/{code}/poll", headers=ADMIN).json()
+        assert cancelled["status"] == "needs_manual_review"
+        assert cancelled["last_error_code"] == "CANBOSO_ORDER_CANCELLED"
+        assert cancelled["upstream_order_code"] == row["upstream_order_code"]
+        retry = c.post(f"/api/v1/admin/codes/{code}/retry", headers=ADMIN, json={})
+        assert retry.status_code == 409 and retry.json()["error_code"] == "RETRY_NOT_AVAILABLE"
+        assert len(canboso.orders) == 1
+        today = c.get("/api/v1/admin/overview", headers=ADMIN).json()["canboso"]["today_purchases"]
+        assert today == {"order_count": 1, "gross_usd": row["cost_usd"], "cancelled_count": 1, "cancelled_gross_usd": row["cost_usd"]}
+
+
+def test_admin_retry_preserves_cancelled_purchase_during_concurrent_revoke(components, monkeypatch):
+    app, _, canboso, _, _ = components
+    started, release = Event(), Event()
+    def purchase(key, payload):
+        started.set()
+        assert release.wait(8)
+        return {"order": {"orderCode": "test-cancelled", "status": "CANCELLED"}, "payment": {"currency": "USD", "amount": 62.25}}
+
+    with client(app) as c:
+        code = issue(c, sku="ultra_exclusive_admin")
+        canboso.balance = 0
+        assert c.post(f"/api/v1/public/codes/{code}/redeem", json={"preflight_confirmed": True}).json()["status"] == "needs_manual_review"
+        canboso.balance = 1000
+        monkeypatch.setattr(canboso, "purchase", purchase)
+        with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+            retry = pool.submit(c.post, f"/api/v1/admin/codes/{code}/retry", headers=ADMIN, json={})
+            try:
+                assert started.wait(8)
+                revoke = c.post(f"/api/v1/admin/codes/{code}/revoke", headers=ADMIN, json={})
+                assert revoke.status_code == 409 and revoke.json()["error_code"] == "CONCURRENT_IN_PROGRESS"
+            finally:
+                release.set()
+            result = retry.result()
+        assert result.status_code == 409 and result.json()["error_code"] == "CANBOSO_ORDER_CANCELLED"
+        row = app.state.ledger.get_code(code)
+        assert row["status"] == "needs_manual_review" and row["upstream_order_code"] == "test-cancelled"
+        assert row["cost_usd"] == 62.25 and row["delivery_json"] is None
+        assert c.get("/api/v1/admin/overview", headers=ADMIN).json()["canboso"]["today_purchases"]["cancelled_gross_usd"] == 62.25
 
 
 def test_any_valid_email_domain_is_accepted_for_redeem_and_warranty(components):
@@ -349,6 +401,56 @@ def test_16688_verification_error_keeps_replay_key_and_retry_reports_failure(com
         retry = c.post(f"/api/v1/admin/codes/{code}/retry", headers=ADMIN, json={"note": "再次检查"})
         assert retry.status_code == 503 and retry.json()["error_code"] == "PRICE_LIMIT_EXCEEDED"
         assert "admin_retry_failed:PRICE_LIMIT_EXCEEDED" in [event["reason"] for event in app.state.ledger.audit(code)]
+
+
+def test_16688_paused_requires_merchant_verification_and_reuses_purchase_key(components, monkeypatch):
+    app, _, canboso, channel, mailer = components
+
+    def paused(code, goods_no):
+        raise UpstreamError(502, "系统长时间超负载，已影响平台稳定性，暂停OpenAPI", rejected=True)
+
+    def not_paused(code, goods_no):
+        raise UpstreamError(502, "未暂停 OpenAPI", rejected=True)
+
+    monkeypatch.setattr(channel, "verify_order", paused)
+    with client(app) as c:
+        ledger = app.state.ledger
+        batch = c.post("/api/v1/admin/codes/batch", headers=ADMIN, json={
+            "sku_key": "ultra_shared_slot", "channel": "16688", "goods_no": "G100", "count": 2,
+        })
+        assert batch.status_code == 201
+        codes = batch.json()["codes"]
+        for code in codes:
+            result = c.post(f"/api/v1/public/codes/{code}/redeem", json={
+                "buyer_email": "buyer@example.com", "preflight_confirmed": True,
+            })
+            assert result.json()["status"] == "needs_manual_review"
+        code = codes[0]
+        endpoint = f"/api/v1/admin/codes/{code}/retry"
+        assert c.post(endpoint, headers=ADMIN, json={}).json()["error_code"] == "CHANNEL16688_OPENAPI_PAUSED"
+        assert len(mailer.sent) == 1
+        assert not canboso.orders
+        original = ledger.get_code(code)
+        assert ledger.bind_code_external_order(code, "merchant-123") == "bound"
+        assert c.post(endpoint, headers=ADMIN, json={"merchant_verified_order_no": "wrong-123"}).status_code == 409
+
+        monkeypatch.setattr(channel, "verify_order", lambda *_: {"ok": False, "error": "ORDER_NOT_ELIGIBLE"})
+        payload = {"merchant_verified_order_no": "merchant-123"}
+        assert c.post(endpoint, headers=ADMIN, json=payload).status_code == 409
+        assert not canboso.orders
+
+        monkeypatch.setattr(channel, "verify_order", not_paused)
+        assert c.post(endpoint, headers=ADMIN, json=payload).json()["error_code"] == "UPSTREAM_ERROR"
+        assert not canboso.orders
+
+        monkeypatch.setattr(channel, "verify_order", paused)
+        retry = c.post(endpoint, headers=ADMIN, json=payload)
+        assert retry.status_code == 200 and retry.json()["status"] == "waiting_fulfillment"
+        assert retry.json()["external_order_id"] == "merchant-123"
+        assert original["idempotency_key"] in canboso.idempotent
+        assert "admin_retry_16688_merchant_verified" in [event["reason"] for event in ledger.audit(code)]
+        c.post(endpoint, headers=ADMIN, json=payload)
+        assert len(canboso.orders) == 1
 
 
 def test_revoke_completed_is_blocked(components):

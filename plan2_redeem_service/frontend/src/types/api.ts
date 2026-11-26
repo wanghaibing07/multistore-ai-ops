@@ -96,6 +96,12 @@ export interface AdminCanbosoStatus {
   is_low_balance: boolean;
   checked_at: string | null;
   error: string | null;
+  today_purchases?: {
+    order_count: number;
+    gross_usd: number;
+    cancelled_count: number;
+    cancelled_gross_usd: number;
+  };
 }
 
 export interface AdminSkuStatus {

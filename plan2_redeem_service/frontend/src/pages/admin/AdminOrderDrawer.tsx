@@ -62,6 +62,7 @@ export function AdminOrderDrawer({
 
   const [overridePriceLimit, setOverridePriceLimit] = useState(false);
   const [retryNote, setRetryNote] = useState("");
+  const [merchantVerifiedOrderNo, setMerchantVerifiedOrderNo] = useState("");
   const [retryConfirmOpen, setRetryConfirmOpen] = useState(false);
   const [retrying, setRetrying] = useState(false);
 
@@ -93,6 +94,7 @@ export function AdminOrderDrawer({
     setScreenshotZoomOpen(false);
     setOverridePriceLimit(false);
     setRetryNote("");
+    setMerchantVerifiedOrderNo("");
     setAckNote("");
     setRevokeReason("买家退款或手动作废");
     if (code) {
@@ -249,18 +251,23 @@ export function AdminOrderDrawer({
       const updated = await retryAdminCode(token, code, {
         override_price_limit: overridePriceLimit,
         note: retryNote.trim() || undefined,
+        merchant_verified_order_no: merchantVerifiedOrderNo.trim() || undefined,
       });
       setDetail(updated);
       setRetryConfirmOpen(false);
       setOverridePriceLimit(false);
       setRetryNote("");
+      setMerchantVerifiedOrderNo("");
       onMutated();
-      pushToast("已重新向上游发起下单", "success");
+      if (updated.upstream_order_code) {
+        pushToast("已取得上游订单号", "success");
+      }
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 401) {
         onUnauthorized();
         return;
       }
+      void loadDetail();
       pushToast(caught instanceof ApiError ? caught.message : "重新下单失败，请稍后排查", "error");
     } finally {
       setRetrying(false);
@@ -301,9 +308,9 @@ export function AdminOrderDrawer({
   const canPoll = Boolean(
     detail && detail.status === "waiting_fulfillment" && detail.upstream_order_code
   );
-  const canRetry = Boolean(detail && detail.status === "needs_manual_review");
+  const canRetry = Boolean(detail && detail.status === "needs_manual_review" && detail.idempotency_key && !detail.upstream_order_code);
   const canRevoke = Boolean(
-    detail && detail.status !== "completed" && detail.status !== "revoked"
+    detail && detail.status !== "completed" && detail.status !== "revoked" && detail.status !== "purchasing"
   );
   const hasActions = canPoll || canRetry || canRevoke;
 
@@ -849,6 +856,19 @@ export function AdminOrderDrawer({
                     {canRetry && (
                       <div className="inset-panel stack-sm">
                         <strong style={{ fontSize: 13.5 }}>重新向上游下单</strong>
+                        {detail.channel === "16688" && (
+                          <label className="stack-sm">
+                            <span>人工核验的 16688 订单号（OpenAPI 暂停时使用）</span>
+                            <input
+                              type="text"
+                              className="input mono"
+                              maxLength={100}
+                              value={merchantVerifiedOrderNo}
+                              onChange={(event) => setMerchantVerifiedOrderNo(event.target.value)}
+                            />
+                            <small>请先在 16688 商家后台确认该订单已付款、兑换码和商品相符，且没有退款或投诉。</small>
+                          </label>
+                        )}
                         <label className={`check-card ${overridePriceLimit ? "is-checked" : ""}`}>
                           <input
                             type="checkbox"
@@ -977,6 +997,9 @@ export function AdminOrderDrawer({
             ? "你已勾选按当前进价放行，生产模式下会直接按上游现价下单。"
             : "系统会自动防止重复扣款，并继续检查单笔最高进价限制。"}
         </p>
+        {merchantVerifiedOrderNo.trim() && (
+          <p>确认你已在 16688 商家后台核验订单 <strong className="mono">{merchantVerifiedOrderNo.trim()}</strong>。</p>
+        )}
       </ConfirmDialog>
 
       <ConfirmDialog
