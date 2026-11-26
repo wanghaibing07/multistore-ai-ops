@@ -6,7 +6,7 @@ import io
 import json
 import re
 import zipfile
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
 from typing import Any
 
@@ -19,19 +19,20 @@ MAX_FILE = 8 * 1024 * 1024
 MAX_EXPANDED = 80 * 1024 * 1024
 MAX_ROWS = 20000
 PARSER_VERSION = "3"
+SHANGHAI_TZ = timezone(timedelta(hours=8))
 
 ALIASES = {
     "item_id": ["子订单编号", "子订单号", "子订单ID", "item_id", "item_external_id"],
-    "order_id": ["主订单编号", "订单编号", "订单号", "order_id", "order_external_id"],
-    "sku": ["SKU", "sku", "商家编码", "规格编码"],
-    "product_id": ["商品ID", "商品id", "product_id"],
+    "order_id": ["主订单编号", "订单编号", "订单号", "order_id", "order_external_id", "trade_no", "交易单号", "平台单号"],
+    "sku": ["SKU", "sku", "商家编码", "规格编码", "goods_no", "商品编号", "商品货号"],
+    "product_id": ["商品ID", "商品id", "product_id", "goods_id"],
     "property": ["商品属性", "商品sku信息", "SKU信息", "商品属性SKU", "property"],
-    "title": ["商品标题", "宝贝标题", "title"],
-    "quantity": ["购买数量", "数量", "宝贝总数量", "商品数量", "quantity"],
-    "paid_at": ["订单付款时间", "付款时间", "paid_at"],
-    "status": ["订单状态", "交易状态", "履约/售后状态", "status"],
-    "shipped_at": ["发货时间", "发货日期", "shipping_time", "shipped_at"],
-    "payment": ["买家实付金额", "买家实际支付金额", "实付金额", "买家应付货款", "总金额", "payment"],
+    "title": ["商品标题", "宝贝标题", "title", "goods_name", "商品名称"],
+    "quantity": ["购买数量", "数量", "宝贝总数量", "商品数量", "quantity", "num", "buy_num"],
+    "paid_at": ["订单付款时间", "付款时间", "paid_at", "pay_time", "success_time", "支付时间"],
+    "status": ["订单状态", "交易状态", "履约/售后状态", "status", "order_status", "status_label"],
+    "shipped_at": ["发货时间", "发货日期", "shipping_time", "shipped_at", "delivery_time", "send_time", "发卡时间"],
+    "payment": ["买家实付金额", "买家实际支付金额", "实付金额", "买家应付货款", "总金额", "payment", "pay_price", "total_amount", "total_price", "goods_total_amount", "支付金额", "订单金额"],
     "refund_status": ["退款状态", "售后状态", "退款/售后状态", "订单关闭原因", "refund_status"],
     "refund_amount": ["退款金额", "退款总额", "退给买家金额", "refund_amount"],
     "refund_id": ["退款编号", "售后编号", "退款单号", "refund_id"],
@@ -51,9 +52,18 @@ REQUIRED = {
     "costs": {"sku", "valid_from", "unit_cost"},
     "cashflows": {"bill_type","business_flow","order_id","item_id","settled_at","bill_income","bill_refund"},
 }
+_16688_CREATED_AT_ALIASES = ("下单时间", "创建时间", "create_time", "created_at")
 
 class ImportProblem(ValueError):
     pass
+
+def normalize_channel(value: str | None) -> str:
+    raw = str(value or "").strip().lower()
+    if not raw or raw in ("qianniu", "taobao", "千牛", "淘宝"):
+        return "qianniu"
+    if raw in ("16688", "16688_store", "16688自营", "16688卖货"):
+        return "16688"
+    raise ImportProblem("订单渠道无效，仅支持千牛淘宝或 16688")
 
 def serialize_sqlite_writes(db: Session) -> None:
     """Acquire SQLite's writer lock before inspecting data for an import."""
@@ -81,11 +91,25 @@ def timestamp(value: Any, *, optional=False) -> str | None:
     if value is None or str(value).strip() in ("", "-", "--", "无", "None"):
         if optional: return None
         raise ImportProblem("日期为空")
-    if isinstance(value, datetime): return value.strftime("%Y-%m-%d %H:%M:%S")
+    if isinstance(value, datetime):
+        dt = value.astimezone(SHANGHAI_TZ) if value.tzinfo is not None else value
+        return dt.strftime("%Y-%m-%d %H:%M:%S")
     if isinstance(value, date): return value.strftime("%Y-%m-%d 00:00:00")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        epoch = float(value)
+        if abs(epoch) > 10**11:
+            epoch /= 1000.0
+        return datetime.fromtimestamp(epoch, tz=timezone.utc).astimezone(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S")
     text = str(value).strip().replace("/", "-")
+    if re.fullmatch(r"\d{10}(?:\.\d+)?", text):
+        return datetime.fromtimestamp(float(text), tz=timezone.utc).astimezone(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S")
+    if re.fullmatch(r"\d{13}", text):
+        return datetime.fromtimestamp(int(text) / 1000.0, tz=timezone.utc).astimezone(SHANGHAI_TZ).strftime("%Y-%m-%d %H:%M:%S")
     try:
-        return datetime.fromisoformat(text).strftime("%Y-%m-%d %H:%M:%S")
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00").replace("z", "+00:00"))
+        if parsed.tzinfo is not None:
+            parsed = parsed.astimezone(SHANGHAI_TZ)
+        return parsed.strftime("%Y-%m-%d %H:%M:%S")
     except ValueError:
         raise ImportProblem("日期格式不正确") from None
 
@@ -135,8 +159,9 @@ def read_table(name: str, data: bytes) -> tuple[list[str], list[dict[str, Any]]]
     if not rows: raise ImportProblem("文件没有数据行")
     return headers, rows
 
-def map_headers(headers: list[str], kind: str, supplied: dict[str, str] | None = None) -> dict[str, str]:
+def map_headers(headers: list[str], kind: str, supplied: dict[str, str] | None = None, *, channel: str = "qianniu") -> dict[str, str]:
     if kind not in REQUIRED: raise ImportProblem("导入类型无效")
+    norm_channel = normalize_channel(channel) if kind == "orders" else "qianniu"
     allowed = {"orders": {"item_id","order_id","sku","product_id","property","title","quantity","paid_at","status","shipped_at","payment","refund_status","refund_amount"},
                "refunds": {"refund_id","item_id","order_id","refund_status","refund_amount","completed_at"},
                "costs": {"sku","valid_from","unit_cost","supplier"},
@@ -144,15 +169,29 @@ def map_headers(headers: list[str], kind: str, supplied: dict[str, str] | None =
     supplied = supplied or {}
     if set(supplied) - allowed or any(v not in headers for v in supplied.values()): raise ImportProblem("字段映射无效")
     result = dict(supplied)
-    for key in allowed - result.keys():
-        result[key] = next((h for h in ALIASES[key] if h in headers), "")
-    missing = sorted(k for k in REQUIRED[kind] if not result.get(k))
+    used_headers = {v for v in result.values() if v}
+    for key in sorted(allowed - result.keys()):
+        chosen = next((h for h in ALIASES[key] if h in headers and h not in used_headers), "")
+        result[key] = chosen
+        if chosen:
+            used_headers.add(chosen)
+    required_keys = set(REQUIRED[kind])
+    if kind == "orders" and norm_channel == "16688":
+        required_keys = {"order_id", "paid_at", "payment"}
+    missing = sorted(k for k in required_keys if not result.get(k))
+    if kind == "orders" and norm_channel == "16688" and "paid_at" in missing:
+        if any(alias in headers for alias in _16688_CREATED_AT_ALIASES):
+            missing.remove("paid_at")
     # Qianniu's sold-order export is one row per main order and does not
     # provide a separate child-order column. The order number is a stable
     # fallback for this export and keeps repeated imports idempotent.
     if kind == "orders" and "item_id" in missing and result.get("order_id"):
         missing.remove("item_id")
-    if kind == "orders" and not (result.get("sku") or result.get("product_id")): missing.append("sku 或 product_id")
+    if kind == "orders":
+        if norm_channel == "16688":
+            if not (result.get("sku") or result.get("product_id") or result.get("title")): missing.append("sku、product_id 或 title")
+        else:
+            if not (result.get("sku") or result.get("product_id")): missing.append("sku 或 product_id")
     if missing: raise ImportProblem("缺少必要字段：" + ", ".join(missing))
     selected = [x for x in result.values() if x]
     if len(selected) != len(set(selected)): raise ImportProblem("同一表格列不能映射到多个字段")
@@ -167,28 +206,39 @@ def scrub(value: Any) -> str:
 
 def get(row, mapping, key): return row.get(mapping.get(key, ""))
 
-def order_state(value: Any) -> str:
-    text = str(value or "").strip()
-    lookup = {"交易成功":"completed", "已完成":"completed", "completed":"completed", "交易关闭":"closed", "已关闭":"closed", "closed":"closed", "等待买家确认收货":"pending", "买家已付款":"pending", "等待卖家发货":"pending", "已发货":"pending", "pending":"pending", "待付款":"unpaid", "等待买家付款":"unpaid", "unpaid":"unpaid"}
+def order_state(value: Any, *, channel: str = "qianniu") -> str:
+    text = "" if value is None else str(value).strip()
+    if channel == "16688":
+        code_lookup = {"0": "unpaid", "1": "pending", "2": "closed", "3": "closed", "4": "completed", "5": "completed"}
+        if text in code_lookup:
+            return code_lookup[text]
+    lookup = {"交易成功":"completed", "已完成":"completed", "发货成功":"completed", "completed":"completed", "交易关闭":"closed", "已关闭":"closed", "已取消":"closed", "已退款":"closed", "退款成功":"closed", "closed":"closed", "等待买家确认收货":"pending", "买家已付款":"pending", "已支付":"pending", "等待卖家发货":"pending", "待发货":"pending", "已发货":"pending", "pending":"pending", "待付款":"unpaid", "待支付":"unpaid", "未支付":"unpaid", "等待买家付款":"unpaid", "unpaid":"unpaid"}
     if text in lookup:
         return lookup[text]
     if text.startswith(("卖家已发货", "买家已付款", "等待卖家发货", "等待买家确认")):
         return "pending"
-    if text.startswith(("交易成功", "交易完成", "已完成")):
+    if text.startswith(("交易成功", "交易完成", "已完成", "发货成功")):
         return "completed"
-    if text.startswith(("交易关闭", "已关闭")):
+    if text.startswith(("交易关闭", "已关闭", "已取消", "已退款")):
         return "closed"
     return "unknown"
 
-def fulfillment_state(value: Any, shipped_at: Any, refund_state_value: str) -> str:
+def fulfillment_state(value: Any, shipped_at: Any, refund_state_value: str, *, channel: str = "qianniu") -> str:
     if str(shipped_at or "").strip() not in ("", "-", "--", "无", "None"):
         return "shipped"
-    text = str(value or "").strip()
-    if any(token in text for token in ("卖家已发货", "已发货", "交易成功", "交易完成", "已完成", "等待买家确认", "资金保护中")):
+    text = "" if value is None else str(value).strip()
+    if channel == "16688":
+        if text in ("4", "5"):
+            return "shipped"
+        if text in ("0", "1", "2", "3"):
+            return "unshipped"
+    if any(token in text for token in ("卖家已发货", "已发货", "发货成功", "交易成功", "交易完成", "已完成", "等待买家确认", "资金保护中")):
         return "shipped"
-    if any(token in text for token in ("等待卖家发货", "待发货", "买家已付款", "待付款", "等待买家付款")):
+    if any(token in text for token in ("等待卖家发货", "待发货", "买家已付款", "已支付", "待付款", "待支付", "未支付", "等待买家付款")):
         return "unshipped"
-    if text in ("交易关闭", "已关闭", "closed") and refund_state_value == "success":
+    if text in ("交易关闭", "已关闭", "已取消", "已退款", "closed") and refund_state_value == "success":
+        return "unshipped"
+    if text in ("已取消", "已关闭") and channel == "16688":
         return "unshipped"
     if text in ("unpaid",):
         return "unshipped"
@@ -203,10 +253,20 @@ def refund_state(value: Any) -> str:
         return "success"
     return "unknown"
 
-def clean_row(raw: dict, m: dict, kind: str) -> dict:
+def clean_row(raw: dict, m: dict, kind: str, *, channel: str = "qianniu") -> dict:
     if kind == "orders":
+        norm_channel = normalize_channel(channel)
         order_id = identifier(get(raw,m,"order_id"), "主订单号")
-        paid = timestamp(get(raw,m,"paid_at"), optional=True)
+        raw_status = get(raw,m,"status")
+        resolved_status = order_state(raw_status, channel=norm_channel)
+        paid = None if resolved_status == "unpaid" else timestamp(get(raw,m,"paid_at"), optional=True)
+        if norm_channel == "16688" and paid is None and resolved_status not in ("unpaid", "closed"):
+            for created_key in _16688_CREATED_AT_ALIASES:
+                candidate = raw.get(created_key)
+                if candidate not in (None, "", "-", "--", "0", 0):
+                    paid = timestamp(candidate, optional=True)
+                    if paid:
+                        break
         unit = str(get(raw,m,"sku") or "").strip()
         product = identifier(get(raw,m,"product_id"), "商品ID", optional=True)
         prop = scrub(get(raw,m,"property")).strip()
@@ -214,24 +274,39 @@ def clean_row(raw: dict, m: dict, kind: str) -> dict:
         if len(prop) > 300 or len(unit) > 500: raise ImportProblem("规格过长")
         sku = unit or ((product + " | " + prop) if product and prop else product or prop) or title
         if not sku: raise ImportProblem("商品编码、商品 ID 和商品标题均为空")
+        raw_qty = get(raw,m,"quantity")
+        if norm_channel == "16688" and (not m.get("quantity") or str(raw_qty or "").strip() in ("", "-", "--", "None")):
+            raw_qty = 1
         try:
-            qty = int(str(get(raw,m,"quantity")).strip())
+            qty = int(str(raw_qty).strip())
             if qty < 1 or qty > 100000: raise ValueError
         except (ValueError, TypeError): raise ImportProblem("购买数量必须为正整数") from None
         amount = money(get(raw,m,"refund_amount"), optional=True)
-        state = refund_state(get(raw,m,"refund_status"))
+        raw_refund = get(raw,m,"refund_status")
+        if norm_channel == "16688" and (not m.get("refund_status") or str(raw_refund or "").strip() in ("", "-", "--", "None")):
+            status_text = str(raw_status or "").strip()
+            if status_text in ("3", "已退款", "退款成功") or ("退款" in status_text and "关闭" not in status_text):
+                state = "success"
+            else:
+                state = "none"
+        else:
+            state = refund_state(raw_refund)
         if state == "none" and amount is None: amount = 0
         payment = money(get(raw,m,"payment"), optional=True)
         if state == "success" and payment == 0:
             gross_header = next((header for header in ("买家应付货款", "总金额") if header in raw), "")
             if gross_header:
                 payment = money(raw.get(gross_header), optional=True)
+        if norm_channel == "16688" and state == "success" and amount is None and payment is not None:
+            amount = payment
         if paid and payment is None: raise ImportProblem("已付款订单缺少实付金额")
         item_id = identifier(get(raw,m,"item_id"), "子订单号", optional=True) or order_id
-        return {"item_external_id":item_id, "order_external_id":order_id,
+        if norm_channel == "16688" and resolved_status == "unknown" and (not m.get("status") or str(raw_status or "").strip() in ("", "-", "--", "None")):
+            resolved_status = "completed" if paid else "unknown"
+        return {"channel": norm_channel, "item_external_id":item_id, "order_external_id":order_id,
                 "sku":sku, "product_title":title[:300], "quantity":qty, "paid_at":paid,
-                "status":order_state(get(raw,m,"status")),
-                "fulfillment_status":fulfillment_state(get(raw,m,"status"), get(raw,m,"shipped_at"), state),
+                "status":resolved_status,
+                "fulfillment_status":fulfillment_state(raw_status, get(raw,m,"shipped_at"), state, channel=norm_channel),
                 "payment_fen":payment, "refund_status":state, "refund_snapshot_fen":amount}
     if kind == "refunds":
         return {"external_id":identifier(get(raw,m,"refund_id"),"退款编号"),
@@ -253,14 +328,15 @@ def clean_row(raw: dict, m: dict, kind: str) -> dict:
     if not sku or len(sku) > 500: raise ImportProblem("SKU 为空或过长")
     return {"sku":sku, "valid_from":timestamp(get(raw,m,"valid_from")), "unit_cost_fen":money(get(raw,m,"unit_cost")), "supplier":str(get(raw,m,"supplier") or "")[:120]}
 
-def preview(db: Session, store_id: int, kind: str, name: str, data: bytes, basis: str | None, mapping: dict | None = None) -> dict:
+def preview(db: Session, store_id: int, kind: str, name: str, data: bytes, basis: str | None, mapping: dict | None = None, *, channel: str = "qianniu") -> dict:
     if kind == "orders" and basis not in ("gross", "net", "unknown"): raise ImportProblem("请选择退款前实付、退款后净额或暂不确定")
     if kind != "orders": basis = None
+    norm_channel = normalize_channel(channel) if kind == "orders" else "qianniu"
     headers, raw_rows = read_table(name, data)
-    mapped = map_headers(headers, kind, mapping)
+    mapped = map_headers(headers, kind, mapping, channel=norm_channel)
     cleaned, errors = [], []
     for line, row in enumerate(raw_rows, 2):
-        try: cleaned.append((line, clean_row(row, mapped, kind), row))
+        try: cleaned.append((line, clean_row(row, mapped, kind, channel=norm_channel), row))
         except ImportProblem as exc:
             if len(errors) < 30: errors.append({"row":line, "message":str(exc)})
     seen = set()
@@ -273,20 +349,20 @@ def preview(db: Session, store_id: int, kind: str, name: str, data: bytes, basis
     serialize_sqlite_writes(db)
     # A file can be remapped: byte identity alone does not imply the same data.
     # Compare cleaned rows as well, without persisting unmapped personal columns.
-    candidates = list(db.scalars(select(ImportBatch).where(ImportBatch.store_id==store_id,ImportBatch.kind==kind,ImportBatch.file_hash==digest,ImportBatch.basis==basis,ImportBatch.parser_version==PARSER_VERSION).order_by(ImportBatch.id.desc())))
+    candidates = list(db.scalars(select(ImportBatch).where(ImportBatch.store_id==store_id,ImportBatch.kind==kind,ImportBatch.channel==norm_channel,ImportBatch.file_hash==digest,ImportBatch.basis==basis,ImportBatch.parser_version==PARSER_VERSION).order_by(ImportBatch.id.desc())))
     draft = None
     for candidate in candidates:
         previous = [(r.row_number, r.data) for r in db.scalars(select(ImportRow).where(ImportRow.batch_id==candidate.id).order_by(ImportRow.row_number))]
         normalized = [(line, row) for line, row, _raw in cleaned]
         if previous != normalized: continue
         if candidate.status == "committed":
-            return {"headers":headers,"mapping":mapped,"row_count":len(raw_rows),"duplicate":True,"batch_id":candidate.id,"errors":[]}
+            return {"headers":headers,"mapping":mapped,"channel":norm_channel,"row_count":len(raw_rows),"duplicate":True,"batch_id":candidate.id,"errors":[]}
         if candidate.status == "preview" and draft is None: draft = candidate
     if draft:
         for r in db.scalars(select(ImportRow).where(ImportRow.batch_id==draft.id)): db.delete(r)
-        db.flush(); draft.basis=basis
+        db.flush(); draft.basis=basis; draft.channel=norm_channel
     else:
-        draft=ImportBatch(store_id=store_id,kind=kind,file_hash=digest,basis=basis,parser_version=PARSER_VERSION,row_count=len(cleaned))
+        draft=ImportBatch(store_id=store_id,kind=kind,channel=norm_channel,file_hash=digest,basis=basis,parser_version=PARSER_VERSION,row_count=len(cleaned))
         db.add(draft); db.flush()
     for line, row, raw in cleaned:
         db.add(ImportRow(batch_id=draft.id,row_number=line,data=row,raw_data=raw))
@@ -295,7 +371,7 @@ def preview(db: Session, store_id: int, kind: str, name: str, data: bytes, basis
     time_field={"orders":"paid_at","refunds":"completed_at","costs":"valid_from","cashflows":"settled_at"}[kind]
     times=sorted(row[time_field] for _,row,_raw in cleaned if row.get(time_field))
     differences=preview_differences(db,store_id,kind,cleaned,basis)
-    return {"headers":headers,"mapping":mapped,"row_count":len(cleaned),"batch_id":draft.id,"errors":[],"multi_parent_count":multi_count,"preview": [x[1] for x in cleaned[:5]],
+    return {"headers":headers,"mapping":mapped,"channel":norm_channel,"row_count":len(cleaned),"batch_id":draft.id,"errors":[],"multi_parent_count":multi_count,"preview": [x[1] for x in cleaned[:5]],
             "time_field":time_field,"time_start":times[0] if times else None,"time_end":times[-1] if times else None,
             "time_missing":len(cleaned)-len(times),"differences":differences}
 
@@ -442,3 +518,98 @@ def commit(db: Session, store_id: int, batch_id: int, accept_changes: bool = Fal
     batch.status="committed";batch.committed_at=now_iso()
     db.commit()
     return {"batch_id":batch.id,"inserted":inserted,"updated":len(changes),"duplicate":False}
+
+def import_channel_orders(
+    db: Session,
+    store_id: int,
+    channel: str,
+    rows: list[dict[str, Any]],
+    *,
+    basis: str = "gross",
+    source_name: str = "channel-sync",
+) -> dict[str, Any]:
+    norm_channel = normalize_channel(channel)
+    if basis not in ("gross", "net", "unknown"):
+        raise ImportProblem("请选择退款前实付、退款后净额或暂不确定")
+    if not rows:
+        return {"batch_id": None, "channel": norm_channel, "inserted": 0, "updated": 0, "skipped": 0, "duplicate": False}
+    normalized_entries: list[tuple[dict[str, Any], dict[str, Any]]] = []
+    seen_ids: set[str] = set()
+    for idx, entry in enumerate(rows, 1):
+        raw_data = dict(entry.get("raw_data") or entry)
+        clean_data = {
+            "channel": norm_channel,
+            "item_external_id": identifier(entry.get("item_external_id") or entry.get("order_external_id"), f"第 {idx} 行子订单号"),
+            "order_external_id": identifier(entry.get("order_external_id") or entry.get("item_external_id"), f"第 {idx} 行订单号"),
+            "sku": str(entry.get("sku") or entry.get("product_title") or "").strip()[:500],
+            "product_title": scrub(entry.get("product_title") or entry.get("sku") or "").strip()[:300],
+            "quantity": max(1, int(entry.get("quantity") or 1)),
+            "paid_at": timestamp(entry.get("paid_at"), optional=True),
+            "status": str(entry.get("status") or "unknown").strip(),
+            "fulfillment_status": str(entry.get("fulfillment_status") or "unknown").strip(),
+            "payment_fen": entry.get("payment_fen"),
+            "refund_status": str(entry.get("refund_status") or "none").strip(),
+            "refund_snapshot_fen": entry.get("refund_snapshot_fen"),
+        }
+        if not clean_data["sku"]:
+            raise ImportProblem(f"第 {idx} 行缺少商品编码或名称")
+        if clean_data["item_external_id"] in seen_ids:
+            continue
+        seen_ids.add(clean_data["item_external_id"])
+        normalized_entries.append((clean_data, raw_data))
+    payload_bytes = json.dumps({"channel": norm_channel, "source": source_name, "rows": [item[0] for item in normalized_entries]}, ensure_ascii=False, sort_keys=True).encode("utf-8")
+    digest = hashlib.sha256(payload_bytes).hexdigest()
+    serialize_sqlite_writes(db)
+    item_ids = [d["item_external_id"] for d, _ in normalized_entries]
+    for offset in range(0, len(item_ids), 500):
+        chunk = item_ids[offset:offset + 500]
+        for existing_row in db.scalars(select(OrderItem).where(OrderItem.store_id == store_id, OrderItem.item_external_id.in_(chunk))):
+            existing_channel = existing_row.channel or "qianniu"
+            if existing_channel != norm_channel:
+                raise ImportProblem(f"子订单 {existing_row.item_external_id} 已属于渠道 {existing_channel}，不能覆盖为 {norm_channel}")
+    from .models import now_iso
+    batch = ImportBatch(store_id=store_id, kind="orders", channel=norm_channel, file_hash=digest, basis=basis, parser_version=PARSER_VERSION, row_count=len(normalized_entries), status="committed", committed_at=now_iso())
+    db.add(batch)
+    db.flush()
+    inserted = 0
+    updated = 0
+    skipped = 0
+    for row_number, (d, raw_data) in enumerate(normalized_entries, 1):
+        db.add(ImportRow(batch_id=batch.id, row_number=row_number, data=d, raw_data=raw_data))
+        existing = db.scalar(select(OrderItem).where(OrderItem.store_id == store_id, OrderItem.item_external_id == d["item_external_id"]))
+        if existing:
+            compare = {k: getattr(existing, k) for k in d}
+            if compare != d or existing.payment_basis != basis:
+                old_sku, old_paid, old_qty = existing.sku, existing.paid_at, existing.quantity
+                for k, v in d.items():
+                    setattr(existing, k, v)
+                existing.payment_basis = basis
+                existing.batch_id = batch.id
+                if (old_sku, old_paid, old_qty) != (existing.sku, existing.paid_at, existing.quantity):
+                    prior_adjustment = db.scalar(select(Adjustment.id).where(Adjustment.store_id == store_id, Adjustment.item_external_id == existing.item_external_id).limit(1))
+                    needs_review = existing.cost_fen is not None or prior_adjustment is not None
+                    previous_cost = existing.cost_fen
+                    previous_version = existing.cost_version_id
+                    existing.cost_fen = None
+                    existing.cost_version_id = None
+                    if needs_review:
+                        note = f"订单规格、付款时间或数量变化；原成本版本 {previous_version or '无'}，请核对原成本及全部调整后重新设置逐单成本"
+                        db.add(Adjustment(store_id=store_id, item_external_id=existing.item_external_id, kind="cost_invalidate", amount_fen=previous_cost or 0, note=note))
+                    else:
+                        cost = lookup_cost(db, store_id, existing.sku, existing.paid_at)
+                        if cost:
+                            existing.cost_fen = cost.unit_cost_fen * existing.quantity
+                            existing.cost_version_id = cost.id
+                updated += 1
+            else:
+                skipped += 1
+        else:
+            cost = lookup_cost(db, store_id, d["sku"], d["paid_at"])
+            db.add(OrderItem(store_id=store_id, **d, payment_basis=basis, cost_fen=cost.unit_cost_fen * d["quantity"] if cost else None, cost_version_id=cost.id if cost else None, batch_id=batch.id))
+            inserted += 1
+    if inserted == 0 and updated == 0:
+        db.rollback()
+        existing_batch = db.scalar(select(ImportBatch).where(ImportBatch.store_id == store_id, ImportBatch.kind == "orders", ImportBatch.channel == norm_channel, ImportBatch.file_hash == digest, ImportBatch.status == "committed").order_by(ImportBatch.id.desc()))
+        return {"batch_id": existing_batch.id if existing_batch else None, "channel": norm_channel, "inserted": 0, "updated": 0, "skipped": skipped, "duplicate": True}
+    db.commit()
+    return {"batch_id": batch.id, "channel": norm_channel, "inserted": inserted, "updated": updated, "skipped": skipped, "duplicate": False}

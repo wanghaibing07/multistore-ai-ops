@@ -5,8 +5,8 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="color-scheme" content="light dark" id="color-scheme-meta">
   <title>店铺账本 · MultiStore AI Ops</title>
-  <link rel="stylesheet" href="/static/style.css?v=workbench-v10">
-  <script src="/static/app.js?v=workbench-v10" defer></script>
+  <link rel="stylesheet" href="/static/style.css?v=workbench-v11">
+  <script src="/static/app.js?v=workbench-v11" defer></script>
 </head>
 <body class="ui-v2">
 <a class="skip-link" href="#main-content">跳到主要内容</a>
@@ -109,6 +109,13 @@
           <h2 id="overview-hero-title">工作台</h2>
         </div>
         <form id="period-form" class="date-range workbench-date-range">
+          <label>销售渠道
+            <select id="overview-channel-filter" aria-label="销售渠道">
+              <option value="all">全部渠道</option>
+              <option value="qianniu">千牛淘宝</option>
+              <option value="16688">16688</option>
+            </select>
+          </label>
           <label>开始日期<input id="start-date" type="date" required></label>
           <span>至</span>
           <label>结束日期<input id="end-date" type="date" required></label>
@@ -146,6 +153,7 @@
           <strong id="settled-count">0</strong>
         </article>
       </section>
+      <section id="overview-channel-breakdown" class="channel-breakdown-strip" aria-label="分渠道经营明细" hidden></section>
       <section class="next-action" aria-live="polite">
         <div class="next-action-icon" aria-hidden="true">!</div>
         <div id="review-summary" class="next-action-copy"><strong>正在检查缺少的信息</strong><span>稍等片刻</span></div>
@@ -172,8 +180,8 @@
 
     <div class="view" data-panel="import" hidden>
       <div class="page-heading">
-        <div><h2>导入千牛订单</h2></div>
-        <span class="privacy-label">订单 · 结果</span>
+        <div><h2>导入销售订单</h2></div>
+        <span class="privacy-label">千牛 · 16688</span>
       </div>
       <div class="two-column import-layout">
         <section class="surface import-order-card">
@@ -202,6 +210,31 @@
           <div class="button-row"><button id="preview-import" class="button secondary" hidden>重新检查</button><button id="commit-import" class="button primary" hidden>确认导入</button></div>
         </section>
       </div>
+      <section class="surface import-16688-card" aria-labelledby="import-16688-heading">
+        <div class="panel-title">
+          <div><span class="section-kicker">多渠道销售订单</span><h3 id="import-16688-heading">16688 销售订单</h3></div>
+          <span id="status-16688-badge" class="badge">等待检测</span>
+        </div>
+        <div class="import-16688-grid">
+          <div class="acquire-box">
+            <h4>OpenAPI 一键同步</h4>
+            <p class="helper-text">直接调用 16688 签名接口拉取销售订单；若平台暂缓 OpenAPI，会自动提示改用右侧文件导入。</p>
+            <div class="button-row compact">
+              <button id="sync-16688-orders-btn" type="button" class="button primary">同步 16688 销售订单</button>
+            </div>
+          </div>
+          <div class="acquire-box">
+            <h4>手动导入 16688 导出文件</h4>
+            <form id="import-16688-form" class="inline-import" aria-label="上传 16688 销售订单文件">
+              <label class="sr-only" for="import-16688-file">16688 销售订单文件</label>
+              <input id="import-16688-file" name="file" type="file" accept=".csv,.tsv,.xlsx,.json" required>
+              <button class="button secondary" type="submit">导入 16688 文件</button>
+            </form>
+            <p class="helper-text">支持 16688 后台导出的 CSV / TSV / XLSX / JSON 文件，按订单号自动幂等去重。</p>
+          </div>
+        </div>
+        <div id="import-16688-result" class="inline-result" aria-live="polite"></div>
+      </section>
     </div>
 
     <div class="view" data-panel="orders" hidden>
@@ -210,6 +243,7 @@
         <div class="orders-toolbar-actions">
           <button class="button primary orders-import-button" data-goto="import" type="button">导入订单</button>
           <label class="check-label"><input type="checkbox" id="review-only">只看待处理</label>
+          <label class="order-filter"><span class="sr-only">销售渠道</span><select id="orders-channel-filter" aria-label="销售渠道"><option value="all">全部渠道</option><option value="qianniu">千牛淘宝</option><option value="16688">16688</option></select></label>
           <label class="order-filter"><span class="sr-only">订单类目</span><select id="order-category-filter" aria-label="订单类目"><option value="all">全部类目</option><option value="finished">成品号</option><option value="activation">激活</option><option value="family">家庭组</option><option value="other">其他</option></select></label>
           <search><label class="sr-only" for="order-search">搜索订单</label><input id="order-search" type="search" placeholder="搜订单号、商品或规格" autocomplete="off"></search>
         </div>
@@ -228,25 +262,46 @@
         <div class="reconcile-acquire-surface">
 <section class="surface card-settings-panel">
         <div class="card-import-head">
-           <div><h3 id="card-settings-heading">卡网入口</h3></div>
+           <div><h3 id="card-settings-heading">卡网入口与汇率设置</h3></div>
           <div class="card-site-links">
             <a id="open-card-16688" class="button outline" href="https://www.16688.com.cn/order" target="_blank" rel="noopener noreferrer">16688 查询页</a>
             <a id="open-card-wzyp" class="button outline" href="https://wzyp.cn/order" target="_blank" rel="noopener noreferrer">链动小铺查询页</a>
+            <a id="open-card-thatim" class="button outline" href="https://thatim.vn" target="_blank" rel="noopener noreferrer">Thatim (2号)</a>
             <a id="open-card-site" class="sr-only" href="https://www.16688.com.cn/" target="_blank" rel="noopener noreferrer">打开卡网</a>
           </div>
         </div>
         <form id="card-settings-form" class="card-settings-form" aria-labelledby="card-settings-heading">
           <div class="form-field">
             <label for="card-contact-email">预留邮箱</label>
-            <input id="card-contact-email" name="contact_email" type="email" autocomplete="email" placeholder="例如 name@example.com" aria-describedby="card-settings-status" required>
+            <input id="card-contact-email" name="contact_email" type="email" autocomplete="email" placeholder="例如 name@example.com" aria-describedby="card-settings-status">
           </div>
-          <button type="submit" class="button primary">保存联系方式</button>
+          <div class="form-field fx-field">
+            <label for="card-usd-rate">USD → CNY 汇率</label>
+            <input id="card-usd-rate" name="usd_cny_rate" type="text" inputmode="decimal" placeholder="默认 7.30">
+          </div>
+          <div class="form-field fx-field">
+            <label for="card-vnd-rate">VND → CNY 汇率</label>
+            <input id="card-vnd-rate" name="vnd_cny_rate" type="text" inputmode="decimal" placeholder="默认 0.00028">
+          </div>
+          <button type="submit" class="button primary">保存设置</button>
         </form>
-         <p id="card-settings-status" class="helper-text" aria-live="polite">正在读取联系方式…</p>
+         <p id="card-settings-status" class="helper-text" aria-live="polite">正在读取配置…</p>
       </section>
       <section class="surface card-import-panel">
         <div class="card-import-head">
            <div><h3 id="card-import-heading">导入采购单</h3></div>
+        </div>
+        <div class="upstream-sync-bar" aria-label="多上游自动同步">
+          <div class="upstream-sync-head">
+            <h4>上游直连同步（TG / 方案二）</h4>
+            <div id="upstream-status-chips" class="upstream-status-chips" aria-live="polite"></div>
+          </div>
+          <div class="button-row compact upstream-sync-actions">
+            <button id="sync-tg-fatbunny" type="button" class="button secondary" data-sync-tg="fatbunny">同步 FatBunny</button>
+            <button id="sync-tg-chugax" type="button" class="button secondary" data-sync-tg="chugax">同步 ChugAx</button>
+            <button id="sync-plan2-btn" type="button" class="button secondary">同步方案二精确关联</button>
+            <button id="auto-exact-matches-btn" type="button" class="button primary">一键确认精确关联</button>
+          </div>
         </div>
         <div class="acquire-grid">
           <div class="acquire-box">
@@ -278,9 +333,20 @@
           </div>
           <div class="acquire-box">
              <h4 id="card-paste-heading">粘贴或文件</h4>
+            <div class="form-field source-hint-field">
+              <label for="card-source-hint">采购来源标记</label>
+              <select id="card-source-hint" name="source_hint">
+                <option value="">自动识别来源</option>
+                <option value="thatim">Thatim (2号 · VND)</option>
+                <option value="tg_fatbunny">FatBunny Hub (TG · USD)</option>
+                <option value="tg_chugax">ChugAx Global (TG · USD)</option>
+                <option value="16688">16688 采购</option>
+                <option value="wzyp">链动小铺</option>
+              </select>
+            </div>
             <form id="card-paste-form" class="paste-import-form" aria-labelledby="card-paste-heading">
               <label for="card-paste-text">粘贴查询结果</label>
-              <textarea id="card-paste-text" name="text" rows="4" placeholder="把 16688 查询结果全文、链动小铺订单表格或 Markdown 粘贴到这里…" required></textarea>
+              <textarea id="card-paste-text" name="text" rows="4" placeholder="把 16688 / 链动小铺 / Thatim (2号) 订单文本、TG JSON 或导出表格粘贴到这里…" required></textarea>
               <div class="button-row compact">
                 <button class="button secondary" type="submit">导入粘贴内容</button>
                 <button id="read-card-clipboard" class="button outline" type="button">从剪贴板读取</button>
@@ -352,6 +418,18 @@
                 <option value="all">全部来源</option>
                 <option value="16688">16688</option>
                 <option value="wzyp">链动小铺</option>
+                <option value="tg_fatbunny">FatBunny Hub</option>
+                <option value="tg_chugax">ChugAx Global</option>
+                <option value="tg">全部 TG 上游</option>
+                <option value="thatim">Thatim (2号)</option>
+              </select>
+            </div>
+            <div class="form-field" id="ledger-channel-wrap">
+              <label for="ledger-channel">销售渠道</label>
+              <select id="ledger-channel" name="channel">
+                <option value="all">全部渠道</option>
+                <option value="qianniu">千牛淘宝</option>
+                <option value="16688">16688</option>
               </select>
             </div>
             <div class="form-field">

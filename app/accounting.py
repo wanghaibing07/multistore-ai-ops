@@ -8,18 +8,40 @@ from .models import Adjustment, CardMatch, Cashflow, CostVersion, ImportBatch, I
 from .refund_review import fingerprint, eligible as review_eligible
 from .payment_basis_review import fingerprint as basis_fingerprint
 
+CHANNEL_LABELS = {
+    "qianniu": "千牛淘宝",
+    "16688": "16688",
+}
+
+
+def normalize_channel_filter(channel: str | None) -> str | None:
+    raw = str(channel or "").strip().lower()
+    if not raw or raw == "all":
+        return None
+    if raw in ("qianniu", "taobao", "千牛", "淘宝"):
+        return "qianniu"
+    if raw in ("16688", "16688_store", "16688自营", "16688卖货"):
+        return "16688"
+    return raw
+
+
 def effective_fulfillment_status(order: OrderItem, source_row: dict | None = None) -> str:
     value = getattr(order, "fulfillment_status", "unknown") or "unknown"
     if value in ("shipped", "unshipped"):
         return value
     source_row = source_row or {}
-    shipped_at = next((source_row.get(key) for key in ("发货时间", "发货日期", "shipping_time", "shipped_at") if source_row.get(key)), "")
+    shipped_at = next(
+        (source_row.get(key) for key in ("发货时间", "发货日期", "shipping_time", "shipped_at", "delivery_time", "send_time", "发卡时间") if source_row.get(key)),
+        "",
+    )
     if str(shipped_at).strip() not in ("", "-", "--", "无", "None"):
         return "shipped"
-    source_status = str(next((source_row.get(key) for key in ("订单状态", "交易状态", "履约/售后状态", "status") if source_row.get(key)), "")).strip()
-    if any(token in source_status for token in ("卖家已发货", "已发货", "交易成功", "交易完成", "已完成", "等待买家确认", "资金保护中")):
+    source_status = str(
+        next((source_row.get(key) for key in ("订单状态", "交易状态", "履约/售后状态", "status_label", "order_status", "status") if source_row.get(key) is not None and str(source_row.get(key)).strip() != ""), "")
+    ).strip()
+    if source_status in ("4", "5") or any(token in source_status for token in ("卖家已发货", "已发货", "发货成功", "交易成功", "交易完成", "已完成", "等待买家确认", "资金保护中")):
         return "shipped"
-    if any(token in source_status for token in ("等待卖家发货", "待发货", "买家已付款", "待付款", "等待买家付款")):
+    if source_status in ("0", "1") or any(token in source_status for token in ("等待卖家发货", "待发货", "买家已付款", "待付款", "等待买家付款", "待支付")):
         return "unshipped"
     if order.status == "completed":
         return "shipped"
@@ -35,17 +57,30 @@ def effective_fulfillment_status(order: OrderItem, source_row: dict | None = Non
     return "unknown"
 
 
-def calculate(db: Session, store_id: int, start: str, end: str, sku: str | None = None, item_id: str | None = None, order_id: str | None = None) -> dict:
+def calculate(
+    db: Session,
+    store_id: int,
+    start: str,
+    end: str,
+    sku: str | None = None,
+    item_id: str | None = None,
+    order_id: str | None = None,
+    channel: str | None = None,
+) -> dict:
     try:
         first, last = date.fromisoformat(start), date.fromisoformat(end)
         if last < first or (last-first).days > 366*5: raise ValueError
     except ValueError: raise ValueError("日期范围无效") from None
+    channel_filter = normalize_channel_filter(channel)
     query=select(OrderItem).where(OrderItem.store_id==store_id,OrderItem.paid_at.is_not(None),OrderItem.paid_at>=start,OrderItem.paid_at<end+" 23:59:59.999999")
+    if channel_filter: query=query.where(OrderItem.channel==channel_filter)
     if sku: query=query.where(OrderItem.sku==sku)
     if item_id: query=query.where(OrderItem.item_external_id==item_id)
     if order_id: query=query.where(OrderItem.order_external_id==order_id)
     orders=list(db.scalars(query.order_by(OrderItem.paid_at.desc(),OrderItem.id.desc())))
-    missing_paid_time=db.scalar(select(func.count(OrderItem.id)).where(OrderItem.store_id==store_id,OrderItem.paid_at.is_(None))) or 0
+    missing_stmt = select(func.count(OrderItem.id)).where(OrderItem.store_id==store_id,OrderItem.paid_at.is_(None))
+    if channel_filter: missing_stmt = missing_stmt.where(OrderItem.channel==channel_filter)
+    missing_paid_time=db.scalar(missing_stmt) or 0
     refunds=list(db.scalars(select(Refund).where(Refund.store_id==store_id)))
     refund_cashflows=list(db.scalars(select(Cashflow).where(Cashflow.store_id==store_id,Cashflow.kind=='refund')))
     all_cashflows=list(db.scalars(select(Cashflow).where(Cashflow.store_id==store_id)))
@@ -70,6 +105,7 @@ def calculate(db: Session, store_id: int, start: str, end: str, sku: str | None 
     source_payment=sum(o.payment_fen or 0 for o in orders)
     source_refunds=sum(o.refund_snapshot_fen or 0 for o in orders if o.refund_status=="success")
     source_refund_missing=sum(o.refund_snapshot_fen is None for o in orders if o.refund_status=="success")
+    channel_acc: dict[str, dict] = {}
     for o in orders:
         reasons=[];ref_rows=by_ref[o.item_external_id]; cashflow_rows=by_cashflow[(o.order_external_id,o.item_external_id)]; adj=by_adj[o.item_external_id]
         fulfillment=effective_fulfillment_status(o, source_rows_by_item.get(o.item_external_id))
@@ -153,7 +189,40 @@ def calculate(db: Session, store_id: int, start: str, end: str, sku: str | None 
         if not cost_override and cost_batches.get(o.cost_version_id) is not None: batch_ids.add(cost_batches[o.cost_version_id])
         for r in ref_rows: batch_ids.add(r.batch_id)
         for flow in cashflow_rows: batch_ids.add(flow.batch_id)
-        items.append({"item_id":o.item_external_id,"order_id":o.order_external_id,"sku":o.sku,"title":o.product_title,
+        item_channel = getattr(o, "channel", None) or "qianniu"
+        channel_bucket = channel_acc.setdefault(
+            item_channel,
+            {
+                "channel": item_channel,
+                "label": CHANNEL_LABELS.get(item_channel, item_channel),
+                "order_ids": set(),
+                "paid_items": 0,
+                "settled": 0,
+                "needs_review": 0,
+                "pending": 0,
+                "cost_known": 0,
+                "payment_fen": 0,
+                "net_sales_fen": 0,
+                "cost_fen": 0,
+                "fees_fen": 0,
+                "profit_fen": 0,
+                "refund_fen": 0,
+            },
+        )
+        channel_bucket["order_ids"].add(o.order_external_id)
+        channel_bucket["paid_items"] += 1
+        channel_bucket["payment_fen"] += o.payment_fen or 0
+        if is_pending: channel_bucket["pending"] += 1
+        if reasons: channel_bucket["needs_review"] += 1
+        if total_cost is not None: channel_bucket["cost_known"] += 1
+        if eligible:
+            channel_bucket["settled"] += 1
+            channel_bucket["net_sales_fen"] += net_sales
+            channel_bucket["cost_fen"] += total_cost
+            channel_bucket["fees_fen"] += fee
+            channel_bucket["profit_fen"] += estimate
+            channel_bucket["refund_fen"] += refund_value
+        items.append({"item_id":o.item_external_id,"order_id":o.order_external_id,"channel":item_channel,"channel_label":CHANNEL_LABELS.get(item_channel,item_channel),"sku":o.sku,"title":o.product_title,
             "paid_at":o.paid_at,"status":o.status,"fulfillment_status":fulfillment,"quantity":o.quantity,"payment_fen":o.payment_fen,"basis":effective_basis,
             "basis_source_fingerprint":basis_hash,"basis_review_id":active_basis.id if active_basis else None,"basis_review_stale":bool(basis_review and not active_basis),
             "refund_status":o.refund_status,"refund_fen":snapshot,"cost_fen":total_cost,"fee_fen":fee,"net_sales_fen":net_sales,
@@ -171,8 +240,29 @@ def calculate(db: Session, store_id: int, start: str, end: str, sku: str | None 
             "adjustment_ids":[a.id for a in adj],"refund_batch_ids":sorted({r.batch_id for r in ref_rows})})
         items[-1]["card_match_ids"]=[match.id for match in by_card_match[o.item_external_id]]
     batches=list(db.scalars(select(ImportBatch).where(ImportBatch.store_id==store_id,ImportBatch.status=="committed").order_by(ImportBatch.committed_at.desc())))
+    channel_order = {"qianniu": 0, "16688": 1}
+    channel_breakdown = [
+        {
+            "channel": bucket["channel"],
+            "label": bucket["label"],
+            "paid_orders": len(bucket["order_ids"]),
+            "paid_items": bucket["paid_items"],
+            "settled": bucket["settled"],
+            "needs_review": bucket["needs_review"],
+            "pending": bucket["pending"],
+            "cost_known": bucket["cost_known"],
+            "payment_fen": bucket["payment_fen"],
+            "net_sales_fen": bucket["net_sales_fen"],
+            "cost_fen": bucket["cost_fen"],
+            "fees_fen": bucket["fees_fen"],
+            "profit_fen": bucket["profit_fen"],
+            "refund_fen": bucket["refund_fen"],
+        }
+        for bucket in sorted(channel_acc.values(), key=lambda b: (channel_order.get(b["channel"], 99), b["channel"]))
+    ]
     return {"cashflow_review_version":2,"start":start,"end":end,"as_of":batches[0].committed_at if batches else None,"as_of_note":"最近一次导入时间，不代表平台实时数据",
-        "counts":{"paid_orders":len({o.order_external_id for o in orders}),"paid_items":len(orders),"settled":sum(x["profit_fen"] is not None for x in items),"needs_review":unknown_count,"pending":pending_count,
+        "channel":channel_filter or "all","channel_breakdown":channel_breakdown,
+        "counts":{"paid_orders":len({(getattr(o,"channel",None) or "qianniu", o.order_external_id) for o in orders}),"paid_items":len(orders),"settled":sum(x["profit_fen"] is not None for x in items),"needs_review":unknown_count,"pending":pending_count,
                   "cost_known":sum(x["cost_fen"] is not None for x in items),"missing_paid_time_all_dates":missing_paid_time},
         "known":{"profit_fen":known_profit,"net_sales_fen":confirmed_sales,"cost_fen":known_cost,"fees_fen":known_fee,"refund_fen":refund_total},
         "source_snapshot":{"payment_fen":source_payment,"successful_refund_fen":source_refunds,"refund_missing":source_refund_missing},

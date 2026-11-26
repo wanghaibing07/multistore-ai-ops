@@ -37,6 +37,7 @@ class ImportBatch(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"), index=True)
     kind: Mapped[str] = mapped_column(String(20))
+    channel: Mapped[str] = mapped_column(String(20), default="qianniu")
     file_hash: Mapped[str] = mapped_column(String(64))
     basis: Mapped[str | None] = mapped_column(String(20), nullable=True)
     parser_version: Mapped[str] = mapped_column(String(20), default="2")
@@ -70,6 +71,7 @@ class OrderItem(Base):
     __tablename__ = "order_items"
     id: Mapped[int] = mapped_column(primary_key=True)
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"), index=True)
+    channel: Mapped[str] = mapped_column(String(20), default="qianniu", index=True)
     item_external_id: Mapped[str] = mapped_column(String(128))
     order_external_id: Mapped[str] = mapped_column(String(128))
     sku: Mapped[str] = mapped_column(String(500), index=True)
@@ -164,10 +166,16 @@ class CardPurchase(Base):
     paid_at: Mapped[str | None] = mapped_column(String(19), nullable=True, index=True)
     status: Mapped[str] = mapped_column(String(40), default="")
     source: Mapped[str] = mapped_column(String(80), default="16688")
+    original_currency: Mapped[str] = mapped_column(String(12), default="CNY")
+    original_amount: Mapped[str] = mapped_column(String(32), default="")
+    fx_rate: Mapped[str] = mapped_column(String(20), default="1")
+    linked_order_external_id: Mapped[str] = mapped_column(String(128), default="", index=True)
+    linked_channel: Mapped[str] = mapped_column(String(20), default="")
+    linked_redeem_code: Mapped[str] = mapped_column(String(64), default="")
     raw_data: Mapped[dict] = mapped_column(JSON)
     batch_id: Mapped[int] = mapped_column(ForeignKey("import_batches.id"))
     created_at: Mapped[str] = mapped_column(String(40), default=now_iso)
-    __table_args__ = (UniqueConstraint("store_id", "purchase_external_id", name="uq_card_purchase_source"),)
+    __table_args__ = (UniqueConstraint("store_id", "source", "purchase_external_id", name="uq_card_purchase_source"),)
 
 class CardMatch(Base):
     __tablename__ = "card_matches"
@@ -192,6 +200,8 @@ class StoreSetting(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     store_id: Mapped[int] = mapped_column(ForeignKey("stores.id"))
     contact_email: Mapped[str] = mapped_column(String(200), default="")
+    usd_cny_rate: Mapped[str] = mapped_column(String(20), default="7.30")
+    vnd_cny_rate: Mapped[str] = mapped_column(String(20), default="0.00028")
     updated_at: Mapped[str] = mapped_column(String(40), default=now_iso)
     __table_args__ = (
         UniqueConstraint("store_id", name="uq_store_settings_store_id"),

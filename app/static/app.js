@@ -28,6 +28,8 @@ const state = {
   selectedCardPurchaseIds: new Set(),
   ledgerCategory: "all",
   ledgerData: null,
+  channel: "all",
+  upstreamsStatus: null,
   matchTierFilter: "all",
   confirmedItems: new Set(),
   selectedCandByItem: {},
@@ -85,6 +87,41 @@ const ORDER_CATEGORY_LABELS = {
   family: "家庭组",
   other: "其他",
 };
+const CHANNEL_LABELS = {
+  all: "全部渠道",
+  qianniu: "千牛淘宝",
+  "16688": "16688",
+};
+function shortChannelLabel(channel) {
+  return channel === "16688" ? "16688" : "千牛";
+}
+function formatOrigMoney(currency, amount) {
+  const cur = String(currency || "").trim().toUpperCase();
+  const raw = String(amount ?? "").trim();
+  if (!cur || cur === "CNY" || !raw) return "";
+  const num = Number(raw);
+  if (cur === "USD") {
+    return Number.isFinite(num) ? `$${num.toFixed(2)}` : `$${raw}`;
+  }
+  if (cur === "VND") {
+    return Number.isFinite(num) ? `${Math.round(num).toLocaleString("en-US")} VND` : `${raw} VND`;
+  }
+  return `${raw} ${cur}`;
+}
+function setChannelFilter(channel, { reload = true } = {}) {
+  const next = channel === "qianniu" || channel === "16688" ? channel : "all";
+  state.channel = next;
+  if ($("#overview-channel-filter")) $("#overview-channel-filter").value = next;
+  if ($("#orders-channel-filter")) $("#orders-channel-filter").value = next;
+  if ($("#ledger-channel")) $("#ledger-channel").value = next;
+  if (!reload || !state.store) return;
+  state.orderLimit = 50;
+  loadReport();
+  if (location.hash === "#orders" || state.ledgerData) {
+    loadCardLedger();
+    if (state.cardMatches) runCostMatches(null, { silent: true });
+  }
+}
 function orderCategory(item) {
   const text = [item?.title, item?.sku, item?.property]
     .filter(Boolean)
@@ -370,7 +407,10 @@ function route() {
   $("#page-title").textContent = title[name] || "工作台";
   if (state.store) {
     if (name === "overview" || name === "orders") loadReport();
-    if (name === "import") loadBatches();
+    if (name === "import") {
+      loadBatches();
+      loadUpstreamsStatus();
+    }
     if (name === "orders") loadCosts();
     if (name === "chats") loadChatsOverview();
     if (name === "assistant") loadAskSkus();
@@ -513,10 +553,15 @@ $("#store-select").addEventListener("change", () => {
   state.chatTopic = "";
   state.chatOverview = null;
   if ($("#card-contact-email")) $("#card-contact-email").value = "";
-  setText("card-settings-status", "正在读取已保存的联系方式…");
+  if ($("#card-usd-rate")) $("#card-usd-rate").value = "";
+  if ($("#card-vnd-rate")) $("#card-vnd-rate").value = "";
+  setText("card-settings-status", "正在读取已保存的配置…");
   if ($("#card-paste-text")) $("#card-paste-text").value = "";
   if ($("#card-captcha-panel")) $("#card-captcha-panel").hidden = true;
   if ($("#ledger-filter-form")) $("#ledger-filter-form").reset();
+  if ($("#import-16688-result")) $("#import-16688-result").innerHTML = "";
+  state.upstreamsStatus = null;
+  setChannelFilter("all", { reload: false });
   if ($("#chat-filter-form")) $("#chat-filter-form").reset();
   if ($("#chat-answer")) $("#chat-answer").innerHTML = "";
   if ($("#chat-import-result")) $("#chat-import-result").innerHTML = "";
@@ -597,7 +642,12 @@ async function loadDateRange() {
   }
 }
 function reportPath() {
-  return `/api/stores/${state.store}/report?${new URLSearchParams({ start: $("#start-date").value, end: $("#end-date").value })}`;
+  const params = new URLSearchParams({
+    start: $("#start-date").value,
+    end: $("#end-date").value,
+  });
+  if (state.channel && state.channel !== "all") params.set("channel", state.channel);
+  return `/api/stores/${state.store}/report?${params}`;
 }
 async function loadReport() {
   if (!state.store) return false;
@@ -649,6 +699,7 @@ async function loadReport() {
     updateGuidedWorkflow();
     renderOrders();
     renderOverviewCategoryMix(r);
+    renderOverviewChannelBreakdown(r);
     return true;
   } catch (err) {
     if (current(context) && seq === state.reportSeq) toast(err.message, "error");
@@ -706,6 +757,45 @@ function renderOverviewCategoryMix(report) {
     })
     .join("");
 }
+function renderOverviewChannelBreakdown(report) {
+  const container = $("#overview-channel-breakdown");
+  if (!container) return;
+  const rows = Array.isArray(report?.channel_breakdown) ? report.channel_breakdown : [];
+  if (!rows.length) {
+    container.hidden = true;
+    container.innerHTML = "";
+    return;
+  }
+  container.hidden = false;
+  container.innerHTML = rows
+    .map((b) => {
+      const active = state.channel === b.channel;
+      return `<button type="button" class="channel-breakdown-card${active ? " is-active" : ""}" data-channel-pick="${esc(b.channel)}" aria-pressed="${active}">
+        <div class="channel-card-head">
+          <span class="order-channel-chip order-channel-${esc(b.channel)}">${esc(b.label || shortChannelLabel(b.channel))}</span>
+          <small>${b.paid_orders} 单 · ${b.paid_items} 笔${b.needs_review ? ` · 待核 ${b.needs_review}` : ""}</small>
+        </div>
+        <div class="channel-card-metrics">
+          <div><span>营业额</span><strong>${money(b.payment_fen)}</strong></div>
+          <div><span>已核成本</span><strong>${money(b.cost_fen)}</strong></div>
+          <div><span>已核纯利</span><strong>${money(b.profit_fen)}</strong></div>
+        </div>
+      </button>`;
+    })
+    .join("");
+}
+$("#overview-channel-filter")?.addEventListener("change", (e) => {
+  setChannelFilter(e.target.value);
+});
+$("#orders-channel-filter")?.addEventListener("change", (e) => {
+  setChannelFilter(e.target.value);
+});
+$("#overview-channel-breakdown")?.addEventListener("click", (e) => {
+  const card = e.target.closest("[data-channel-pick]");
+  if (!card) return;
+  const picked = card.dataset.channelPick;
+  setChannelFilter(state.channel === picked ? "all" : picked);
+});
 function renderOrders() {
   let r = state.report;
   if (!r) return;
@@ -739,7 +829,9 @@ function renderOrders() {
               const orderLabel = x.item_id && x.item_id !== x.order_id
                 ? `订单 ${x.order_id} · 子单 ${x.item_id}`
                 : `订单 ${x.order_id || x.item_id}`;
-              return `<div class="order-row ${state.selectedOrderIds.has(x.item_id) ? "is-selected" : ""}" data-order-row="${esc(x.item_id)}"><div class="order-main"><label class="order-select"><input type="checkbox" data-order-select="${esc(x.item_id)}" aria-label="选择订单 ${esc(x.order_id || x.item_id)}" ${state.selectedOrderIds.has(x.item_id) ? "checked" : ""}></label><div><div class="order-title-line"><strong>${esc(x.title || x.sku)}</strong><span class="order-category-chip order-category-${category}">${ORDER_CATEGORY_LABELS[category]}</span></div><span class="order-sku">${esc(x.sku)}</span><span class="order-meta">${esc(orderLabel)}${x.paid_at ? ` · ${esc(x.paid_at)}` : ""}</span></div></div><div class="order-metric"><span>实收</span><span class="amount">${money(x.net_sales_fen)}</span><span>${fulfillmentLabel(x.fulfillment_status)} · ${refundLabel(x.refund_status)} · 成本 ${money(x.cost_fen)}</span></div><div class="order-metric"><span>利润</span><span class="amount">${money(profitValue)}</span><span class="issue">${esc(orderIssueLabel(x.reasons, x.estimated_profit_fen))}</span></div><div class="order-actions">${orderActionMarkup(x)}</div></div>`;
+              const ch = x.channel || "qianniu";
+              const chLabel = shortChannelLabel(ch);
+              return `<div class="order-row ${state.selectedOrderIds.has(x.item_id) ? "is-selected" : ""}" data-order-row="${esc(x.item_id)}"><div class="order-main"><label class="order-select"><input type="checkbox" data-order-select="${esc(x.item_id)}" aria-label="选择订单 ${esc(x.order_id || x.item_id)}" ${state.selectedOrderIds.has(x.item_id) ? "checked" : ""}></label><div><div class="order-title-line"><strong>${esc(x.title || x.sku)}</strong><span class="order-channel-chip order-channel-${esc(ch)}">${esc(chLabel)}</span><span class="order-category-chip order-category-${category}">${ORDER_CATEGORY_LABELS[category]}</span></div><span class="order-sku">${esc(x.sku)}</span><span class="order-meta">${esc(orderLabel)}${x.paid_at ? ` · ${esc(x.paid_at)}` : ""}</span></div></div><div class="order-metric"><span>实收</span><span class="amount">${money(x.net_sales_fen)}</span><span>${fulfillmentLabel(x.fulfillment_status)} · ${refundLabel(x.refund_status)} · 成本 ${money(x.cost_fen)}</span></div><div class="order-metric"><span>利润</span><span class="amount">${money(profitValue)}</span><span class="issue">${esc(orderIssueLabel(x.reasons, x.estimated_profit_fen))}</span></div><div class="order-actions">${orderActionMarkup(x)}</div></div>`;
             })(),
         )
         .join("")
@@ -1275,20 +1367,25 @@ async function loadCosts({ preserveCardResult = false } = {}) {
     if (state.loadedSettingsStore !== context.store) {
       const emailInput = $("#card-contact-email");
       if (emailInput) emailInput.value = cardSettings.contact_email || "";
+      const usdInput = $("#card-usd-rate");
+      if (usdInput) usdInput.value = cardSettings.usd_cny_rate || "";
+      const vndInput = $("#card-vnd-rate");
+      if (vndInput) vndInput.value = cardSettings.vnd_cny_rate || "";
       state.loadedSettingsStore = context.store;
     }
+    const fxSummary = `USD=${cardSettings.usd_cny_rate || cardSettings.default_usd_cny_rate || "7.30"} · VND=${cardSettings.vnd_cny_rate || cardSettings.default_vnd_cny_rate || "0.00028"}`;
     setText(
       "card-settings-status",
       cardSettings.contact_email
-        ? `已保存：${cardSettings.contact_email}${cardSettings.updated_at ? " · " + formatCardSettingTime(cardSettings.updated_at) : ""}`
-        : "尚未保存",
+        ? `已保存：${cardSettings.contact_email} · 汇率 ${fxSummary}${cardSettings.updated_at ? " · " + formatCardSettingTime(cardSettings.updated_at) : ""}`
+        : `当前汇率 ${fxSummary}（未保存邮箱时仍可同步上游与手动导入）`,
     );
     if (!preserveCardResult) {
       $("#card-import-result").innerHTML = purchases.length
-        ? `<div class="import-message ok">已保存 ${purchases.length} 张卡网采购单，最近一张：${esc(purchases[0].purchase_external_id)} · ${esc(purchases[0].product_title)}</div>`
-        : '<div class="import-message">还没有卡网采购单。先保存联系方式并使用 AI 查询或粘贴导入。</div>';
+        ? `<div class="import-message ok">已保存 ${purchases.length} 张采购单，最近一张：${esc(purchases[0].purchase_external_id)} · ${esc(purchases[0].source_label || shortCardSource(purchases[0].source))} · ${esc(purchases[0].product_title)}</div>`
+        : '<div class="import-message">还没有采购单。可直接点击上方同步 TG/方案二，或粘贴/导入 Thatim (2号) 与卡网采购单。</div>';
     }
-    await loadCardLedger(context);
+    await Promise.all([loadCardLedger(context), loadUpstreamsStatus(context)]);
     updateGuidedWorkflow();
     if (purchases.length > 0 && !state.cardMatches && current(context)) {
       runCostMatches(null, { silent: true });
@@ -1296,6 +1393,45 @@ async function loadCosts({ preserveCardResult = false } = {}) {
   } catch (err) {
     if (current(context)) toast(err.message);
   }
+}
+
+function renderUpstreamsStatus(statusData) {
+  state.upstreamsStatus = statusData;
+  const cfg = statusData?.configured || {};
+  const pc = statusData?.purchase_counts || {};
+  const oc = statusData?.order_counts || {};
+  const chips = $("#upstream-status-chips");
+  if (chips) {
+    const items = [
+      { label: "FatBunny Hub", ok: Boolean(cfg.fatbunny), count: pc.tg_fatbunny || 0, suffix: "笔" },
+      { label: "ChugAx Global", ok: Boolean(cfg.chugax), count: pc.tg_chugax || 0, suffix: "笔" },
+      { label: "方案二", ok: Boolean(cfg.plan2), count: null, suffix: "" },
+      { label: "Thatim (2号)", ok: (pc.thatim || 0) > 0, count: pc.thatim || 0, suffix: "笔" },
+      { label: "16688 销售", ok: Boolean(cfg.openapi_16688) || (oc["16688"] || 0) > 0, count: oc["16688"] || 0, suffix: "笔" },
+    ];
+    chips.innerHTML = items
+      .map((item) => {
+        const stateText = item.count === null
+          ? (item.ok ? "已接入" : "未配置")
+          : `${item.count}${item.suffix}${item.ok ? "" : " · 未配密钥"}`;
+        return `<span class="upstream-chip ${item.ok ? "is-ready" : "is-idle"}">${esc(item.label)} · ${esc(stateText)}</span>`;
+      })
+      .join("");
+  }
+  const badge16688 = $("#status-16688-badge");
+  if (badge16688) {
+    const count16688 = oc["16688"] || 0;
+    badge16688.textContent = `已入库 ${count16688} 笔 · ${cfg.openapi_16688 ? "OpenAPI 已配置" : "支持文件导入"}`;
+  }
+}
+
+async function loadUpstreamsStatus(context = scope()) {
+  if (!context.store) return;
+  try {
+    const data = await api(`/api/stores/${context.store}/upstreams/status`);
+    if (!current(context)) return;
+    renderUpstreamsStatus(data);
+  } catch {}
 }
 
 function formatCardSettingTime(iso) {
@@ -1316,22 +1452,29 @@ function formatCardImportSummary(r, prefix = "采购单已保存") {
 function shortCardSource(source) {
   const raw = String(source || "").trim();
   if (!raw) return "";
+  const low = raw.toLowerCase();
+  if (low === "tg_fatbunny" || low.includes("fatbunny")) return "FatBunny Hub";
+  if (low === "tg_chugax" || low.includes("chugax")) return "ChugAx Global";
+  if (low === "tg_canboso" || low === "tg" || low === "canboso") return "TG 上游";
+  if (low === "thatim" || low.includes("thatim")) return "Thatim (2号)";
+  if (low === "wzyp") return "链动小铺";
   if (raw.startsWith("16688") && raw.length > 14) return "16688 AI查询";
-  if ((raw.startsWith("链动") || raw.toLowerCase().includes("wzyp")) && raw.length > 14) return "链动小铺 AI查询";
+  if ((raw.startsWith("链动") || low.includes("wzyp")) && raw.length > 14) return "链动小铺 AI查询";
   return raw;
 }
 
 async function importCardPurchaseText(text, button, filename = "card-paste.txt") {
   const clean = String(text || "").trim();
   if (!clean) {
-    toast("请先粘贴卡网订单内容", "error");
+    toast("请先粘贴采购单内容", "error");
     return false;
   }
+  const sourceHint = $("#card-source-hint")?.value || "";
   setBusy(button, true, "正在识别粘贴内容…");
   try {
     const r = await api(`/api/stores/${state.store}/card-purchases/import-text`, {
       method: "POST",
-      body: JSON.stringify({ text: clean, filename }),
+      body: JSON.stringify({ text: clean, filename, source_hint: sourceHint }),
     });
     const unchanged = !r.duplicate && !r.inserted && !r.updated;
     $("#card-import-result").innerHTML =
@@ -1357,12 +1500,14 @@ async function importCardPurchaseText(text, button, filename = "card-paste.txt")
 
 async function uploadCardPurchaseFile(file, button) {
   if (!file) {
-    toast("请先选择卡网采购单文件", "error");
+    toast("请先选择采购单文件", "error");
     return false;
   }
+  const sourceHint = $("#card-source-hint")?.value || "";
   const data = new FormData();
   data.append("file", file);
-  setBusy(button, true, "正在识别卡网单…");
+  if (sourceHint) data.append("source_hint", sourceHint);
+  setBusy(button, true, "正在识别采购单…");
   try {
     const r = await api(`/api/stores/${state.store}/card-purchases/import`, {
       method: "POST",
@@ -1540,6 +1685,9 @@ function renderMatchResults(r) {
       const scoreClass = level === "high" ? "" : level === "medium" ? "medium" : "review";
       const effectiveCost = best.effective_cost_fen ?? (best.amount_fen - best.refund_fen);
       const unitCost = best.unit_cost_fen ?? effectiveCost;
+      const origMoney = formatOrigMoney(best.original_currency, best.original_amount);
+      const exactPill = best.is_exact_link ? '<span class="exact-link-pill">方案二精确关联</span>' : "";
+      const redeemHint = best.linked_redeem_code ? ` · 兑换码 ${best.linked_redeem_code}` : "";
       const gap = best.signed_gap_minutes === null || best.signed_gap_minutes === undefined
         ? (best.time_gap_minutes === null ? "时间未知" : `${best.time_gap_minutes} 分钟`)
         : best.signed_gap_minutes >= 0
@@ -1563,28 +1711,29 @@ function renderMatchResults(r) {
       const altHtml = sale.candidates.map((c, cIdx) => {
         if (cIdx === selIdx) return "";
         const cCost = c.effective_cost_fen ?? (c.amount_fen - c.refund_fen);
+        const cOrig = formatOrigMoney(c.original_currency, c.original_amount);
         const cGap = c.signed_gap_minutes === null || c.signed_gap_minutes === undefined
           ? ""
           : c.signed_gap_minutes >= 0 ? `下单后 ${c.signed_gap_minutes}m` : `早于下单 ${Math.abs(c.signed_gap_minutes)}m`;
         return `<div class="alt-candidate-row">
-          <div><strong>[候选 ${cIdx + 1}] ${esc(c.product_title || c.purchase_external_id)}</strong><small>${esc(c.purchase_external_id)} · ${esc(shortCardSource(c.source || ""))} · ${money(cCost)} · ${c.score}%${cGap ? " · " + esc(cGap) : ""}</small></div>
+          <div><strong>[候选 ${cIdx + 1}] ${esc(c.product_title || c.purchase_external_id)}</strong><small>${esc(c.purchase_external_id)} · ${esc(c.source_label || shortCardSource(c.source || ""))} · ${money(cCost)}${cOrig ? ` (${esc(cOrig)})` : ""} · ${c.score}%${cGap ? " · " + esc(cGap) : ""}</small></div>
           <button type="button" class="button secondary mini" ${buildMatchButtonAttrs(sale.item_id, c)}>采用此单 ${money(cCost)}</button>
         </div>`;
       }).filter(Boolean).join("");
 
       return `<article class="match-card${idx === state.kbMatchIndex ? " is-kb-focused" : ""}" data-card-item="${esc(sale.item_id)}" data-card-index="${idx}">
         <div class="match-sale">
-          <span class="section-kicker">千牛订单 · ${esc(sale.category_label || "未分类")}${sale.quantity > 1 ? ` · 拍 ${sale.quantity} 件` : ""}</span>
+          <span class="section-kicker">${esc(sale.channel_label || "千牛订单")} · ${esc(sale.category_label || "未分类")}${sale.quantity > 1 ? ` · 拍 ${sale.quantity} 件` : ""}</span>
           <strong>${esc(sale.title || sale.sku)}</strong>
           <small>规格 ${esc(sale.sku)} · 数量 ${sale.quantity}</small>
           <small>实付 <strong>${money(sale.payment_fen)}</strong> · <span class="mono-id">${esc(sale.paid_at || "付款时间未知")}</span></small>
           <small class="mono-id">订单 ${esc(sale.order_id)}</small>
         </div>
         <div class="match-candidate">
-          <span class="section-kicker">候选 #${selIdx + 1} · ${esc(shortCardSource(best.source || "卡网"))}${best.auto_confirmable ? " · 推荐直接确认" : ""}</span>
+          <span class="section-kicker">候选 #${selIdx + 1} · ${esc(best.source_label || shortCardSource(best.source || "卡网"))}${best.auto_confirmable ? " · 推荐直接确认" : ""} ${exactPill}</span>
           <strong>${esc(best.product_title || best.purchase_external_id)}</strong>
-          <small class="mono-id">采购单 ${esc(best.purchase_external_id)} · ${esc(best.seller || "卡网供货商")}</small>
-          <small>${esc(bulkInfo)}${esc(marginText)} · ${esc(gap)}</small>
+          <small class="mono-id">采购单 ${esc(best.purchase_external_id)} · ${esc(best.seller || "上游供货商")}${esc(redeemHint)}</small>
+          <small>${esc(bulkInfo)}${origMoney ? `（原币 ${esc(origMoney)}）` : ""}${esc(marginText)} · ${esc(gap)}</small>
           ${bundleHtml}
           ${reasonChips || warnChips ? `<div class="chip-row">${reasonChips}${warnChips}</div>` : ""}
           ${sale.candidates.length > 1 ? `<details class="alt-candidates"><summary>查看其余 ${sale.candidates.length - 1} 个候选（按键 1-${Math.min(3, sale.candidates.length)} 快速切换）</summary>${altHtml}</details>` : ""}
@@ -1616,6 +1765,7 @@ async function runCostMatches(button, { silent = false } = {}) {
       q.set("start", $("#start-date").value);
       q.set("end", $("#end-date").value);
     }
+    if (state.channel && state.channel !== "all") q.set("channel", state.channel);
     if (useAi) q.set("use_ai", "true");
     const r = await api(`/api/stores/${context.store}/cost-match-suggestions?${q}`);
     if (!current(context) || seq !== state.matchSeq) return;
@@ -1699,26 +1849,175 @@ $("#card-settings-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const button = e.submitter;
   const email = $("#card-contact-email").value.trim();
-  if (!email) {
-    toast("请先填写联系方式（邮箱）", "error");
+  const usdRate = $("#card-usd-rate")?.value.trim() ?? "";
+  const vndRate = $("#card-vnd-rate")?.value.trim() ?? "";
+  if (!email && !usdRate && !vndRate) {
+    toast("请至少填写邮箱或汇率设置", "error");
     return;
   }
   setBusy(button, true, "保存中…");
   try {
+    const payload = {
+      usd_cny_rate: usdRate,
+      vnd_cny_rate: vndRate,
+    };
+    if (email) payload.contact_email = email;
     const r = await api(`/api/stores/${state.store}/card-settings`, {
       method: "PUT",
-      body: JSON.stringify({ contact_email: email }),
+      body: JSON.stringify(payload),
     });
     state.loadedSettingsStore = state.store;
+    if ($("#card-usd-rate")) $("#card-usd-rate").value = r.usd_cny_rate || "";
+    if ($("#card-vnd-rate")) $("#card-vnd-rate").value = r.vnd_cny_rate || "";
+    const fxInfo = `USD=${r.usd_cny_rate} · VND=${r.vnd_cny_rate}`;
     setText(
       "card-settings-status",
-      `已保存联系方式：${r.contact_email}（更新于 ${formatCardSettingTime(r.updated_at)}）`,
+      `${r.contact_email ? `已保存：${r.contact_email} · ` : ""}汇率 ${fxInfo}（更新于 ${formatCardSettingTime(r.updated_at)}）`,
     );
-    toast("联系方式已保存", "success");
+    toast("配置已保存", "success");
+    loadUpstreamsStatus();
   } catch (err) {
     toast(err.message, "error");
   } finally {
     setBusy(button, false);
+  }
+});
+
+$$("[data-sync-tg]").forEach((btn) => {
+  btn.addEventListener("click", async () => {
+    if (!state.store) return;
+    const supplier = btn.dataset.syncTg || "all";
+    setBusy(btn, true, "同步中…");
+    try {
+      const r = await api(`/api/stores/${state.store}/upstreams/sync-tg`, {
+        method: "POST",
+        body: JSON.stringify({ supplier }),
+      });
+      const detail = (r.suppliers || [])
+        .map((s) => `${s.label} 拉取 ${s.fetched} 条（新增 ${s.inserted}，更新 ${s.updated}）`)
+        .join("；");
+      const errPart = Array.isArray(r.errors) && r.errors.length ? `；异常：${r.errors.join("；")}` : "";
+      $("#card-import-result").innerHTML = `<div class="import-message ${r.status === "partial" ? "warn" : "ok"}">${esc(detail || `已拉取 ${r.fetched} 条`)}${esc(errPart)}</div>`;
+      toast(detail || "TG 上游同步完成", r.status === "partial" ? "info" : "success");
+      await loadCosts({ preserveCardResult: true });
+      await runCostMatches($("#run-cost-matches"), { silent: true });
+    } catch (err) {
+      $("#card-import-result").innerHTML = `<div class="import-message bad">${esc(err.message)}</div>`;
+      toast(err.message, "error");
+    } finally {
+      setBusy(btn, false);
+    }
+  });
+});
+
+$("#sync-plan2-btn")?.addEventListener("click", async (e) => {
+  if (!state.store) return;
+  const btn = e.currentTarget;
+  setBusy(btn, true, "同步方案二…");
+  try {
+    const r = await api(`/api/stores/${state.store}/upstreams/sync-plan2`, {
+      method: "POST",
+      body: JSON.stringify({ auto_confirm_exact: false }),
+    });
+    const msg = `方案二同步完成：获取 ${r.fetched} 条有效关联（新增 ${r.inserted}，更新 ${r.updated}，跳过 ${r.skipped}${r.ignored_unlinked ? `，未关联上游单号 ${r.ignored_unlinked} 条` : ""}）。`;
+    $("#card-import-result").innerHTML = `<div class="import-message ok">${esc(msg)}</div>`;
+    toast(msg, "success");
+    await loadCosts({ preserveCardResult: true });
+    await runCostMatches($("#run-cost-matches"), { silent: true });
+  } catch (err) {
+    $("#card-import-result").innerHTML = `<div class="import-message bad">${esc(err.message)}</div>`;
+    toast(err.message, "error");
+  } finally {
+    setBusy(btn, false);
+  }
+});
+
+$("#auto-exact-matches-btn")?.addEventListener("click", async (e) => {
+  if (!state.store) return;
+  const btn = e.currentTarget;
+  setBusy(btn, true, "精确关联确认中…");
+  try {
+    const r = await api(`/api/stores/${state.store}/card-matches/auto-exact`, {
+      method: "POST",
+      body: JSON.stringify({ channel: state.channel === "all" ? "" : state.channel }),
+    });
+    const confirmed = r.confirmed_count ?? 0;
+    const dup = r.duplicate_count ?? 0;
+    const totalCost = r.total_cost_fen ?? 0;
+    const msg = confirmed > 0
+      ? `已自动确认 ${confirmed} 笔精确关联订单，合计入账成本 ${money(totalCost)}${dup ? `（已有 ${dup} 笔无需重复）` : ""}。`
+      : "当前没有可自动确认的精确关联待核订单。";
+    $("#card-import-result").innerHTML = `<div class="import-message ok">${esc(msg)}</div>`;
+    toast(msg, "success");
+    await Promise.all([loadCosts({ preserveCardResult: true }), loadReport()]);
+    await runCostMatches($("#run-cost-matches"), { silent: true });
+  } catch (err) {
+    $("#card-import-result").innerHTML = `<div class="import-message bad">${esc(err.message)}</div>`;
+    toast(err.message, "error");
+  } finally {
+    setBusy(btn, false);
+  }
+});
+
+$("#sync-16688-orders-btn")?.addEventListener("click", async (e) => {
+  if (!state.store) return;
+  const btn = e.currentTarget;
+  setBusy(btn, true, "正在同步 16688…");
+  try {
+    const r = await api(`/api/stores/${state.store}/upstreams/sync-16688-orders`, {
+      method: "POST",
+      body: JSON.stringify({}),
+    });
+    const out = $("#import-16688-result");
+    if (r.status === "paused" || r.paused) {
+      const warnMsg = r.message || "16688 平台当前暂停 OpenAPI，请先使用右侧文件导入。";
+      if (out) out.innerHTML = `<div class="import-message warn"><strong>16688 OpenAPI 暂未恢复：</strong>${esc(warnMsg)}</div>`;
+      toast(warnMsg, "info");
+    } else {
+      const okMsg = `${r.message || "16688 同步完成"}（新增 ${r.inserted ?? 0}，更新 ${r.updated ?? 0}，跳过 ${r.skipped ?? 0}）。`;
+      if (out) out.innerHTML = `<div class="import-message ok">${esc(okMsg)}</div>`;
+      toast(okMsg, "success");
+      await Promise.all([loadDateRange(), loadBatches(), loadUpstreamsStatus()]);
+    }
+  } catch (err) {
+    const out = $("#import-16688-result");
+    if (out) out.innerHTML = `<div class="import-message bad">${esc(err.message)}</div>`;
+    toast(err.message, "error");
+  } finally {
+    setBusy(btn, false);
+  }
+});
+
+$("#import-16688-form")?.addEventListener("submit", async (e) => {
+  e.preventDefault();
+  if (!state.store) return;
+  const file = $("#import-16688-file")?.files?.[0];
+  if (!file) {
+    toast("请先选择 16688 销售订单文件", "error");
+    return;
+  }
+  const btn = e.submitter;
+  const data = new FormData();
+  data.append("file", file);
+  data.append("basis", "gross");
+  setBusy(btn, true, "正在导入 16688 订单…");
+  try {
+    const r = await api(`/api/stores/${state.store}/orders/import-16688`, {
+      method: "POST",
+      body: data,
+    });
+    const okMsg = `16688 销售订单已导入：读取 ${r.fetched ?? 0} 笔，新增 ${r.inserted ?? 0} 笔，更新 ${r.updated ?? 0} 笔，去重跳过 ${r.skipped ?? 0} 笔。`;
+    const out = $("#import-16688-result");
+    if (out) out.innerHTML = `<div class="import-message ok">${esc(okMsg)}</div>`;
+    toast("16688 销售订单已导入", "success");
+    if ($("#import-16688-file")) $("#import-16688-file").value = "";
+    await Promise.all([loadDateRange(), loadBatches(), loadUpstreamsStatus()]);
+  } catch (err) {
+    const out = $("#import-16688-result");
+    if (out) out.innerHTML = `<div class="import-message bad">${esc(err.message)}</div>`;
+    toast(err.message, "error");
+  } finally {
+    setBusy(btn, false);
   }
 });
 
@@ -1874,13 +2173,16 @@ function renderCardLedger(data) {
               ? `<div><strong>${esc(p.matched_at || "已记录")}</strong></div><div class="mono-id">${p.matched_order_ids.map((id) => esc(id)).join("<br>")}</div>`
               : p.reconcile_status === "excluded"
                 ? `<span class="muted">已退款或关闭</span>`
-                : `<button type="button" class="table-link" data-focus-card-match="${esc(p.id)}">去核对</button>`;
+                : `${p.linked_order_external_id ? `<div class="linked-tag-inline">关联单 ${esc(p.linked_order_external_id)}</div>` : ""}<button type="button" class="table-link" data-focus-card-match="${esc(p.id)}">去核对</button>`;
+            const origTag = formatOrigMoney(p.original_currency, p.original_amount);
+            const redeemTag = p.linked_redeem_code ? `<span class="exact-link-pill subtle">码 ${esc(p.linked_redeem_code)}</span>` : "";
+            const srcDisplay = p.source_label || shortCardSource(p.source || "");
             return `<tr>
               <td class="selection-cell"><input type="checkbox" data-card-purchase-select="${esc(p.id)}" aria-label="选择卡网订单 ${esc(p.purchase_external_id)}" ${state.selectedCardPurchaseIds.has(String(p.id)) ? "checked" : ""}></td>
-              <th scope="row"><div class="mono-id">${esc(p.purchase_external_id)}</div><small title="${esc(p.source || "")}">${esc(shortCardSource(p.source || ""))}${p.seller ? " · " + esc(p.seller) : ""}</small></th>
-              <td class="cell-title"><div>${esc(p.product_title || "—")}</div><span class="cat-tag">${esc(p.category_group_label || p.category_label || "其他")}</span></td>
+              <th scope="row"><div class="mono-id">${esc(p.purchase_external_id)}</div><small title="${esc(p.source || "")}">${esc(srcDisplay)}${p.seller ? " · " + esc(p.seller) : ""}</small></th>
+              <td class="cell-title"><div>${esc(p.product_title || "—")}</div><div class="ledger-tags-row"><span class="cat-tag">${esc(p.category_group_label || p.category_label || "其他")}</span>${redeemTag}</div></td>
               <td><div>${esc(qtyLine)}</div><small>单价 ${money(p.unit_cost_fen)}</small></td>
-              <td><div><strong>${money(p.net_fen)}</strong></div><small>${esc(p.status || "—")}</small></td>
+              <td><div><strong>${money(p.net_fen)}</strong></div>${origTag ? `<small class="orig-money-tag">${esc(origTag)}</small>` : ""}<small>${esc(p.status || "—")}</small></td>
               <td><span class="mono-id">${esc(p.paid_at || "未知")}</span></td>
               <td><span class="status-pill ${esc(p.reconcile_status)}">${esc(p.reconcile_label)}</span></td>
               <td>${matchedHtml}</td>
@@ -1888,7 +2190,7 @@ function renderCardLedger(data) {
             </tr>`;
           })
           .join("")
-      : '<tr><td colspan="9" class="table-empty">当前筛选条件下没有卡网采购单</td></tr>';
+      : '<tr><td colspan="9" class="table-empty">当前筛选条件下没有采购单</td></tr>';
   }
   syncCardPurchaseSelectionUI(data.purchases || []);
 }
@@ -1900,6 +2202,7 @@ async function loadCardLedger(context = scope()) {
     category: state.ledgerCategory || "all",
     status: $("#ledger-status")?.value || "all",
     source: $("#ledger-source")?.value || "all",
+    channel: $("#ledger-channel")?.value || "all",
     start: $("#ledger-start")?.value || "",
     end: $("#ledger-end")?.value || "",
     q: $("#ledger-search")?.value.trim() || "",
@@ -1980,6 +2283,10 @@ $$(".cat-pill").forEach((pill) => {
 $("#ledger-filter-form")?.addEventListener("submit", (e) => {
   e.preventDefault();
   loadCardLedger();
+});
+
+["#ledger-status", "#ledger-source", "#ledger-channel"].forEach((sel) => {
+  $(sel)?.addEventListener("change", () => loadCardLedger());
 });
 
 $("#ledger-reset")?.addEventListener("click", () => {

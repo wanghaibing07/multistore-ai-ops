@@ -4,6 +4,7 @@ import json
 import os
 import re
 from datetime import date, timedelta
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from uuid import NAMESPACE_URL, UUID, uuid5
 from fastapi import Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
@@ -13,7 +14,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select, func
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
-from . import agent, card_reconciliation, card_query_ai, cashflow, importer, payment_basis_review, qianniu_chats, qianniu_orders, refund_review
+from . import agent, card_reconciliation, card_query_ai, cashflow, importer, payment_basis_review, qianniu_chats, qianniu_orders, refund_review, upstream_sync
 from .accounting import calculate
 from .auth import COOKIE, current_session, login, quick_login, list_quick_users, require_store
 from .db import get_db
@@ -94,7 +95,29 @@ class DeleteCardPurchasesIn(BaseModel):
     purchase_ids: list[int] = Field(min_length=1, max_length=300)
 
 class CardSettingsIn(BaseModel):
-    contact_email: str = Field(default="", max_length=200)
+    contact_email: str | None = Field(default=None, max_length=200)
+    usd_cny_rate: str | None = Field(default=None, max_length=32)
+    vnd_cny_rate: str | None = Field(default=None, max_length=32)
+
+class UpstreamSyncTgIn(BaseModel):
+    supplier: str = Field(default="all", max_length=32)
+
+class UpstreamSyncPlan2In(BaseModel):
+    start_date: str = Field(default="", max_length=20)
+    end_date: str = Field(default="", max_length=20)
+    channel: str = Field(default="", max_length=32)
+    auto_confirm_exact: bool = False
+
+class UpstreamSync16688In(BaseModel):
+    max_pages: int = Field(default=5, ge=1, le=50)
+    page_size: int = Field(default=50, ge=1, le=100)
+    start_time: int | None = None
+    end_time: int | None = None
+
+class AutoExactMatchIn(BaseModel):
+    start: str = Field(default="", max_length=20)
+    end: str = Field(default="", max_length=20)
+    channel: str = Field(default="", max_length=32)
 
 class CardTextImportIn(BaseModel):
     text: str = Field(min_length=1, max_length=2_000_000)
@@ -183,9 +206,9 @@ def logout(response:Response,current:LoginSession=Depends(current_session),db:Se
     db.delete(current);db.commit();response.delete_cookie(COOKIE,path="/");return {"ok":True}
 
 @app.get("/api/stores/{store_id}/report")
-def report(store_id:int=Depends(require_store),start:str="",end:str="",sku:str|None=None,db:Session=Depends(get_db)):
+def report(store_id:int=Depends(require_store),start:str="",end:str="",sku:str|None=None,channel:str|None=None,db:Session=Depends(get_db)):
     today=date.today();start=start or (today-timedelta(days=29)).isoformat();end=end or today.isoformat()
-    try:return calculate(db,store_id,start,end,sku)
+    try:return calculate(db,store_id,start,end,sku,channel=channel)
     except ValueError as exc: raise HTTPException(400,str(exc)) from None
 
 @app.delete("/api/stores/{store_id}/orders")
@@ -381,12 +404,12 @@ def refund_reviews(item_id:str,store_id:int=Depends(require_store),db:Session=De
     return [{"id":r.id,"refund_fen":r.refund_fen,"note":r.note,"reviewer_id":r.reviewer_id,"source_fingerprint":r.source_fingerprint,"created_at":r.created_at} for r in rows]
 
 @app.post("/api/stores/{store_id}/imports/preview")
-async def import_preview(store_id:int=Depends(require_store),kind:str=Form(),basis:str=Form("unknown"),mapping:str=Form("{}"),file:UploadFile=File(),db:Session=Depends(get_db)):
+async def import_preview(store_id:int=Depends(require_store),kind:str=Form(),basis:str=Form("unknown"),mapping:str=Form("{}"),channel:str=Form("qianniu"),file:UploadFile=File(),db:Session=Depends(get_db)):
     data=await file.read(importer.MAX_FILE+1)
     try:
         parsed=json.loads(mapping)
         if not isinstance(parsed,dict) or not all(isinstance(k,str) and isinstance(v,str) for k,v in parsed.items()):raise ValueError
-        return importer.preview(db,store_id,kind,file.filename or "",data,basis,parsed)
+        return importer.preview(db,store_id,kind,file.filename or "",data,basis,parsed,channel=channel)
     except (ValueError,importer.ImportProblem) as e:db.rollback();raise HTTPException(400,str(e) or "字段映射格式无效") from None
     except IntegrityError:db.rollback();raise HTTPException(409,"同时处理了相同文件，请重新预览") from None
     finally:await file.close()
@@ -460,33 +483,82 @@ def import_qianniu_ai(body:QianniuAiImportIn,store_id:int=Depends(require_store)
 @app.get("/api/stores/{store_id}/card-settings")
 def get_card_settings(store_id:int=Depends(require_store),db:Session=Depends(get_db)):
     row = db.scalar(select(StoreSetting).where(StoreSetting.store_id==store_id))
+    usd_rate, vnd_rate = card_reconciliation.get_store_fx_rates(db, store_id)
     return {
         "store_id": store_id,
         "contact_email": row.contact_email if row else "",
+        "usd_cny_rate": card_reconciliation._format_decimal_clean(usd_rate),
+        "vnd_cny_rate": card_reconciliation._format_decimal_clean(vnd_rate),
+        "default_usd_cny_rate": card_reconciliation._format_decimal_clean(card_reconciliation.DEFAULT_USD_CNY_RATE),
+        "default_vnd_cny_rate": card_reconciliation._format_decimal_clean(card_reconciliation.DEFAULT_VND_CNY_RATE),
         "updated_at": row.updated_at if row else "",
     }
 
+def _parse_fx_rate_input(raw_value: str | None, label: str, upper_bound: Decimal) -> str | None:
+    if raw_value is None:
+        return None
+    cleaned = raw_value.strip()
+    if not cleaned:
+        return ""
+    try:
+        parsed = Decimal(cleaned)
+    except InvalidOperation:
+        raise HTTPException(400, f"{label} 格式无效，请填写正数") from None
+    if not parsed.is_finite() or parsed <= 0 or parsed > upper_bound:
+        raise HTTPException(400, f"{label} 必须大于 0 且不超过 {upper_bound}")
+    return card_reconciliation._format_decimal_clean(parsed)
+
 @app.put("/api/stores/{store_id}/card-settings")
 def update_card_settings(body:CardSettingsIn,store_id:int=Depends(require_store),db:Session=Depends(get_db)):
-    email = body.contact_email.strip()
-    if not email:
-        raise HTTPException(400, "请先填写联系方式（邮箱）")
-    if "@" in email:
-        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
-            raise HTTPException(400, "邮箱格式不正确，请重新检查")
-    elif len(email) < 5 or any(ch.isspace() for ch in email):
-        raise HTTPException(400, "请填写有效的邮箱或联系方式")
+    has_fx = body.usd_cny_rate is not None or body.vnd_cny_rate is not None
+    if body.contact_email is None and not has_fx:
+        raise HTTPException(400, "请先填写联系方式或汇率设置")
+    email_to_save: str | None = None
+    if body.contact_email is not None:
+        email = body.contact_email.strip()
+        if not email:
+            if not has_fx:
+                raise HTTPException(400, "请先填写联系方式（邮箱）")
+        else:
+            if "@" in email:
+                if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+                    raise HTTPException(400, "邮箱格式不正确，请重新检查")
+            elif len(email) < 5 or any(ch.isspace() for ch in email):
+                raise HTTPException(400, "请填写有效的邮箱或联系方式")
+            email_to_save = email
+    usd_to_save = _parse_fx_rate_input(body.usd_cny_rate, "USD 汇率", Decimal("1000"))
+    vnd_to_save = _parse_fx_rate_input(body.vnd_cny_rate, "VND 汇率", Decimal("10"))
     importer.serialize_sqlite_writes(db)
     row = db.scalar(select(StoreSetting).where(StoreSetting.store_id==store_id))
     now = now_iso()
     if row is None:
-        row = StoreSetting(store_id=store_id, contact_email=email, updated_at=now)
+        row = StoreSetting(
+            store_id=store_id,
+            contact_email=email_to_save or "",
+            usd_cny_rate=usd_to_save or "",
+            vnd_cny_rate=vnd_to_save or "",
+            updated_at=now,
+        )
         db.add(row)
     else:
-        row.contact_email = email
+        if email_to_save is not None:
+            row.contact_email = email_to_save
+        if usd_to_save is not None:
+            row.usd_cny_rate = usd_to_save
+        if vnd_to_save is not None:
+            row.vnd_cny_rate = vnd_to_save
         row.updated_at = now
     db.commit()
-    return {"store_id": store_id, "contact_email": row.contact_email, "updated_at": row.updated_at}
+    usd_rate, vnd_rate = card_reconciliation.get_store_fx_rates(db, store_id)
+    return {
+        "store_id": store_id,
+        "contact_email": row.contact_email,
+        "usd_cny_rate": card_reconciliation._format_decimal_clean(usd_rate),
+        "vnd_cny_rate": card_reconciliation._format_decimal_clean(vnd_rate),
+        "default_usd_cny_rate": card_reconciliation._format_decimal_clean(card_reconciliation.DEFAULT_USD_CNY_RATE),
+        "default_vnd_cny_rate": card_reconciliation._format_decimal_clean(card_reconciliation.DEFAULT_VND_CNY_RATE),
+        "updated_at": row.updated_at,
+    }
 
 @app.post("/api/stores/{store_id}/card-purchases/import-text")
 def import_card_purchases_text(body:CardTextImportIn,store_id:int=Depends(require_store),db:Session=Depends(get_db)):
@@ -494,7 +566,7 @@ def import_card_purchases_text(body:CardTextImportIn,store_id:int=Depends(requir
     if not safe_name.lower().endswith((".txt", ".md", ".tsv", ".csv", ".json", ".paste")):
         safe_name = f"{safe_name}.txt"
     try:
-        return card_reconciliation.import_purchases(db, store_id, safe_name, body.text.encode("utf-8"))
+        return card_reconciliation.import_purchases(db, store_id, safe_name, body.text.encode("utf-8"), source_hint=body.source_hint)
     except card_reconciliation.CardPurchaseImportError as exc:
         db.rollback()
         raise HTTPException(400, detail={"message": str(exc), "issues": exc.issues}) from None
@@ -545,6 +617,7 @@ def card_ledger(
     category:str="",
     status:str="",
     source:str="",
+    channel:str="",
     start:str="",
     end:str="",
     q:str="",
@@ -553,14 +626,14 @@ def card_ledger(
 ):
     safe_limit = max(1, min(limit, 2000))
     return card_reconciliation.ledger(
-        db, store_id, category=category, status=status, source=source, start=start, end=end, q=q, limit=safe_limit
+        db, store_id, category=category, status=status, source=source, channel=channel, start=start, end=end, q=q, limit=safe_limit
     )
 
 @app.post("/api/stores/{store_id}/card-purchases/import")
-async def import_card_purchases(store_id:int=Depends(require_store),file:UploadFile=File(),db:Session=Depends(get_db)):
+async def import_card_purchases(store_id:int=Depends(require_store),source_hint:str=Form(""),file:UploadFile=File(),db:Session=Depends(get_db)):
     data = await file.read(importer.MAX_FILE + 1)
     try:
-        return card_reconciliation.import_purchases(db, store_id, file.filename or "", data)
+        return card_reconciliation.import_purchases(db, store_id, file.filename or "", data, source_hint=source_hint)
     except card_reconciliation.CardPurchaseImportError as exc:
         db.rollback()
         raise HTTPException(
@@ -581,7 +654,10 @@ def card_purchases(store_id:int=Depends(require_store),db:Session=Depends(get_db
     rows = db.scalars(select(CardPurchase).where(CardPurchase.store_id==store_id).order_by(CardPurchase.paid_at.desc(),CardPurchase.id.desc()).limit(500))
     return [{"id":x.id,"purchase_external_id":x.purchase_external_id,"product_title":x.product_title,"seller":x.seller,
              "quantity":x.quantity,"amount_fen":x.amount_fen,"refund_fen":x.refund_fen,"paid_at":x.paid_at,"status":x.status,
-             "source":x.source,"batch_id":x.batch_id} for x in rows]
+             "source":x.source,"source_label":card_reconciliation.source_label(x.source),"original_currency":x.original_currency,
+             "original_amount":x.original_amount,"linked_order_external_id":x.linked_order_external_id,
+             "linked_item_external_id":(x.raw_data.get("agiso_oid","") if isinstance(x.raw_data,dict) else ""),"linked_channel":x.linked_channel,
+             "linked_redeem_code":x.linked_redeem_code,"batch_id":x.batch_id} for x in rows]
 
 @app.delete("/api/stores/{store_id}/card-purchases")
 def delete_card_purchases(body:DeleteCardPurchasesIn,store_id:int=Depends(require_store),db:Session=Depends(get_db)):
@@ -645,6 +721,7 @@ def cost_match_suggestions(
     start:str="",
     end:str="",
     scope:str="",
+    channel:str="",
     use_ai:bool=False,
     limit:int=300,
     db:Session=Depends(get_db),
@@ -656,7 +733,7 @@ def cost_match_suggestions(
         today=date.today()
         q_start=start or (today-timedelta(days=29)).isoformat()
         q_end=end or today.isoformat()
-    try:return card_reconciliation.suggestions(db,store_id,q_start,q_end,limit=safe_limit,use_ai=use_ai)
+    try:return card_reconciliation.suggestions(db,store_id,q_start,q_end,limit=safe_limit,use_ai=use_ai,channel=channel)
     except ValueError as exc:raise HTTPException(400,str(exc)) from None
 
 @app.post("/api/stores/{store_id}/card-matches")
@@ -670,6 +747,95 @@ def batch_confirm_card_matches(body:CardBatchMatchIn,store_id:int=Depends(requir
     try:return card_reconciliation.batch_confirm_matches(db,store_id,body.items,current.user_id)
     except importer.ImportProblem as exc:db.rollback();raise HTTPException(400,str(exc)) from None
     except IntegrityError:db.rollback();raise HTTPException(409,"批量成本匹配发生冲突，请刷新后重试") from None
+
+@app.post("/api/stores/{store_id}/card-matches/auto-exact")
+def auto_confirm_exact_card_matches(
+    body:AutoExactMatchIn|None=None,
+    store_id:int=Depends(require_store),
+    current:LoginSession=Depends(current_session),
+    db:Session=Depends(get_db),
+):
+    req = body or AutoExactMatchIn()
+    try:
+        return card_reconciliation.auto_confirm_exact_matches(
+            db,
+            store_id,
+            current.user_id,
+            start=req.start,
+            end=req.end,
+            channel=req.channel,
+        )
+    except (importer.ImportProblem, ValueError) as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc)) from None
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "自动确认精确关联时发生冲突，请刷新后重试") from None
+
+@app.get("/api/stores/{store_id}/upstreams/status")
+def get_upstreams_status(store_id:int=Depends(require_store),db:Session=Depends(get_db)):
+    return upstream_sync.get_upstreams_status(db, store_id)
+
+@app.post("/api/stores/{store_id}/upstreams/sync-tg")
+def sync_tg_upstreams(body:UpstreamSyncTgIn|None=None,store_id:int=Depends(require_store),db:Session=Depends(get_db)):
+    req = body or UpstreamSyncTgIn()
+    try:
+        return upstream_sync.sync_canboso_orders(db, store_id, supplier=req.supplier)
+    except (upstream_sync.UpstreamSyncError, importer.ImportProblem, ValueError) as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc)) from None
+
+@app.post("/api/stores/{store_id}/upstreams/sync-plan2")
+def sync_plan2_upstream(
+    body:UpstreamSyncPlan2In|None=None,
+    store_id:int=Depends(require_store),
+    current:LoginSession=Depends(current_session),
+    db:Session=Depends(get_db),
+):
+    req = body or UpstreamSyncPlan2In()
+    try:
+        return upstream_sync.sync_plan2_reconciliation(
+            db,
+            store_id,
+            start_date=req.start_date,
+            end_date=req.end_date,
+            channel=req.channel,
+            auto_confirm_exact=req.auto_confirm_exact,
+            reviewer_id=current.user_id,
+        )
+    except (upstream_sync.UpstreamSyncError, importer.ImportProblem, ValueError) as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc)) from None
+
+@app.post("/api/stores/{store_id}/upstreams/sync-16688-orders")
+def sync_16688_orders(body:UpstreamSync16688In|None=None,store_id:int=Depends(require_store),db:Session=Depends(get_db)):
+    req = body or UpstreamSync16688In()
+    try:
+        return upstream_sync.sync_16688_sales_orders(
+            db,
+            store_id,
+            max_pages=req.max_pages,
+            page_size=req.page_size,
+            start_time=req.start_time,
+            end_time=req.end_time,
+        )
+    except (upstream_sync.UpstreamSyncError, importer.ImportProblem, ValueError) as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc)) from None
+
+@app.post("/api/stores/{store_id}/orders/import-16688")
+async def import_16688_orders(store_id:int=Depends(require_store),basis:str=Form("gross"),file:UploadFile=File(),db:Session=Depends(get_db)):
+    data = await file.read(importer.MAX_FILE + 1)
+    try:
+        return upstream_sync.import_16688_orders_payload(db, store_id, file.filename or "16688-orders.csv", data, basis=basis)
+    except (upstream_sync.UpstreamSyncError, importer.ImportProblem, ValueError) as exc:
+        db.rollback()
+        raise HTTPException(400, str(exc)) from None
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(409, "16688 销售订单导入发生冲突，请重试") from None
+    finally:
+        await file.close()
 
 @app.post("/api/stores/{store_id}/chats/import-text")
 def import_chats_text(body:ChatTextImportIn,store_id:int=Depends(require_store),db:Session=Depends(get_db)):

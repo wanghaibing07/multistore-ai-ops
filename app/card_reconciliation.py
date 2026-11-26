@@ -10,22 +10,374 @@ import urllib.request
 from collections import Counter, defaultdict
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from difflib import SequenceMatcher
 from itertools import combinations
+from types import SimpleNamespace
 from typing import Any
 from uuid import NAMESPACE_URL, uuid5
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .accounting import CHANNEL_LABELS, normalize_channel_filter
 from .importer import ImportProblem, money, read_table, timestamp
-from .models import Adjustment, CardMatch, CardPurchase, CostVersion, ImportBatch, OrderItem
+from .models import Adjustment, CardMatch, CardPurchase, CostVersion, ImportBatch, OrderItem, StoreSetting
+
+
+DEFAULT_USD_CNY_RATE = Decimal("7.30")
+DEFAULT_VND_CNY_RATE = Decimal("0.00028")
+
+_SENSITIVE_EXACT_KEYS = frozenset({
+    "email",
+    "contact_email",
+    "buyer_email",
+    "buyer_email_masked",
+    "user_email",
+    "customer_email",
+    "mail",
+    "phone",
+    "buyer_phone",
+    "mobile",
+    "tel",
+    "telephone",
+    "contact",
+    "contacts",
+    "password",
+    "passwd",
+    "pwd",
+    "pass",
+    "card_pwd",
+    "card_password",
+    "secret",
+    "secrets",
+    "secret_code",
+    "secret_codes",
+    "secret_list",
+    "stock_secrets",
+    "card_no",
+    "card_secret",
+    "cards",
+    "card_list",
+    "card_content",
+    "content",
+    "kami",
+    "carmi",
+    "cdk",
+    "account",
+    "accounts",
+    "credential",
+    "credentials",
+    "delivery",
+    "deliveries",
+    "delivery_json",
+    "delivery_data",
+    "delivery_info",
+    "delivery_content",
+    "request_payload_json",
+    "warranty_json",
+    "token",
+    "access_token",
+    "refresh_token",
+    "api_key",
+    "apikey",
+    "cookie",
+    "cookies",
+    "authorization",
+    "buyer_nick",
+    "buyer_name",
+    "receiver",
+    "receiver_name",
+    "address",
+    "shipping_address",
+})
+
+_SENSITIVE_KEY_SUBSTRINGS = (
+    "password",
+    "passwd",
+    "card_pwd",
+    "secret",
+    "credential",
+    "token",
+    "cookie",
+    "email",
+    "phone",
+    "mobile",
+    "address",
+    "account",
+    "buyer_nick",
+    "buyer_name",
+    "card_no",
+    "card_list",
+    "card_content",
+    "kami",
+    "carmi",
+    "delivery_json",
+    "delivery_data",
+    "delivery_info",
+    "delivery_content",
+    "卡密",
+    "卡号",
+    "密码",
+    "口令",
+    "密钥",
+    "邮箱",
+    "手机号",
+    "电话",
+    "联系方式",
+    "旺旺",
+    "买家",
+    "收货",
+    "地址",
+    "账号",
+    "帐号",
+)
+
+_SAFE_IDENTIFIER_KEYS = frozenset({
+    "agiso_oid",
+    "agiso_tid",
+    "external_order_id",
+    "order_id",
+    "ordercode",
+    "orderid",
+    "order_sn",
+    "trade_no",
+    "item_external_id",
+    "order_external_id",
+    "purchase_external_id",
+    "upstream_order_code",
+    "code",
+    "goods_no",
+    "sku_key",
+    "sku_id",
+    "channel",
+    "source",
+})
+
+_INLINE_EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")
+_INLINE_SECRET_RE = re.compile(r"(?i)(密码|口令|密钥|password|passwd|token|secret)\s*[:=：]\s*\S+")
+
+
+def _is_sensitive_raw_key(key: str) -> bool:
+    cleaned = str(key or "").strip()
+    if not cleaned:
+        return False
+    low = cleaned.lower()
+    if low in _SAFE_IDENTIFIER_KEYS:
+        return False
+    if low in _SENSITIVE_EXACT_KEYS:
+        return True
+    return any(sub in low for sub in _SENSITIVE_KEY_SUBSTRINGS)
+
+
+def sanitize_raw_payload(value: Any, *, _depth: int = 0) -> Any:
+    if _depth >= 8:
+        return None
+    if isinstance(value, dict):
+        cleaned_dict: dict[str, Any] = {}
+        for key, item in value.items():
+            key_str = str(key)
+            if _is_sensitive_raw_key(key_str):
+                continue
+            if key_str.strip().lower() in _SAFE_IDENTIFIER_KEYS:
+                cleaned_dict[key_str] = item if not isinstance(item, (dict, list, tuple)) else sanitize_raw_payload(item, _depth=_depth + 1)
+            else:
+                cleaned_dict[key_str] = sanitize_raw_payload(item, _depth=_depth + 1)
+        return cleaned_dict
+    if isinstance(value, (list, tuple)):
+        return [sanitize_raw_payload(item, _depth=_depth + 1) for item in value]
+    if isinstance(value, str):
+        text = _INLINE_EMAIL_RE.sub("[邮箱已隐藏]", value)
+        text = _INLINE_SECRET_RE.sub(r"\1：[已隐藏]", text)
+        return text
+    return value
+
+SOURCE_LABELS = {
+    "16688": "16688",
+    "16688页面": "16688",
+    "链动小铺": "链动小铺",
+    "tg_fatbunny": "TG · FatBunny Hub",
+    "tg_chugax": "TG · ChugAx Global",
+    "tg_canboso": "TG · Canboso",
+    "thatim": "Thatim (Zalo 2号)",
+}
+
+SOURCE_DEFAULT_SELLER = {
+    "链动小铺": "链动小铺",
+    "tg_fatbunny": "FatBunny Hub",
+    "tg_chugax": "ChugAx Global",
+    "tg_canboso": "Canboso",
+    "thatim": "Thatim (2号)",
+}
+
+
+def source_label(source: str | None) -> str:
+    raw = str(source or "").strip()
+    return SOURCE_LABELS.get(raw, raw or "16688")
+
+
+def normalize_purchase_source(raw: Any, *, default: str = "16688", ext_id: str = "") -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return "链动小铺" if ext_id.startswith("LD") else default
+    if text in ("16688", "16688页面", "链动小铺", "tg_fatbunny", "tg_chugax", "tg_canboso", "thatim"):
+        return text
+    low = text.lower()
+    if any(tok in low for tok in ("thatim", "zalo", "2号", "二号")):
+        return "thatim"
+    if low in ("fatbunny", "fatbunny_hub", "tg_primary", "primary", "plan2", "plan2_fatbunny") or "fatbunny" in low or "兔子" in low:
+        return "tg_fatbunny"
+    if low in ("chugax", "chugax_global", "tg_secondary", "secondary") or "chugax" in low:
+        return "tg_chugax"
+    if low in ("canboso", "tg", "telegram") or "canboso" in low:
+        return "tg_canboso"
+    if low in ("wzyp", "liandong") or "链动" in low:
+        return "链动小铺"
+    if "16688" in low:
+        return "16688"
+    return text[:80]
+
+
+def get_store_fx_rates(db: Session, store_id: int) -> tuple[Decimal, Decimal]:
+    setting = db.scalar(select(StoreSetting).where(StoreSetting.store_id == store_id))
+    usd_rate = DEFAULT_USD_CNY_RATE
+    vnd_rate = DEFAULT_VND_CNY_RATE
+    if setting is not None:
+        for attr_name, is_usd in (("usd_cny_rate", True), ("vnd_cny_rate", False)):
+            raw_val = str(getattr(setting, attr_name, "") or "").strip()
+            if not raw_val:
+                continue
+            try:
+                parsed = Decimal(raw_val)
+                if parsed > 0:
+                    if is_usd:
+                        usd_rate = parsed
+                    else:
+                        vnd_rate = parsed
+            except InvalidOperation:
+                continue
+    return usd_rate, vnd_rate
+
+
+def _format_decimal_clean(val: Decimal) -> str:
+    normalized = val.normalize()
+    if normalized == 0:
+        return "0"
+    text = format(normalized, "f")
+    if "." in text:
+        text = text.rstrip("0").rstrip(".")
+    return text or "0"
+
+
+def _parse_decimal_amount(value: Any, *, currency_hint: str = "") -> Decimal | None:
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, Decimal):
+        return value
+    if isinstance(value, (int, float)):
+        try:
+            return Decimal(str(value))
+        except InvalidOperation:
+            return None
+    text = str(value).strip()
+    if not text:
+        return None
+    low = text.lower()
+    is_vnd_hint = currency_hint.upper() == "VND" or "₫" in text or "vnd" in low or "đ" in low
+    raw_num = re.sub(r"(?:us\$|usd|vnd|cny|rmb|[¥￥$₫đĐ元\s])", "", text, flags=re.IGNORECASE)
+    if not raw_num:
+        return None
+    if re.search(r",\d+\s*\$", text):
+        num_str = raw_num.replace(".", "").replace(",", ".")
+    elif "," in raw_num and "." in raw_num:
+        if raw_num.rfind(",") > raw_num.rfind("."):
+            num_str = raw_num.replace(".", "").replace(",", ".")
+        else:
+            num_str = raw_num.replace(",", "")
+    elif "," in raw_num:
+        if re.fullmatch(r"-?\d{1,3}(?:,\d{3})+", raw_num):
+            num_str = raw_num.replace(",", "")
+        else:
+            num_str = raw_num.replace(",", ".")
+    elif "." in raw_num:
+        if re.fullmatch(r"-?\d{1,3}(?:\.\d{3}){2,}", raw_num) or (is_vnd_hint and re.fullmatch(r"-?\d{1,3}(?:\.\d{3})+", raw_num)):
+            num_str = raw_num.replace(".", "")
+        else:
+            num_str = raw_num
+    else:
+        num_str = raw_num
+    try:
+        return Decimal(num_str)
+    except InvalidOperation:
+        return None
+
+
+def _detect_currency(raw_value: Any, explicit_currency: Any = "", *, source: str = "") -> str:
+    exp = str(explicit_currency or "").strip().upper()
+    if exp in ("USD", "US$", "$"):
+        return "USD"
+    if exp in ("VND", "₫", "Đ", "DONG"):
+        return "VND"
+    if exp in ("CNY", "RMB", "¥", "￥", "元"):
+        return "CNY"
+    text = str(raw_value or "")
+    low = text.lower()
+    if "₫" in text or "vnd" in low or "đ" in low:
+        return "VND"
+    if "$" in text or "usd" in low:
+        return "USD"
+    if "¥" in text or "￥" in text or "cny" in low or "rmb" in low or "元" in text:
+        return "CNY"
+    return "CNY"
+
+
+def _convert_to_cny_fen(
+    amount: Decimal,
+    currency: str,
+    usd_cny_rate: Decimal = DEFAULT_USD_CNY_RATE,
+    vnd_cny_rate: Decimal = DEFAULT_VND_CNY_RATE,
+) -> tuple[int, str, str]:
+    cur = (currency or "CNY").upper()
+    if cur == "USD":
+        fx = usd_cny_rate
+    elif cur == "VND":
+        fx = vnd_cny_rate
+    else:
+        cur = "CNY"
+        fx = Decimal("1")
+    fen = int((amount * fx * Decimal("100")).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return fen, _format_decimal_clean(fx), _format_decimal_clean(amount)
+
+
+def _normalize_upstream_status(raw_status: Any, *, badge_text: str = "") -> str:
+    combined = f"{raw_status or ''} {badge_text or ''}".strip()
+    if not combined:
+        return ""
+    low = combined.lower()
+    if any(k in low for k in ("cancel", "cancelled", "canceled", "void", "取消", "已取消", "đã hủy", "hủy")):
+        return "已取消"
+    if any(k in low for k in ("refund", "已退款", "退款", "hoàn tiền")):
+        return "已退款"
+    if any(k in low for k in ("failed", "fail", "error", "失败", "已失败", "thất bại")):
+        return "已失败"
+    if any(k in low for k in ("completed", "delivered", "fulfilled", "done", "success", "issued", "发表", "已完成", "hoàn thành")):
+        return "已完成"
+    if any(k in low for k in ("unpaid", "waiting_payment", "pending_payment", "待付款", "待支付", "未付款", "未支付", "chờ thanh toán")):
+        return "待付款"
+    if any(k in low for k in ("waiting_fulfillment", "pending", "waiting", "processing", "submitted", "处理中", "已提交", "待发货")):
+        return "处理中"
+    if any(k in low for k in ("paid", "confirmed", "已付款", "已支付", "đã thanh toán")):
+        return "已付款"
+    return str(raw_status or badge_text).strip()[:40]
 
 
 CARD_HEADERS = {
     "order_id": (
         "order_id",
         "purchase_order",
+        "upstream_order_code",
+        "orderCode",
+        "orderId",
         "订单号",
         "订单编号",
         "卡网订单号",
@@ -36,13 +388,21 @@ CARD_HEADERS = {
         "订单 ID",
         "订单ID",
     ),
-    "product": ("product", "title", "商品", "商品名", "商品名称", "产品", "商品信息"),
-    "seller": ("seller", "merchant", "店铺", "商家", "卖家", "商家名称"),
+    "product": ("product", "title", "productName", "sku_title", "variantName", "商品", "商品名", "商品名称", "产品", "商品信息"),
+    "seller": ("seller", "merchant", "supplier_label", "店铺", "商家", "卖家", "商家名称"),
     "quantity": ("qty", "quantity", "数量"),
-    "amount": ("amount", "payment", "实付金额", "金额"),
+    "amount": ("实付金额", "amount_cny", "amount", "payment", "金额", "原币金额", "original_amount", "cost_usd", "amountVnd", "amountUsd", "amountDisplay"),
     "refund": ("payment_refund", "refund", "退款", "退款金额"),
-    "paid_at": ("paid_at", "created_at", "付款时间", "下单时间"),
-    "status": ("status", "状态"),
+    "paid_at": ("paid_at", "paidAt", "submitted_at", "completed_at", "deliveredAt", "createdAt", "created_at", "付款时间", "下单时间"),
+    "status": ("status", "upstream_status", "badgeText", "状态"),
+    "currency": ("_amount_currency", "original_currency", "currency", "原币币种", "币种"),
+    "original_amount_usd": ("原币金额USD", "cost_usd", "amountUsd"),
+    "fx_rate": ("fx_rate", "汇率"),
+    "source": ("_source", "source", "来源"),
+    "linked_order_id": ("_linked_order_external_id", "linked_order_external_id", "external_order_id", "关联销售单号", "关联订单号", "agiso_tid"),
+    "linked_item_id": ("_linked_item_external_id", "linked_item_external_id", "agiso_oid", "关联子单号", "关联子订单号"),
+    "linked_channel": ("_linked_channel", "linked_channel", "关联渠道", "channel"),
+    "linked_redeem_code": ("_linked_redeem_code", "linked_redeem_code", "兑换码", "code"),
 }
 
 CATEGORY_LABELS = {
@@ -151,6 +511,13 @@ def _first(record: dict, keys: tuple[str, ...], default: Any = "") -> Any:
     return default
 
 
+def _first_with_key(record: dict, keys: tuple[str, ...], default: Any = "") -> tuple[Any, str]:
+    for key in keys:
+        if key in record and record[key] not in (None, ""):
+            return record[key], key
+    return default, ""
+
+
 def _clean_md_cell(value: str) -> str:
     text = value.strip()
     text = re.sub(r"!\[[^\]]*\]\([^)]*\)", "", text)
@@ -208,18 +575,190 @@ def _clean_match_title(title: str) -> str:
     return _collapse_ws(cleaned)
 
 
-def _parse_json(data: bytes) -> list[dict]:
+def _normalize_plan2_item(raw: dict, *, source_hint: str = "") -> dict:
+    order_id = str(raw.get("upstream_order_code") or raw.get("order_id") or "").strip()
+    src = normalize_purchase_source(raw.get("source") or source_hint or "tg_fatbunny", default="tg_fatbunny")
+    seller = str(raw.get("seller") or "FatBunny Hub (方案二)").strip()
+    title = str(raw.get("sku_title") or raw.get("product") or raw.get("sku_key") or "").strip()
+    cost_usd = raw.get("cost_usd")
+    paid_at = raw.get("submitted_at") or raw.get("completed_at") or raw.get("created_at") or raw.get("updated_at") or ""
+    status = _normalize_upstream_status(raw.get("upstream_status") or raw.get("status") or "")
+    linked_order_id = str(raw.get("external_order_id") or raw.get("agiso_tid") or "").strip()
+    linked_item_id = str(raw.get("agiso_oid") or "").strip()
+    linked_channel = str(raw.get("channel") or "").strip()
+    linked_code = str(raw.get("code") or "").strip()
+    return {
+        "order_id": order_id,
+        "product": title,
+        "seller": seller,
+        "quantity": raw.get("quantity") or 1,
+        "amount": cost_usd if cost_usd not in (None, "") else "0",
+        "_amount_currency": "USD",
+        "_allow_zero_amount": True,
+        "paid_at": paid_at,
+        "status": status,
+        "_source": src,
+        "_linked_order_external_id": linked_order_id,
+        "_linked_item_external_id": linked_item_id,
+        "_linked_channel": linked_channel,
+        "_linked_redeem_code": linked_code,
+        "_raw": raw,
+    }
+
+
+def _normalize_thatim_item(raw: dict, *, top_vnd_per_usd: Any = None) -> dict:
+    order_id = str(raw.get("orderId") or raw.get("order_id") or "").strip()
+    product_name = str(raw.get("productName") or raw.get("product") or "").strip()
+    variant_name = str(raw.get("variantName") or "").strip()
+    if variant_name and variant_name not in product_name:
+        title = f"{product_name} {variant_name}".strip()
+    else:
+        title = product_name or variant_name
+    amount_vnd = raw.get("amountVnd")
+    amount_usd = raw.get("amountUsd")
+    amount_display = raw.get("amountDisplay")
+    amount_val: Any = ""
+    currency = "VND"
+    if amount_vnd not in (None, "") and (_parse_decimal_amount(amount_vnd, currency_hint="VND") or Decimal("0")) > 0:
+        amount_val = amount_vnd
+        currency = "VND"
+    elif amount_usd not in (None, "") and (_parse_decimal_amount(amount_usd, currency_hint="USD") or Decimal("0")) > 0:
+        amount_val = amount_usd
+        currency = "USD"
+    elif amount_display not in (None, ""):
+        amount_val = amount_display
+        currency = _detect_currency(amount_display, source="thatim")
+    elif amount_vnd == 0 or amount_usd == 0:
+        amount_val = 0
+        currency = "VND" if amount_vnd == 0 else "USD"
+    status = _normalize_upstream_status(raw.get("status") or "", badge_text=str(raw.get("badgeText") or ""))
+    raw_copy = dict(raw)
+    if top_vnd_per_usd not in (None, "") and "vndPerUsd" not in raw_copy:
+        raw_copy["vndPerUsd"] = top_vnd_per_usd
+    return {
+        "order_id": order_id,
+        "product": title,
+        "seller": "Thatim (2号)",
+        "quantity": raw.get("quantity") or 1,
+        "amount": amount_val,
+        "_amount_currency": currency,
+        "_allow_zero_amount": status in ("已取消", "已退款", "已失败"),
+        "paid_at": raw.get("createdAt") or raw.get("paid_at") or "",
+        "status": status,
+        "_source": "thatim",
+        "_raw": raw_copy,
+    }
+
+
+def _normalize_canboso_item(raw: dict, *, source_hint: str = "") -> dict:
+    order_id = str(raw.get("orderCode") or raw.get("order_id") or "").strip()
+    src = normalize_purchase_source(raw.get("_source") or raw.get("source") or source_hint or "tg_canboso", default="tg_canboso")
+    seller = str(raw.get("seller") or SOURCE_DEFAULT_SELLER.get(src, "Canboso")).strip()
+    product_name = str(raw.get("productName") or raw.get("product") or "").strip()
+    payment = raw.get("payment") if isinstance(raw.get("payment"), dict) else {}
+    amount_usd = payment.get("amountUsd")
+    amount_vnd = payment.get("amountVnd")
+    usd_dec = _parse_decimal_amount(amount_usd, currency_hint="USD") if amount_usd not in (None, "") else None
+    vnd_dec = _parse_decimal_amount(amount_vnd, currency_hint="VND") if amount_vnd not in (None, "") else None
+    amount_val: Any = ""
+    refund_val: Any = 0
+    currency = "USD"
+    is_negative_refund = False
+    if usd_dec is not None and usd_dec > 0:
+        amount_val = amount_usd
+        currency = "USD"
+    elif vnd_dec is not None and vnd_dec > 0:
+        amount_val = amount_vnd
+        currency = "VND"
+    elif usd_dec is not None and usd_dec < 0:
+        amount_val = "0"
+        refund_val = str(abs(usd_dec))
+        currency = "USD"
+        is_negative_refund = True
+    elif vnd_dec is not None and vnd_dec < 0:
+        amount_val = "0"
+        refund_val = str(abs(vnd_dec))
+        currency = "VND"
+        is_negative_refund = True
+    else:
+        fallback_amt = payment.get("amount") if payment.get("amount") not in (None, "") else raw.get("amount")
+        if fallback_amt not in (None, ""):
+            fb_cur = _detect_currency(fallback_amt, payment.get("currency") or raw.get("currency") or "", source=src)
+            fb_dec = _parse_decimal_amount(fallback_amt, currency_hint=fb_cur)
+            if fb_dec is not None and fb_dec < 0:
+                amount_val = "0"
+                refund_val = str(abs(fb_dec))
+                currency = fb_cur
+                is_negative_refund = True
+            else:
+                amount_val = fallback_amt
+                currency = fb_cur
+        elif usd_dec == 0 or vnd_dec == 0:
+            amount_val = 0
+            currency = "USD" if usd_dec == 0 else "VND"
+    status = _normalize_upstream_status(raw.get("status") or "")
+    if is_negative_refund or product_name.lower().startswith("refund wallet"):
+        status = "已退款"
+    paid_at = raw.get("paidAt") or raw.get("deliveredAt") or raw.get("createdAt") or raw.get("paid_at") or ""
+    return {
+        "order_id": order_id,
+        "product": product_name,
+        "seller": seller,
+        "quantity": raw.get("quantity") or 1,
+        "amount": amount_val,
+        "refund": refund_val,
+        "_amount_currency": currency,
+        "_allow_zero_amount": status in ("已取消", "已退款", "已失败"),
+        "paid_at": paid_at,
+        "status": status,
+        "_source": src,
+        "_raw": raw,
+    }
+
+
+def _dispatch_json_item(raw: dict, *, top_source: str = "", captured: Any = None, top_vnd_per_usd: Any = None) -> dict:
+    top_norm = normalize_purchase_source(top_source, default="") if top_source else ""
+    if "upstream_order_code" in raw or ("code" in raw and ("sku_key" in raw or "external_order_id" in raw)):
+        return _normalize_plan2_item(raw, source_hint=top_norm or top_source)
+    if top_norm == "thatim" or "orderId" in raw or "amountVnd" in raw or "amountDisplay" in raw:
+        return _normalize_thatim_item(raw, top_vnd_per_usd=top_vnd_per_usd)
+    payment = raw.get("payment") if isinstance(raw.get("payment"), dict) else {}
+    if "orderCode" in raw or "amountUsd" in payment or "amountVnd" in payment or top_norm.startswith("tg_"):
+        return _normalize_canboso_item(raw, source_hint=top_norm or top_source)
+    if isinstance(raw.get("card_order"), dict):
+        merged = {**raw["card_order"], **({"payment": raw.get("payment")} if raw.get("payment") else {})}
+        if top_source and "_source" not in merged:
+            merged["_source"] = top_source
+        return merged
+    out = dict(raw)
+    if top_source and "_source" not in out:
+        out["_source"] = top_source
+    if captured is not None and "_captured_at" not in out:
+        out["_captured_at"] = captured
+    return out
+
+
+def _parse_json(data: bytes, *, source_hint: str = "") -> list[dict]:
     try:
         parsed = json.loads(data.decode("utf-8-sig"))
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise ImportProblem("卡网文件不是有效的 UTF-8 JSON") from None
+    if isinstance(parsed, dict) and isinstance(parsed.get("items"), list):
+        top_source = str(parsed.get("source") or source_hint or "tg_fatbunny")
+        rows = []
+        for raw in parsed["items"]:
+            if isinstance(raw, dict):
+                rows.append(_dispatch_json_item(raw, top_source=top_source))
+        return rows
     if isinstance(parsed, dict) and isinstance(parsed.get("orders"), list):
-        source = str(parsed.get("source") or "16688页面")
-        captured = parsed.get("captured_at")
+        raw_top_source = str(parsed.get("source") or source_hint or "")
+        source = raw_top_source or ("tg_canboso" if parsed.get("success") is True else "16688页面")
+        captured = parsed.get("captured_at") or parsed.get("fetchedAt")
+        top_vnd = parsed.get("vndPerUsd")
         rows = []
         for raw in parsed["orders"]:
             if isinstance(raw, dict):
-                rows.append({**raw, "_source": source, "_captured_at": captured})
+                rows.append(_dispatch_json_item(raw, top_source=source, captured=captured, top_vnd_per_usd=top_vnd))
         return rows
     if isinstance(parsed, dict) and ("orders16688" in parsed or "wzyp" in parsed):
         rows = []
@@ -259,13 +798,9 @@ def _parse_json(data: bytes) -> list[dict]:
         for raw in parsed:
             if not isinstance(raw, dict):
                 continue
-            if isinstance(raw.get("card_order"), dict):
-                merged = {**raw["card_order"], **({"payment": raw.get("payment")} if raw.get("payment") else {})}
-                rows.append(merged)
-            else:
-                rows.append(raw)
+            rows.append(_dispatch_json_item(raw, top_source=source_hint))
         return rows
-    raise ImportProblem("卡网 JSON 需为订单数组，或包含 orders 数组")
+    raise ImportProblem("卡网 JSON 需为订单数组，或包含 orders / items 数组")
 
 
 def _parse_wzyp_cells(cells: list[str]) -> dict | None:
@@ -521,9 +1056,121 @@ def _parse_wzyp_text(text: str) -> list[dict]:
     return rows
 
 
+_THATIM_ORDER_ID_RE = re.compile(r"(?:^|\s)(?:#|Mã\s*đơn\s*[:：]?\s*|订单号\s*[:：]?\s*)([A-Za-z0-9_-]{4,24})\b", re.IGNORECASE)
+_THATIM_PURE_ID_RE = re.compile(r"^#?(\d{5,12})$")
+_THATIM_VND_RE = re.compile(r"(\d{1,3}(?:[.,]\d{3})+)\s*(?:₫|(?:đ|vnd)\b)", re.IGNORECASE)
+_THATIM_USD_RE = re.compile(r"(?:\$\s*(\d+(?:[.,]\d{1,6})?)|(\d+(?:[.,]\d{1,6})?)\s*(?:\$|usd\b))", re.IGNORECASE)
+_THATIM_DMY_TS_RE = re.compile(r"\b(\d{2})/(\d{2})/(\d{4})\s+(\d{2}:\d{2}:\d{2})\b")
+_THATIM_STATUS_WORDS = ("发表", "取消", "已完成", "已取消", "已退款", "hoàn thành", "đã hủy", "hủy", "completed", "cancelled", "canceled")
+
+
+def _parse_thatim_text(text: str, *, force: bool = False) -> list[dict]:
+    low = text.lower()
+    has_signal = (
+        "thatim" in low
+        or "₫" in text
+        or "vnd" in low
+        or "hoàn thành" in low
+        or "đã hủy" in low
+        or "mã đơn" in low
+        or bool(re.search(r"\d+,\d{2,4}\$", text))
+        or ("发表" in text and ("$" in text or "₫" in text))
+    )
+    if not force and not has_signal:
+        return []
+    lines = [_collapse_ws(ln) for ln in text.splitlines() if _collapse_ws(ln)]
+    if not lines:
+        return []
+
+    blocks: list[list[str]] = []
+    current: list[str] = []
+    for line in lines:
+        is_new = bool(_THATIM_PURE_ID_RE.match(line)) or bool(re.match(r"^(?:#\d{4,}|Mã\s*đơn|订单号\s*[:：]?\s*#?\d{4,})", line, re.IGNORECASE))
+        if is_new and current:
+            blocks.append(current)
+            current = [line]
+        else:
+            current.append(line)
+    if current:
+        blocks.append(current)
+
+    rows: list[dict] = []
+    for block in blocks:
+        joined = " | ".join(block)
+        order_id = ""
+        for ln in block:
+            pm = _THATIM_PURE_ID_RE.match(ln)
+            if pm:
+                order_id = pm.group(1)
+                break
+            om = _THATIM_ORDER_ID_RE.search(ln)
+            if om:
+                order_id = om.group(1)
+                break
+        if not order_id:
+            continue
+        paid_at = ""
+        ts_m = _TS_RE.search(joined)
+        if ts_m:
+            paid_at = ts_m.group(1).replace("/", "-")
+        else:
+            dmy = _THATIM_DMY_TS_RE.search(joined)
+            if dmy:
+                paid_at = f"{dmy.group(3)}-{dmy.group(2)}-{dmy.group(1)} {dmy.group(4)}"
+        amount_val: Any = ""
+        currency = "VND"
+        vnd_m = _THATIM_VND_RE.search(joined)
+        usd_m = _THATIM_USD_RE.search(joined)
+        if vnd_m:
+            amount_val = f"{vnd_m.group(1)}₫"
+            currency = "VND"
+        elif usd_m:
+            amount_val = f"{usd_m.group(1) or usd_m.group(2)}$"
+            currency = "USD"
+        if amount_val == "":
+            continue
+        status = ""
+        for ln in block:
+            ln_low = ln.lower()
+            if any(w in ln_low for w in _THATIM_STATUS_WORDS):
+                status = _normalize_upstream_status(ln)
+                break
+        title_parts: list[str] = []
+        for ln in block:
+            if _THATIM_PURE_ID_RE.match(ln):
+                continue
+            if _TS_RE.fullmatch(ln) or _THATIM_DMY_TS_RE.fullmatch(ln):
+                continue
+            if _THATIM_VND_RE.fullmatch(ln) or _THATIM_USD_RE.fullmatch(ln):
+                continue
+            if ln.lower() in _THATIM_STATUS_WORDS:
+                continue
+            cleaned_ln = _THATIM_ORDER_ID_RE.sub("", ln).strip(" :-|·•")
+            cleaned_ln = _TS_RE.sub("", cleaned_ln).strip(" :-|·•")
+            cleaned_ln = _THATIM_VND_RE.sub("", cleaned_ln).strip(" :-|·•")
+            cleaned_ln = _THATIM_USD_RE.sub("", cleaned_ln).strip(" :-|·•")
+            if cleaned_ln and cleaned_ln.lower() not in _THATIM_STATUS_WORDS:
+                title_parts.append(cleaned_ln)
+        product = " ".join(title_parts[:2]).strip() or f"Thatim 订单 #{order_id}"
+        rows.append({
+            "order_id": order_id,
+            "product": product,
+            "seller": "Thatim (2号)",
+            "quantity": 1,
+            "amount": amount_val,
+            "_amount_currency": currency,
+            "_allow_zero_amount": status in ("已取消", "已退款", "已失败"),
+            "paid_at": paid_at,
+            "status": status or "已完成",
+            "_source": "thatim",
+            "_raw_lines": block,
+        })
+    return rows
+
+
 def _has_card_header(first_line: str) -> bool:
     parts = {p.strip().strip('"').strip("'") for p in re.split(r"[\t,]", first_line)}
-    all_aliases = {alias for aliases in CARD_HEADERS.values() for alias in aliases}
+    all_aliases = {alias for aliases in CARD_HEADERS.values() for alias in aliases if not alias.startswith("_")}
     return len(parts & all_aliases) >= 2
 
 
@@ -536,11 +1183,19 @@ def _is_shifted_wzyp_table(decoded: str, dict_rows: list[dict]) -> bool:
     return bool(_TS_RE.search(oid_val) or _LD_ID_RE.search(amt_val))
 
 
-def parse_purchases(name: str, data: bytes) -> list[dict]:
+def parse_purchases(
+    name: str,
+    data: bytes,
+    *,
+    source_hint: str = "",
+    usd_cny_rate: Decimal = DEFAULT_USD_CNY_RATE,
+    vnd_cny_rate: Decimal = DEFAULT_VND_CNY_RATE,
+) -> list[dict]:
     lower_name = name.lower()
+    norm_hint = normalize_purchase_source(source_hint, default="") if source_hint else ""
     raw_rows: list[dict] = []
     if lower_name.endswith(".json"):
-        raw_rows = _parse_json(data)
+        raw_rows = _parse_json(data, source_hint=norm_hint)
     elif lower_name.endswith((".tsv", ".txt", ".md", ".paste")) or (lower_name.endswith(".csv") and b"\t" in data[:4096]):
         try:
             decoded = data.decode("utf-8-sig")
@@ -549,7 +1204,7 @@ def parse_purchases(name: str, data: bytes) -> list[dict]:
         stripped = decoded.strip()
         if stripped.startswith("{") or re.match(r"^\[\s*[\{\"]", stripped):
             try:
-                raw_rows = _parse_json(stripped.encode("utf-8"))
+                raw_rows = _parse_json(stripped.encode("utf-8"), source_hint=norm_hint)
             except ImportProblem:
                 raw_rows = []
         else:
@@ -563,10 +1218,14 @@ def parse_purchases(name: str, data: bytes) -> list[dict]:
                     raw_rows = dict_rows
             else:
                 # Try Markdown table, 16688 copied page text, and 链动小铺 copied text (can even be combined!)
-                md_rows = _parse_markdown_table(decoded)
-                ff_rows = _parse_16688_text(decoded)
-                ld_rows = _parse_wzyp_text(decoded) if not md_rows else []
-                raw_rows = md_rows + ff_rows + ld_rows
+                if norm_hint == "thatim":
+                    raw_rows = _parse_thatim_text(decoded, force=True)
+                if not raw_rows:
+                    md_rows = _parse_markdown_table(decoded)
+                    ff_rows = _parse_16688_text(decoded)
+                    ld_rows = _parse_wzyp_text(decoded) if not md_rows else []
+                    th_rows = _parse_thatim_text(decoded, force=False) if not (md_rows or ff_rows or ld_rows) else []
+                    raw_rows = md_rows + ff_rows + ld_rows + th_rows
                 if not raw_rows and ("\t" in decoded or "," in decoded):
                     delimiter = "\t" if "\t" in decoded else ","
                     raw_rows = [dict(row) for row in csv.DictReader(io.StringIO(decoded), delimiter=delimiter)]
@@ -581,7 +1240,7 @@ def parse_purchases(name: str, data: bytes) -> list[dict]:
         raise ImportProblem("卡网文件中没有采购订单")
     result = []
     errors = []
-    seen_ids: dict[str, int] = {}
+    seen_ids: dict[tuple[str, str], int] = {}
     for index, raw in enumerate(raw_rows, 1):
         try:
             payment = raw.get("payment") if isinstance(raw.get("payment"), dict) else {}
@@ -589,9 +1248,69 @@ def parse_purchases(name: str, data: bytes) -> list[dict]:
             order_id = _first(merged, CARD_HEADERS["order_id"])
             if not order_id:
                 raise ImportProblem("缺少卡网订单号")
-            amount = _first(merged, CARD_HEADERS["amount"])
-            if not amount:
+            ext_id = str(order_id).strip()[:128]
+            raw_source = _first(merged, CARD_HEADERS["source"], "")
+            if raw_source:
+                resolved_source = normalize_purchase_source(raw_source, ext_id=ext_id)
+            elif norm_hint:
+                resolved_source = norm_hint
+            else:
+                resolved_source = "链动小铺" if ext_id.startswith("LD") else "16688"
+
+            linked_order_id = str(_first(merged, CARD_HEADERS["linked_order_id"], "") or "").strip()[:128]
+            linked_item_id = str(_first(merged, CARD_HEADERS["linked_item_id"], "") or "").strip()[:128]
+            linked_channel = str(_first(merged, CARD_HEADERS["linked_channel"], "") or "").strip()[:20]
+            linked_redeem_code = str(_first(merged, CARD_HEADERS["linked_redeem_code"], "") or "").strip()[:64]
+            raw_status = _first(merged, CARD_HEADERS["status"], "")
+            status_str = _normalize_upstream_status(raw_status) if (resolved_source.startswith("tg_") or resolved_source == "thatim") else str(raw_status)[:40]
+            allow_zero_amount = bool(merged.get("_allow_zero_amount")) or bool(linked_order_id or linked_redeem_code) or status_str in ("已取消", "已退款", "已失败")
+
+            amount_val, amount_key = _first_with_key(merged, CARD_HEADERS["amount"])
+            if amount_val in (None, ""):
+                if allow_zero_amount:
+                    amount_val = "0"
+                    amount_key = "_zero"
+                else:
+                    raise ImportProblem("缺少采购金额")
+            explicit_currency = _first(merged, CARD_HEADERS["currency"], "")
+            if amount_key in ("实付金额", "amount_cny"):
+                amount_currency = "CNY"
+            elif amount_key in ("cost_usd", "amountUsd"):
+                amount_currency = "USD"
+            elif amount_key == "amountVnd":
+                amount_currency = "VND"
+            else:
+                amount_currency = _detect_currency(amount_val, explicit_currency, source=resolved_source)
+            amount_dec = _parse_decimal_amount(amount_val, currency_hint=amount_currency)
+            if amount_dec is None:
                 raise ImportProblem("缺少采购金额")
+            if amount_dec < 0:
+                raise ImportProblem("采购金额不能为负数")
+            if amount_dec == 0 and not allow_zero_amount:
+                raise ImportProblem("缺少采购金额")
+
+            if amount_key in ("实付金额", "amount_cny"):
+                amount_fen, fx_rate_str, orig_amt_str = _convert_to_cny_fen(amount_dec, "CNY", usd_cny_rate, vnd_cny_rate)
+                orig_currency = "CNY"
+                plan1_usd = merged.get("原币金额USD")
+                if plan1_usd not in (None, ""):
+                    usd_dec = _parse_decimal_amount(plan1_usd, currency_hint="USD")
+                    if usd_dec is not None and usd_dec > 0:
+                        orig_currency = "USD"
+                        orig_amt_str = _format_decimal_clean(usd_dec)
+                        csv_fx = _first(merged, CARD_HEADERS["fx_rate"], "")
+                        csv_fx_dec = _parse_decimal_amount(csv_fx) if csv_fx not in (None, "") else None
+                        if csv_fx_dec and csv_fx_dec > 0:
+                            fx_rate_str = _format_decimal_clean(csv_fx_dec)
+                        elif amount_dec > 0:
+                            implied_fx = (amount_dec / usd_dec).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+                            fx_rate_str = _format_decimal_clean(implied_fx)
+                        else:
+                            fx_rate_str = _format_decimal_clean(usd_cny_rate)
+            else:
+                amount_fen, fx_rate_str, orig_amt_str = _convert_to_cny_fen(amount_dec, amount_currency, usd_cny_rate, vnd_cny_rate)
+                orig_currency = amount_currency
+
             qty_raw = _first(merged, CARD_HEADERS["quantity"], 1)
             if isinstance(qty_raw, str):
                 qm = _QTY_RE.search(qty_raw)
@@ -603,27 +1322,52 @@ def parse_purchases(name: str, data: bytes) -> list[dict]:
                 raise ImportProblem("采购数量不是整数") from None
             if quantity < 1 or quantity > 100000:
                 raise ImportProblem("采购数量超出范围")
-            ext_id = str(order_id).strip()[:128]
-            default_source = "链动小铺" if ext_id.startswith("LD") else "16688"
+
+            refund_raw = _first(merged, CARD_HEADERS["refund"], 0)
+            refund_fen = 0
+            if refund_raw not in (None, "", 0, "0", "0.00"):
+                ref_cur = _detect_currency(refund_raw, explicit_currency if amount_currency != "CNY" else "CNY", source=resolved_source)
+                ref_dec = _parse_decimal_amount(refund_raw, currency_hint=ref_cur)
+                if ref_dec is not None and ref_dec > 0:
+                    refund_fen, _, _ = _convert_to_cny_fen(ref_dec, ref_cur, usd_cny_rate, vnd_cny_rate)
+
+            seller_val = str(_first(merged, CARD_HEADERS["seller"]) or SOURCE_DEFAULT_SELLER.get(resolved_source, ""))[:200]
+            raw_source_payload = dict(raw.get("_raw")) if isinstance(raw.get("_raw"), dict) else dict(raw)
+            sanitized_payload = sanitize_raw_payload(raw_source_payload)
+            raw_payload = sanitized_payload if isinstance(sanitized_payload, dict) else {}
+            if linked_item_id and not raw_payload.get("agiso_oid"):
+                raw_payload["agiso_oid"] = linked_item_id
+            if linked_order_id and not raw_payload.get("external_order_id"):
+                raw_payload["external_order_id"] = linked_order_id
+            if linked_redeem_code and not raw_payload.get("code"):
+                raw_payload["code"] = linked_redeem_code
+            if linked_channel and not raw_payload.get("channel"):
+                raw_payload["channel"] = linked_channel
             row = {
                 "purchase_external_id": ext_id,
                 "product_title": str(_first(merged, CARD_HEADERS["product"]))[:500],
-                "seller": str(_first(merged, CARD_HEADERS["seller"]) or ("链动小铺" if ext_id.startswith("LD") else ""))[:200],
+                "seller": seller_val,
                 "quantity": quantity,
-                "amount_fen": money(amount),
-                "refund_fen": money(_first(merged, CARD_HEADERS["refund"], 0), optional=True) or 0,
+                "amount_fen": amount_fen,
+                "refund_fen": refund_fen,
                 "paid_at": timestamp(_first(merged, CARD_HEADERS["paid_at"]), optional=True),
-                "status": str(_first(merged, CARD_HEADERS["status"]))[:40],
-                "source": str(merged.get("_source") or default_source)[:80],
-                "raw_data": raw,
+                "status": status_str[:40],
+                "source": resolved_source[:80],
+                "original_currency": orig_currency[:12],
+                "original_amount": orig_amt_str[:32],
+                "fx_rate": fx_rate_str[:20],
+                "linked_order_external_id": linked_order_id,
+                "linked_channel": linked_channel,
+                "linked_redeem_code": linked_redeem_code,
+                "raw_data": raw_payload,
             }
-            if ext_id in seen_ids:
-                prev_idx = seen_ids[ext_id]
+            dedupe_key = (row["source"], ext_id)
+            if dedupe_key in seen_ids:
+                prev_idx = seen_ids[dedupe_key]
                 prev = result[prev_idx]
-                if (not prev["seller"] and row["seller"]) or (prev["quantity"] == 1 and row["quantity"] > 1) or (not prev["status"] and row["status"]):
-                    result[prev_idx] = row
+                result[prev_idx] = _merge_purchase_dicts(prev, row)
             else:
-                seen_ids[ext_id] = len(result)
+                seen_ids[dedupe_key] = len(result)
                 result.append(row)
         except ImportProblem as exc:
             if len(errors) < 20:
@@ -633,11 +1377,111 @@ def parse_purchases(name: str, data: bytes) -> list[dict]:
     return result
 
 
-_BUSINESS_KEYS = ("product_title", "seller", "quantity", "amount_fen", "refund_fen", "paid_at", "status")
+_BUSINESS_KEYS = (
+    "product_title",
+    "seller",
+    "quantity",
+    "amount_fen",
+    "refund_fen",
+    "paid_at",
+    "status",
+    "source",
+    "original_currency",
+    "original_amount",
+    "fx_rate",
+    "linked_order_external_id",
+    "linked_channel",
+    "linked_redeem_code",
+)
+_RAW_LINK_KEYS = ("external_order_id", "agiso_oid", "agiso_tid", "code", "sku_key", "sku_id", "channel", "goods_no")
+_TERMINAL_NEGATIVE_STATUSES = ("已退款", "已取消", "已失败", "已关闭")
+_WEAK_STATUSES = ("", "处理中", "待付款")
 
 
-def import_purchases(db: Session, store_id: int, name: str, data: bytes) -> dict:
-    rows = parse_purchases(name, data)
+def _resolve_merged_status(existing_status: str, incoming_status: str, merged_refund_fen: int) -> str:
+    prev_s = str(existing_status or "").strip()
+    inc_s = str(incoming_status or "").strip()
+    if merged_refund_fen > 0 or prev_s == "已退款" or inc_s == "已退款":
+        return "已退款"
+    if inc_s in _TERMINAL_NEGATIVE_STATUSES:
+        return inc_s
+    if prev_s in _TERMINAL_NEGATIVE_STATUSES and inc_s in _WEAK_STATUSES:
+        return prev_s
+    if not inc_s and prev_s:
+        return prev_s
+    if prev_s in ("已完成", "已付款") and inc_s in _WEAK_STATUSES:
+        return prev_s
+    if prev_s == "已完成" and inc_s == "已付款":
+        return prev_s
+    return inc_s or prev_s
+
+
+def _merge_purchase_dicts(prev: dict, incoming: dict) -> dict:
+    merged = dict(incoming)
+    merged_refund_fen = max(int(prev.get("refund_fen") or 0), int(merged.get("refund_fen") or 0))
+    merged["refund_fen"] = merged_refund_fen
+    if int(merged.get("amount_fen") or 0) <= 0 and int(prev.get("amount_fen") or 0) > 0:
+        merged["amount_fen"] = prev["amount_fen"]
+        merged["original_currency"] = prev.get("original_currency") or merged.get("original_currency") or "CNY"
+        merged["original_amount"] = prev.get("original_amount") or merged.get("original_amount") or ""
+        merged["fx_rate"] = prev.get("fx_rate") or merged.get("fx_rate") or "1"
+        if prev.get("product_title") and (
+            not merged.get("product_title")
+            or str(merged.get("product_title") or "").strip().lower().startswith("refund wallet")
+        ):
+            merged["product_title"] = prev["product_title"]
+    if (not merged.get("original_amount") or merged.get("original_amount") == "0") and prev.get("original_amount") and prev.get("original_amount") != "0":
+        merged["original_currency"] = prev.get("original_currency") or merged.get("original_currency") or "CNY"
+        merged["original_amount"] = prev["original_amount"]
+        merged["fx_rate"] = prev.get("fx_rate") or merged.get("fx_rate") or "1"
+    if not merged.get("seller") and prev.get("seller"):
+        merged["seller"] = prev["seller"]
+    elif prev.get("seller") == "FatBunny Hub (方案二)" and merged.get("seller") in ("", "FatBunny Hub", "Canboso"):
+        merged["seller"] = prev["seller"]
+    if not merged.get("product_title") and prev.get("product_title"):
+        merged["product_title"] = prev["product_title"]
+    if not merged.get("paid_at") and prev.get("paid_at"):
+        merged["paid_at"] = prev["paid_at"]
+    merged["status"] = _resolve_merged_status(prev.get("status") or "", merged.get("status") or "", merged_refund_fen)
+    if int(merged.get("quantity") or 1) == 1 and int(prev.get("quantity") or 1) > 1 and int(prev.get("amount_fen") or 0) == int(merged.get("amount_fen") or 0):
+        merged["quantity"] = prev["quantity"]
+    if not merged.get("linked_order_external_id") and prev.get("linked_order_external_id"):
+        merged["linked_order_external_id"] = prev["linked_order_external_id"]
+    if not merged.get("linked_channel") and prev.get("linked_channel"):
+        merged["linked_channel"] = prev["linked_channel"]
+    if not merged.get("linked_redeem_code") and prev.get("linked_redeem_code"):
+        merged["linked_redeem_code"] = prev["linked_redeem_code"]
+    if prev.get("source") in ("16688", "16688页面") and merged.get("source") in ("16688", "16688页面"):
+        merged["source"] = prev["source"]
+    if prev.get("source") in ("tg_fatbunny", "tg_chugax") and merged.get("source") == "tg_canboso":
+        merged["source"] = prev["source"]
+    prev_raw = sanitize_raw_payload(prev.get("raw_data")) if isinstance(prev.get("raw_data"), dict) else {}
+    inc_raw = sanitize_raw_payload(merged.get("raw_data")) if isinstance(merged.get("raw_data"), dict) else {}
+    combined_raw = dict(prev_raw if isinstance(prev_raw, dict) else {})
+    for rk, rv in (inc_raw.items() if isinstance(inc_raw, dict) else ()):
+        if rv not in (None, "") or rk not in combined_raw:
+            combined_raw[rk] = rv
+    merged["raw_data"] = combined_raw
+    return merged
+
+
+def _merge_purchase_row(existing: CardPurchase, incoming: dict) -> tuple[dict, bool]:
+    existing_raw = existing.raw_data if isinstance(existing.raw_data, dict) else {}
+    sanitized_existing_raw = sanitize_raw_payload(existing_raw)
+    prev_dict = {key: getattr(existing, key) for key in _BUSINESS_KEYS}
+    prev_dict["purchase_external_id"] = existing.purchase_external_id
+    prev_dict["raw_data"] = sanitized_existing_raw if isinstance(sanitized_existing_raw, dict) else {}
+    merged = _merge_purchase_dicts(prev_dict, incoming)
+    combined_raw = merged["raw_data"]
+    raw_link_changed = any(combined_raw.get(rkey) != existing_raw.get(rkey) for rkey in _RAW_LINK_KEYS)
+    raw_sanitized_changed = sanitized_existing_raw != existing_raw
+    changed = raw_link_changed or raw_sanitized_changed or any(getattr(existing, key) != merged[key] for key in _BUSINESS_KEYS)
+    return merged, changed
+
+
+def import_purchases(db: Session, store_id: int, name: str, data: bytes, *, source_hint: str = "") -> dict:
+    usd_rate, vnd_rate = get_store_fx_rates(db, store_id)
+    rows = parse_purchases(name, data, source_hint=source_hint, usd_cny_rate=usd_rate, vnd_cny_rate=vnd_rate)
     digest_source = json.dumps(rows, ensure_ascii=False, sort_keys=True).encode("utf-8")
     digest = hashlib.sha256(digest_source).hexdigest()
     batch = db.scalar(select(ImportBatch).where(
@@ -657,22 +1501,33 @@ def import_purchases(db: Session, store_id: int, name: str, data: bytes) -> dict
     for row in rows:
         existing = db.scalar(select(CardPurchase).where(
             CardPurchase.store_id == store_id,
+            CardPurchase.source == row["source"],
             CardPurchase.purchase_external_id == row["purchase_external_id"],
         ))
+        if existing is None and row["source"] in ("16688", "16688页面"):
+            existing = db.scalar(select(CardPurchase).where(
+                CardPurchase.store_id == store_id,
+                CardPurchase.source.in_(("16688", "16688页面")),
+                CardPurchase.purchase_external_id == row["purchase_external_id"],
+            ))
+        if existing is None and row["source"] in ("tg_fatbunny", "tg_chugax"):
+            existing = db.scalar(select(CardPurchase).where(
+                CardPurchase.store_id == store_id,
+                CardPurchase.source == "tg_canboso",
+                CardPurchase.purchase_external_id == row["purchase_external_id"],
+            ))
+        if existing is None and row["source"] == "tg_canboso":
+            canboso_matches = list(db.scalars(select(CardPurchase).where(
+                CardPurchase.store_id == store_id,
+                CardPurchase.source.in_(("tg_fatbunny", "tg_chugax")),
+                CardPurchase.purchase_external_id == row["purchase_external_id"],
+            )))
+            if len(canboso_matches) == 1:
+                existing = canboso_matches[0]
         if existing:
-            changed = any(getattr(existing, key) != row[key] for key in _BUSINESS_KEYS)
-            # Avoid wiping richer existing fields with blank metadata from partial re-imports
-            if not row["seller"] and existing.seller:
-                row = {**row, "seller": existing.seller}
-                changed = any(getattr(existing, key) != row[key] for key in _BUSINESS_KEYS)
-            if not row["status"] and existing.status:
-                row = {**row, "status": existing.status}
-                changed = any(getattr(existing, key) != row[key] for key in _BUSINESS_KEYS)
-            if row["quantity"] == 1 and existing.quantity > 1 and existing.amount_fen == row["amount_fen"]:
-                row = {**row, "quantity": existing.quantity}
-                changed = any(getattr(existing, key) != row[key] for key in _BUSINESS_KEYS)
+            merged_row, changed = _merge_purchase_row(existing, row)
             if changed:
-                for key, value in row.items():
+                for key, value in merged_row.items():
                     setattr(existing, key, value)
                 existing.batch_id = batch.id
                 updated += 1
@@ -731,11 +1586,16 @@ def _extract_durations(text: str) -> frozenset[int]:
         val = int(match.group(1))
         if val in (1, 3, 6, 12, 18, 24):
             months.add(val)
-    if "月卡" in normalized or "30天" in normalized:
+    for match in re.finditer(r"(?<![A-Za-z0-9])(\d{1,2})\s*(?:months?|mos?|tháng|thang|m)\b", normalized, re.IGNORECASE):
+        val = int(match.group(1))
+        if val in (1, 3, 6, 12, 18, 24):
+            months.add(val)
+    low = normalized.lower()
+    if "月卡" in normalized or "30天" in normalized or "monthly" in low or "30 days" in low:
         months.add(1)
     if "季卡" in normalized:
         months.add(3)
-    if "年卡" in normalized:
+    if "年卡" in normalized or re.search(r"\b1\s*(?:year|yr|năm|nam)\b", low) or "yearly" in low or "annual" in low:
         months.add(12)
     return frozenset(months)
 
@@ -753,18 +1613,27 @@ def _detect_form_from_text(text: str, brand: str) -> str | None:
             return "finished_account"
         return None
     if brand == "gemini":
-        if any(k in text for k in ("家庭组", "拼车", "车位", "席位", "家庭邀请")):
+        if any(k in text for k in ("家庭组", "拼车", "车位", "席位", "家庭邀请", "共享车位", "独享整组", "整组", "成员席位")) or any(
+            k in lower for k in ("member seat", "admin full fam", "full fam", "family")
+        ):
             return "family_slot"
+        if any(k in text for k in ("激活资格", "激活链接", "兑换链接", "充到自己号", "一键领取", "无需账密", "直接激活", "代充", "开通", "链接", "升级至", "升级到")) or any(
+            k in lower for k in ("upgrade", "invite link", "activation")
+        ):
+            if not any(k in text for k in ("成品号", "成品pro", "成品会员号", "带邮箱", "送邮", "老谷歌邮箱订阅号", "pixel成品", "年邮箱")):
+                return "activation_link"
         if any(k in text for k in ("成品号", "成品pro", "成品会员号", "带邮箱", "送邮", "老谷歌邮箱订阅号", "pixel成品", "年邮箱")):
             return "finished_account"
         if any(k in text for k in ("激活资格", "激活链接", "兑换链接", "充到自己号", "一键领取", "无需账密", "直接激活", "代充", "开通", "链接")):
             return "activation_link"
         return None
-    if any(k in text for k in ("家庭组", "拼车", "车位", "席位")):
+    if any(k in text for k in ("家庭组", "拼车", "车位", "席位", "共享车位", "独享整组")) or any(
+        k in lower for k in ("member seat", "admin full fam", "full fam", "family")
+    ):
         return "family_slot"
     if any(k in text for k in ("成品号", "成品账号", "成品")):
         return "finished_account"
-    if any(k in text for k in ("激活", "兑换链接", "订阅", "代充", "开通")):
+    if any(k in text for k in ("激活", "兑换链接", "订阅", "代充", "开通", "升级至")) or "upgrade" in lower:
         return "activation_link"
     return None
 
@@ -802,6 +1671,8 @@ def extract_features(sku: str, title: str, *, amount_fen: int | None = None, is_
 
     if "muse" in lower:
         brand = "muse"
+    elif "capcut" in lower or "剪映" in combined:
+        brand = "capcut"
     elif "claude" in lower:
         brand = "claude"
     elif spec_is_pure_gmail or ("无会员" in combined and ("gmail" in lower or "谷歌" in combined)) or (
@@ -812,7 +1683,7 @@ def extract_features(sku: str, title: str, *, amount_fen: int | None = None, is_
         and "会员" not in combined
     ):
         brand = "gmail_blank"
-    elif any(k in lower for k in ("gemini", "argon", "agron", "反重力", "google ai", "jio")):
+    elif any(k in lower for k in ("gemini", "argon", "agron", "antigravity", "antiravity", "veo3", "veo 3", "ai ultra", "google ultra", "反重力", "google ai", "jio", "20倍")):
         brand = "gemini"
     elif any(k in lower for k in ("chatgpt", "plus", "codex", "cpa", "已接")):
         brand = "chatgpt_plus"
@@ -821,7 +1692,7 @@ def extract_features(sku: str, title: str, *, amount_fen: int | None = None, is_
 
     if brand == "gmail_blank":
         tier = "none"
-    elif any(k in lower for k in ("ultra", "20x", "5x")):
+    elif any(k in lower for k in ("ultra", "20x", "x20", "5x", "20倍", "veo3", "veo 3")):
         tier = "ultra"
     elif "free" in lower:
         tier = "free"
@@ -885,7 +1756,8 @@ def classify_product(sku: str, title: str, *, amount_fen: int | None = None, is_
 
 def _is_inactive_purchase(purchase: CardPurchase) -> bool:
     status = str(purchase.status or "")
-    if any(bad in status for bad in ("退款", "关闭", "待付", "待支", "取消")):
+    low = status.lower()
+    if any(bad in low for bad in ("退款", "关闭", "待付", "待支", "取消", "失败", "撤销", "cancel", "failed", "refund", "hủy", "thất bại", "unpaid", "void", "closed")):
         return True
     return (purchase.amount_fen - purchase.refund_fen) <= 0
 
@@ -1063,7 +1935,10 @@ def _infer_16688_multi_units(purchases: list[CardPurchase]) -> dict[int, tuple[i
     for purchase in purchases:
         if _is_inactive_purchase(purchase) or purchase.quantity != 1:
             continue
-        is_16688 = "16688" in (purchase.source or "") or (purchase.purchase_external_id or "").startswith("FF")
+        src = str(purchase.source or "")
+        if src.startswith("tg_") or src == "thatim":
+            continue
+        is_16688 = "16688" in src or (purchase.purchase_external_id or "").startswith("FF")
         if not is_16688:
             continue
         net_fen = purchase.amount_fen - purchase.refund_fen
@@ -1206,6 +2081,23 @@ def _is_equivalent_batch_candidate(primary: dict, other: dict) -> bool:
     return abs(u1 - u2) <= max(30, round(u1 * 0.05))
 
 
+def _extract_cited_purchase_ids(note: str, purchase_by_ext: dict[str, CardPurchase]) -> list[str]:
+    if not note:
+        return []
+    found: list[str] = []
+    seen: set[str] = set()
+    for token in re.findall(r"[A-Za-z0-9_-]{4,}", note):
+        if token in purchase_by_ext and token not in seen:
+            seen.add(token)
+            found.append(token)
+    if not found:
+        for token in re.findall(r"\b(?:FF|LD)[A-Za-z0-9]{6,}\b", note):
+            if token not in seen:
+                seen.add(token)
+                found.append(token)
+    return found
+
+
 def suggestions(
     db: Session,
     store_id: int,
@@ -1214,8 +2106,12 @@ def suggestions(
     limit: int = 100,
     *,
     use_ai: bool = False,
+    channel: str = "",
 ) -> dict:
     stmt = select(OrderItem).where(OrderItem.store_id == store_id, OrderItem.paid_at.is_not(None))
+    channel_filter = normalize_channel_filter(channel)
+    if channel_filter:
+        stmt = stmt.where(OrderItem.channel == channel_filter)
     if start and start != "all":
         stmt = stmt.where(OrderItem.paid_at >= start)
     if end and end != "all":
@@ -1263,7 +2159,7 @@ def suggestions(
     for item_id, adj in latest_cost_adj.items():
         if item_id in matched_confirmed:
             continue
-        cited_ids = list(dict.fromkeys(re.findall(r"\b(?:FF|LD)[A-Za-z0-9]{6,}\b", adj.note or "")))
+        cited_ids = _extract_cited_purchase_ids(adj.note or "", purchase_by_ext)
         valid_cited = [purchase_by_ext[cid] for cid in cited_ids if cid in purchase_by_ext]
         if len(valid_cited) == 1:
             cited_purchase = valid_cited[0]
@@ -1291,6 +2187,17 @@ def suggestions(
     }
 
     active_purchases = [p for p in purchases if not _is_inactive_purchase(p)]
+    exact_by_item_id: dict[str, list[CardPurchase]] = defaultdict(list)
+    exact_by_order_id: dict[str, list[CardPurchase]] = defaultdict(list)
+    for p in active_purchases:
+        p_raw = p.raw_data if isinstance(p.raw_data, dict) else {}
+        agiso_oid = str(p_raw.get("agiso_oid") or "").strip()
+        linked_oid = str(p.linked_order_external_id or p_raw.get("external_order_id") or p_raw.get("agiso_tid") or "").strip()
+        if agiso_oid:
+            exact_by_item_id[agiso_oid].append(p)
+        if linked_oid:
+            exact_by_order_id[linked_oid].append(p)
+
     earliest_purchase_ts = min((p.paid_at for p in active_purchases if p.paid_at), default=None)
     window_floor_ts: str | None = None
     if earliest_purchase_ts:
@@ -1298,6 +2205,12 @@ def suggestions(
             window_floor_ts = (datetime.fromisoformat(earliest_purchase_ts) - timedelta(hours=2)).isoformat(sep=" ", timespec="seconds")
         except ValueError:
             window_floor_ts = earliest_purchase_ts
+
+    active_items_per_parent: dict[tuple[str, str], int] = defaultdict(int)
+    for order_row in orders:
+        if order_row.status == "closed" or order_row.refund_status == "success":
+            continue
+        active_items_per_parent[(getattr(order_row, "channel", None) or "qianniu", order_row.order_external_id)] += 1
 
     candidates_by_item: dict[str, list[dict]] = defaultdict(list)
     order_payload: dict[str, dict] = {}
@@ -1336,9 +2249,12 @@ def suggestions(
         pending_sales_fen += max(0, order.payment_fen or 0)
         order_features_map[order.item_external_id] = sale_feat
 
+        order_channel = getattr(order, "channel", None) or "qianniu"
         order_payload[order.item_external_id] = {
             "item_id": order.item_external_id,
             "order_id": order.order_external_id,
+            "channel": order_channel,
+            "channel_label": CHANNEL_LABELS.get(order_channel, order_channel),
             "sku": order.sku,
             "product_title": order.product_title,
             "title": order.product_title,
@@ -1350,6 +2266,182 @@ def suggestions(
             "category": sale_feat.category,
             "category_label": CATEGORY_LABELS[sale_feat.category],
         }
+
+        # Stage 0: Deterministic exact match via Plan 2 / upstream order link
+        parent_active_count = active_items_per_parent.get((order_channel, order.order_external_id), 1)
+        linked_seen: set[int] = set()
+        linked_available: list[tuple[CardPurchase, int, int, str, bool]] = []
+        for link_label, pool_list, require_no_other_oid, is_parent_fallback in (
+            ("子订单号精确关联", exact_by_item_id.get(order.item_external_id, ()), False, False),
+            ("主订单号精确关联", exact_by_order_id.get(order.order_external_id, ()), True, True),
+            ("子单号精确关联", exact_by_order_id.get(order.item_external_id, ()), True, False),
+        ):
+            for lp in pool_list:
+                if lp.id in linked_seen:
+                    continue
+                lp_raw = lp.raw_data if isinstance(lp.raw_data, dict) else {}
+                lp_oid = str(lp_raw.get("agiso_oid") or "").strip()
+                if require_no_other_oid:
+                    if lp_oid and lp_oid != order.item_external_id:
+                        continue
+                eff_q = effective_qty_by_purchase.get(lp.id, max(1, lp.quantity))
+                rem_q = eff_q - used_qty_by_purchase.get(lp.id, 0)
+                if rem_q <= 0:
+                    continue
+                linked_seen.add(lp.id)
+                ambiguous_parent = bool(is_parent_fallback and not lp_oid and parent_active_count > 1)
+                linked_available.append((lp, eff_q, rem_q, link_label, ambiguous_parent))
+
+        if linked_available:
+            exact_added = False
+            for lp, eff_q, rem_q, link_label, ambiguous_parent in linked_available:
+                if rem_q < order.quantity:
+                    continue
+                net_buy_fen = max(0, lp.amount_fen - lp.refund_fen)
+                unit_cost_fen = round(net_buy_fen / eff_q)
+                effective_cost_fen = round(net_buy_fen * order.quantity / eff_q)
+                signed_gap = _signed_gap_minutes(order.paid_at, lp.paid_at)
+                abs_gap = abs(signed_gap) if signed_gap is not None else None
+                buy_feat = purchase_features[lp.id]
+                code_hint = f"（兑换码 {lp.linked_redeem_code}）" if lp.linked_redeem_code else ""
+                exact_reasons = [f"方案二{link_label}{code_hint}", f"来源：{source_label(lp.source)}"]
+                if order.payment_fen and effective_cost_fen <= order.payment_fen:
+                    exact_reasons.append(f"成本占比 {round(effective_cost_fen * 100 / order.payment_fen)}%")
+                alloc_entry = {
+                    "purchase_id": lp.id,
+                    "purchase_external_id": lp.purchase_external_id,
+                    "allocated_quantity": order.quantity,
+                    "purchase_quantity": lp.quantity,
+                    "cost_fen": effective_cost_fen,
+                    "paid_at": lp.paid_at,
+                    "product_title": lp.product_title,
+                }
+                candidates_by_item[order.item_external_id].append({
+                    "purchase_id": lp.id,
+                    "purchase_external_id": lp.purchase_external_id,
+                    "product_title": lp.product_title,
+                    "seller": lp.seller,
+                    "source": lp.source,
+                    "source_label": source_label(lp.source),
+                    "original_currency": lp.original_currency or "CNY",
+                    "original_amount": lp.original_amount or "",
+                    "fx_rate": lp.fx_rate or "1",
+                    "linked_order_external_id": lp.linked_order_external_id or "",
+                    "linked_redeem_code": lp.linked_redeem_code or "",
+                    "is_exact_link": True,
+                    "quantity": eff_q,
+                    "purchase_quantity": lp.quantity,
+                    "inferred_quantity": None,
+                    "remaining_quantity": rem_q,
+                    "allocated_quantity": order.quantity,
+                    "amount_fen": lp.amount_fen,
+                    "refund_fen": lp.refund_fen,
+                    "unit_cost_fen": unit_cost_fen,
+                    "effective_cost_fen": effective_cost_fen,
+                    "margin_fen": (order.payment_fen - effective_cost_fen) if order.payment_fen is not None else None,
+                    "paid_at": lp.paid_at,
+                    "status": lp.status,
+                    "score": 100,
+                    "confidence_level": "high",
+                    "category": buy_feat.category,
+                    "category_label": CATEGORY_LABELS[buy_feat.category],
+                    "time_gap_minutes": abs_gap,
+                    "signed_gap_minutes": signed_gap,
+                    "same_quantity": order.quantity == eff_q,
+                    "is_bundle": False,
+                    "bundle_kind": None,
+                    "is_duration_fallback": False,
+                    "allocations": [alloc_entry],
+                    "reasons": exact_reasons,
+                    "warnings": ["同一主订单含多个子单且未提供子单号，请人工核对"] if ambiguous_parent else [],
+                })
+                exact_added = True
+
+            if not exact_added and order.quantity > 1 and sum(x[2] for x in linked_available) >= order.quantity:
+                need = order.quantity
+                allocs = []
+                total_cost_fen = 0
+                gaps: list[int] = []
+                codes: list[str] = []
+                bundle_ambiguous = False
+                for lp, eff_q, rem_q, _lbl, ambiguous_parent in linked_available:
+                    take = min(need, rem_q)
+                    if take <= 0:
+                        continue
+                    if ambiguous_parent:
+                        bundle_ambiguous = True
+                    net_b = max(0, lp.amount_fen - lp.refund_fen)
+                    part_cost = round(net_b * take / eff_q)
+                    total_cost_fen += part_cost
+                    sg = _signed_gap_minutes(order.paid_at, lp.paid_at)
+                    if sg is not None:
+                        gaps.append(sg)
+                    if lp.linked_redeem_code:
+                        codes.append(lp.linked_redeem_code)
+                    allocs.append({
+                        "purchase_id": lp.id,
+                        "purchase_external_id": lp.purchase_external_id,
+                        "allocated_quantity": take,
+                        "purchase_quantity": lp.quantity,
+                        "cost_fen": part_cost,
+                        "paid_at": lp.paid_at,
+                        "product_title": lp.product_title,
+                    })
+                    need -= take
+                    if need == 0:
+                        break
+                if need == 0 and len(allocs) >= 2:
+                    first_lp = linked_available[0][0]
+                    ext_joined = " + ".join(a["purchase_external_id"] for a in allocs)
+                    max_abs_gap = max((abs(g) for g in gaps), default=None)
+                    max_sg = max(gaps) if gaps else None
+                    code_str = ",".join(codes[:4])
+                    candidates_by_item[order.item_external_id].append({
+                        "purchase_id": allocs[0]["purchase_id"],
+                        "purchase_external_id": ext_joined,
+                        "product_title": f"方案二精确关联（{len(allocs)}笔）：{first_lp.product_title}",
+                        "seller": first_lp.seller,
+                        "source": first_lp.source,
+                        "source_label": source_label(first_lp.source),
+                        "original_currency": first_lp.original_currency or "CNY",
+                        "original_amount": "",
+                        "fx_rate": first_lp.fx_rate or "1",
+                        "linked_order_external_id": first_lp.linked_order_external_id or order.order_external_id,
+                        "linked_redeem_code": code_str,
+                        "is_exact_link": True,
+                        "quantity": order.quantity,
+                        "purchase_quantity": order.quantity,
+                        "inferred_quantity": None,
+                        "remaining_quantity": sum(x[2] for x in linked_available),
+                        "allocated_quantity": order.quantity,
+                        "amount_fen": total_cost_fen,
+                        "refund_fen": 0,
+                        "unit_cost_fen": round(total_cost_fen / order.quantity),
+                        "effective_cost_fen": total_cost_fen,
+                        "margin_fen": (order.payment_fen - total_cost_fen) if order.payment_fen is not None else None,
+                        "paid_at": first_lp.paid_at,
+                        "status": "精确关联",
+                        "score": 100,
+                        "confidence_level": "high",
+                        "category": sale_feat.category,
+                        "category_label": CATEGORY_LABELS[sale_feat.category],
+                        "time_gap_minutes": max_abs_gap,
+                        "signed_gap_minutes": max_sg,
+                        "same_quantity": True,
+                        "is_bundle": True,
+                        "bundle_kind": "exact_link",
+                        "is_duration_fallback": False,
+                        "allocations": allocs,
+                        "reasons": [
+                            f"方案二精确关联 {len(allocs)} 笔上游采购（共 {order.quantity} 件）",
+                            f"来源：{source_label(first_lp.source)}",
+                        ],
+                        "warnings": ["同一主订单含多个子单且未提供子单号，请人工核对"] if bundle_ambiguous else [],
+                    })
+                    exact_added = True
+            if exact_added:
+                continue
+
         sale_text_for_sim = f"{sale_feat.spec_text} {order.product_title}".strip()
         cleaned_sale_text = _clean_match_title(sale_text_for_sim)
 
@@ -1512,6 +2604,13 @@ def suggestions(
                 "product_title": purchase.product_title,
                 "seller": purchase.seller,
                 "source": purchase.source,
+                "source_label": source_label(purchase.source),
+                "original_currency": purchase.original_currency or "CNY",
+                "original_amount": purchase.original_amount or "",
+                "fx_rate": purchase.fx_rate or "1",
+                "linked_order_external_id": purchase.linked_order_external_id or "",
+                "linked_redeem_code": purchase.linked_redeem_code or "",
+                "is_exact_link": False,
                 "quantity": eff_qty,
                 "purchase_quantity": purchase.quantity,
                 "inferred_quantity": inferred_qty,
@@ -1605,6 +2704,13 @@ def suggestions(
                         "product_title": f"组合凑单（{len(allocs)}笔）：{lead['product_title']}",
                         "seller": combo[0][1].seller,
                         "source": combo[0][1].source,
+                        "source_label": source_label(combo[0][1].source),
+                        "original_currency": combo[0][1].original_currency or "CNY",
+                        "original_amount": "",
+                        "fx_rate": combo[0][1].fx_rate or "1",
+                        "linked_order_external_id": "",
+                        "linked_redeem_code": "",
+                        "is_exact_link": False,
                         "quantity": total_avail,
                         "purchase_quantity": order.quantity,
                         "inferred_quantity": None,
@@ -1693,6 +2799,13 @@ def suggestions(
                         "product_title": f"组合组装：{p_act.product_title} + Gmail白号",
                         "seller": f"{p_act.seller}+{p_blank.seller}",
                         "source": p_act.source,
+                        "source_label": source_label(p_act.source),
+                        "original_currency": p_act.original_currency or "CNY",
+                        "original_amount": "",
+                        "fx_rate": p_act.fx_rate or "1",
+                        "linked_order_external_id": "",
+                        "linked_redeem_code": "",
+                        "is_exact_link": False,
                         "quantity": 1,
                         "purchase_quantity": 1,
                         "inferred_quantity": None,
@@ -1727,6 +2840,8 @@ def suggestions(
                 continue
             clist.sort(key=lambda c: -c["score"])
             top = clist[0]
+            if top.get("is_exact_link"):
+                continue
             second = clist[1] if len(clist) > 1 else None
             has_close_tie = (
                 second is not None
@@ -1765,6 +2880,8 @@ def suggestions(
             }
             for iid, clist in candidates_by_item.items():
                 for c in clist:
+                    if c.get("is_exact_link"):
+                        continue
                     sig = (order_payload[iid]["sku"], order_payload[iid]["title"], c["product_title"])
                     delta = sig_deltas.get(sig, 0)
                     if delta != 0:
@@ -1814,6 +2931,7 @@ def suggestions(
             sg = top["signed_gap_minutes"]
             is_immediate = 1 if (sg is not None and 0 <= sg <= 25 and (top["same_quantity"] or top.get("is_bundle")) and top["score"] >= 82) else 0
             priority = (
+                1 if top.get("is_exact_link") else 0,
                 is_immediate,
                 1 if top.get("bundle_kind") == "split_qty" and top["same_quantity"] else 0,
                 top["score"] if top["score"] >= 85 else top["score"] - 5,
@@ -1895,7 +3013,7 @@ def suggestions(
             and _is_equivalent_batch_candidate(primary, c)
         )
         sg = primary["signed_gap_minutes"]
-        is_auto = (
+        is_auto = bool(primary.get("is_exact_link") and not primary["warnings"]) or (
             primary["confidence_level"] == "high"
             and not primary["warnings"]
             and primary.get("bundle_kind") != "composite"
@@ -1935,9 +3053,12 @@ def suggestions(
         suggestions_out.append({**order_payload[item_id], "candidates": [primary, *backups]})
 
     confidence_counts = {"high": 0, "medium": 0, "review": 0}
+    exact_link_count = 0
     for iid in ordered_items:
         lvl = primary_by_order[iid]["confidence_level"]
         confidence_counts[lvl] = confidence_counts.get(lvl, 0) + 1
+        if primary_by_order[iid].get("is_exact_link"):
+            exact_link_count += 1
 
     matched_total = len(ordered_items)
     window_missing = 0
@@ -2064,6 +3185,10 @@ def suggestions(
     ]
 
     tips: list[str] = []
+    if exact_link_count > 0:
+        tips.append(
+            f"有 {exact_link_count} 笔通过方案二兑换码/上游单号实现 100% 精确关联，可直接「一键确认精确关联」。"
+        )
     if auto_confirmable_count > 0:
         tips.append(
             f"有 {auto_confirmable_count} 笔（占建议 {auto_pct}%，对应销售额 {auto_sales_pct}%）时间与规格高度吻合，点「一键确认高匹配」后全店成本核清率将从 {reconciled_progress_pct}% 升至 {projected_coverage_pct}%。"
@@ -2096,6 +3221,7 @@ def suggestions(
         "window_missing_count": window_missing,
         "effective_window_missing_count": effective_window_missing,
         "matched_count": matched_total,
+        "exact_link_count": exact_link_count,
         "window_matched_count": window_matched,
         "overall_coverage_pct": overall_pct,
         "window_coverage_pct": window_pct,
@@ -2140,6 +3266,7 @@ def suggestions(
     }
 
     return {
+        "channel": channel_filter or "all",
         "purchase_count": len(purchases),
         "missing_cost_count": missing_cost_count,
         "skipped_refunded_count": skipped_refunded_count,
@@ -2405,6 +3532,55 @@ def batch_confirm_matches(db: Session, store_id: int, items: list, reviewer_id: 
     }
 
 
+def auto_confirm_exact_matches(
+    db: Session,
+    store_id: int,
+    reviewer_id: int,
+    *,
+    start: str = "",
+    end: str = "",
+    channel: str = "",
+) -> dict:
+    rep = suggestions(db, store_id, start=start, end=end, limit=5000, use_ai=False, channel=channel)
+    bodies: list[SimpleNamespace] = []
+    for entry in rep.get("suggestions") or []:
+        cands = entry.get("candidates") or []
+        if not cands:
+            continue
+        primary = cands[0]
+        if not primary.get("is_exact_link") or not primary.get("auto_confirmable"):
+            continue
+        req_id = str(uuid5(NAMESPACE_URL, f"exact:{store_id}:{entry['item_id']}:{primary['purchase_external_id']}"))
+        allocs = primary.get("allocations") or []
+        code_hint = primary.get("linked_redeem_code") or primary["purchase_external_id"]
+        bodies.append(
+            SimpleNamespace(
+                request_id=req_id,
+                item_id=entry["item_id"],
+                purchase_id=primary["purchase_id"],
+                cost="",
+                score=primary["score"],
+                allocated_quantity=primary["allocated_quantity"],
+                purchase_quantity=primary.get("purchase_quantity"),
+                allocations=allocs if len(allocs) > 1 else None,
+                note=f"方案二精确关联自动确认({code_hint})",
+            )
+        )
+    if not bodies:
+        return {
+            "matched_exact_candidates": 0,
+            "confirmed_count": 0,
+            "duplicate_count": 0,
+            "skipped_count": 0,
+            "total_cost_fen": 0,
+            "errors": [],
+            "items": [],
+        }
+    res = batch_confirm_matches(db, store_id, bodies, reviewer_id=reviewer_id)
+    res["matched_exact_candidates"] = len(bodies)
+    return res
+
+
 def ledger(
     db: Session,
     store_id: int,
@@ -2412,19 +3588,26 @@ def ledger(
     category: str = "",
     status: str = "",
     source: str = "",
+    channel: str = "",
     start: str = "",
     end: str = "",
     q: str = "",
     limit: int = 200,
 ) -> dict:
     purchases = list(db.scalars(select(CardPurchase).where(CardPurchase.store_id == store_id).order_by(CardPurchase.paid_at.desc(), CardPurchase.id.desc())))
-    orders = list(db.scalars(select(OrderItem).where(OrderItem.store_id == store_id).order_by(OrderItem.paid_at.desc(), OrderItem.id.desc())))
+    all_orders = list(db.scalars(select(OrderItem).where(OrderItem.store_id == store_id).order_by(OrderItem.paid_at.desc(), OrderItem.id.desc())))
+    channel_filter = normalize_channel_filter(channel)
+    channel_counts: dict[str, int] = {"qianniu": 0, "16688": 0}
+    for o in all_orders:
+        ch = getattr(o, "channel", None) or "qianniu"
+        channel_counts[ch] = channel_counts.get(ch, 0) + 1
+    orders = [o for o in all_orders if not channel_filter or (getattr(o, "channel", None) or "qianniu") == channel_filter]
     adjustments = list(db.scalars(select(Adjustment).where(Adjustment.store_id == store_id).order_by(Adjustment.id.asc())))
     matches = sorted(_active_confirmed_matches(db, store_id, adjustments), key=lambda m: m.id, reverse=True)
     cost_versions = {c.id: c for c in db.scalars(select(CostVersion).where(CostVersion.store_id == store_id))}
     inferred_multi = _infer_16688_multi_units(purchases)
 
-    order_by_item = {o.item_external_id: o for o in orders}
+    order_by_item = {o.item_external_id: o for o in all_orders}
     purchase_by_id = {p.id: p for p in purchases}
 
     latest_cost_adj: dict[str, Adjustment] = {}
@@ -2448,7 +3631,7 @@ def ledger(
     for item_id, adj in latest_cost_adj.items():
         if item_id in matches_by_item:
             continue
-        cited_ids = list(dict.fromkeys(re.findall(r"\b(?:FF|LD)[A-Za-z0-9]{6,}\b", adj.note or "")))
+        cited_ids = _extract_cited_purchase_ids(adj.note or "", purchase_by_ext)
         if len(cited_ids) == 1 and cited_ids[0] in purchase_by_ext:
             adj_links_by_purchase[purchase_by_ext[cited_ids[0]].id].append((adj, order_by_item.get(item_id)))
 
@@ -2471,10 +3654,35 @@ def ledger(
 
     category_counts: dict[str, int] = {k: 0 for k in CATEGORY_LABELS}
     category_group_counts: dict[str, int] = {k: 0 for k in CATEGORY_GROUP_LABELS}
+    source_counts: dict[str, int] = {
+        "16688": 0,
+        "wzyp": 0,
+        "tg_fatbunny": 0,
+        "tg_chugax": 0,
+        "tg_canboso": 0,
+        "tg": 0,
+        "thatim": 0,
+    }
     purchases_out = []
     p_pending = p_matched = p_partial = p_excluded = 0
 
     for p in purchases:
+        src_raw = str(p.source or "")
+        if "链动" in src_raw or p.purchase_external_id.startswith("LD"):
+            source_counts["wzyp"] += 1
+        elif src_raw == "tg_fatbunny":
+            source_counts["tg_fatbunny"] += 1
+            source_counts["tg"] += 1
+        elif src_raw == "tg_chugax":
+            source_counts["tg_chugax"] += 1
+            source_counts["tg"] += 1
+        elif src_raw.startswith("tg_"):
+            source_counts["tg_canboso"] += 1
+            source_counts["tg"] += 1
+        elif src_raw == "thatim":
+            source_counts["thatim"] += 1
+        elif "16688" in src_raw or p.purchase_external_id.startswith("FF"):
+            source_counts["16688"] += 1
         net_fen = max(0, p.amount_fen - p.refund_fen)
         cat = classify_product("", p.product_title, amount_fen=net_fen, is_sale=False)
         category_counts[cat] = category_counts.get(cat, 0) + 1
@@ -2543,7 +3751,13 @@ def ledger(
         if source_filter:
             if source_filter == "16688" and "16688" not in p.source and not p.purchase_external_id.startswith("FF"):
                 continue
-            if source_filter == "wzyp" and "链动" not in p.source and not p.purchase_external_id.startswith("LD"):
+            elif source_filter == "wzyp" and "链动" not in p.source and not p.purchase_external_id.startswith("LD"):
+                continue
+            elif source_filter == "tg" and not str(p.source or "").startswith("tg_"):
+                continue
+            elif source_filter in ("tg_fatbunny", "tg_chugax", "tg_canboso", "thatim") and p.source != source_filter:
+                continue
+            elif source_filter not in ("16688", "wzyp", "tg", "tg_fatbunny", "tg_chugax", "tg_canboso", "thatim") and p.source != source_filter:
                 continue
         if not _in_date(p.paid_at):
             continue
@@ -2553,6 +3767,9 @@ def ledger(
                 p.product_title,
                 p.seller,
                 p.source,
+                source_label(p.source),
+                p.linked_order_external_id or "",
+                p.linked_redeem_code or "",
                 *matched_order_ids,
                 *(d["item_id"] for d in matched_details),
             ]).lower()
@@ -2575,6 +3792,13 @@ def ledger(
             "paid_at": p.paid_at,
             "status": p.status,
             "source": p.source,
+            "source_label": source_label(p.source),
+            "original_currency": p.original_currency or "CNY",
+            "original_amount": p.original_amount or "",
+            "fx_rate": p.fx_rate or "1",
+            "linked_order_external_id": p.linked_order_external_id or "",
+            "linked_channel": p.linked_channel or "",
+            "linked_redeem_code": p.linked_redeem_code or "",
             "category": cat,
             "category_label": CATEGORY_LABELS[cat],
             "category_group": category_group(cat),
@@ -2635,7 +3859,7 @@ def ledger(
             matched_at = matched_details[0]["matched_at"]
         elif adj is not None:
             matched_at = _format_local_ts(adj.created_at)
-            extracted_ids = re.findall(r"\b(?:FF|LD)[A-Za-z0-9]{6,}\b", adj.note or "")
+            extracted_ids = _extract_cited_purchase_ids(adj.note or "", purchase_by_ext)
             matched_purchase_ids = extracted_ids or (["手工设成本"] if adj.note else [])
         elif cv is not None and has_version_cost:
             matched_at = _format_local_ts(cv.created_at)
@@ -2661,9 +3885,12 @@ def ledger(
             ]).lower()
             if query_text not in haystack:
                 continue
+        order_channel = getattr(o, "channel", None) or "qianniu"
         orders_out.append({
             "item_id": o.item_external_id,
             "order_id": o.order_external_id,
+            "channel": order_channel,
+            "channel_label": CHANNEL_LABELS.get(order_channel, order_channel),
             "sku": o.sku,
             "product_title": o.product_title,
             "quantity": o.quantity,
@@ -2700,6 +3927,8 @@ def ledger(
             "orders_category_counts": orders_category_counts,
             "category_group_counts": category_group_counts,
             "orders_category_group_counts": orders_category_group_counts,
+            "source_counts": source_counts,
+            "channel_counts": channel_counts,
         },
         "purchases": purchases_out[:limit],
         "orders": orders_out[:limit],
