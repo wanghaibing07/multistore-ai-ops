@@ -18,16 +18,16 @@
 
 | `sku_key` | 展示名称 (`sku_title`) | `product_type` | Canboso `productId` | 参考进价 | 默认熔断上限 `max_cost_usd` |
 |---|---|---|---|---:|---:|
-| `ultra_shared_slot` | Google AI Ultra 20x 共享车位（1个月） | `slot` | `6ac26aaeec73a42d6430a837` | `$13.47` | `$16.00` |
-| `ultra_exclusive_admin` | Google AI Ultra 20x 独享整组·管理员版（1个月） | `account` | `6ae03419c0080f9e15f695a8` | `$67.50` | `$72.00` |
+| `ultra_shared_slot` | Google Ultra x20 共享车位 | `slot` | `6ac26aaeec73a42d6430a837` | `$13.47` | `$16.00` |
+| `ultra_exclusive_admin` | Google Ultra x20 独享整组（管理员版） | `account` | `6ae03419c0080f9e15f695a8` | `$67.50` | `$72.00` |
 
 ### 2.2 渠道 (`channel`)
-- `taobao`：淘宝订单（当前手动单笔发码；也支持批量制码导出供阿奇索/91卡券导入）
+- `taobao`：淘宝订单（支持手动单笔发码、批量制码导出，以及阿奇索 Webhook 自动发码、退款作废/恢复与低水位补库）
 - `16688`：16688 自营卡密单（核销前后端必须实时调用 16688 Open API 校验已付款/未退款/无退款中投诉）
 
 ### 2.3 兑换码/订单生命周期状态 (`status`)
 - `unused`：未使用，等待买家提交核销
-- `validating`：正在校验订单与上游状态（瞬态）
+- `validating`：枚举保留态（`backend/db.py` 已定义，当前运行期由 `claim_for_purchase()` 通过 CAS 从 `unused` 直接原子跃迁至 `purchasing`）
 - `purchasing`：正在调用 Canboso 下单（`Idempotency-Key` 已落库，防双花）
 - `waiting_fulfillment`：共享车位上游已受理（`paid` / `waiting_seller`），排队拉人中（2-6h，最晚 24h）
 - `delivered_pending_warranty`：独享整组已秒发商店套餐邮箱，待买家建家庭组邀请并回填保修信息

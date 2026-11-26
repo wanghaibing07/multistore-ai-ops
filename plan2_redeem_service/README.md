@@ -1,6 +1,8 @@
 # Plan 2 自助提货与履约服务
 
-后端使用 Python 3.12、FastAPI、Uvicorn、SQLite WAL、httpx、Telethon 和 SMTP，接口契约见同目录的 `API_CONTRACT.md`。
+> 返回 [仓库首页](../README.md) · 架构说明见 [架构与数据流](../docs/architecture.md) · 接口定义见 [API_CONTRACT.md](API_CONTRACT.md)
+
+后端使用 Python 3.12、FastAPI、Uvicorn、SQLite WAL、httpx、Telethon（可选 Playwright Web K）和 SMTP；前端使用 React 19、TypeScript 5.8、Vite 6.3 与 React Router 7.6，构建产物 `frontend/dist/` 由 FastAPI 同源托管。
 
 ## 本机开发
 
@@ -46,6 +48,15 @@ uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 1
 
 `PLAN2_CONFIG_FILE` 可选，指向 YAML 配置文件。环境变量会覆盖 YAML 中的同名字段。`PLAN2_DB_PATH` 指向 SQLite 文件，`PLAN2_STORAGE_DIR` 保存不公开的保修截图，`PLAN2_PUBLIC_BASE_URL` 用于生成提货链接。`PLAN2_ADMIN_TOKEN` 保护所有 `/api/v1/admin/*` 接口。`PLAN2_CANBOSO_API_SECRET` 填 Canboso buyer key，`PLAN2_CANBOSO_BASE_URL` 默认使用 `https://canboso.com`。16688 的 `PLAN2_CHANNEL16688_API_KEY` 对应 Open API 的 `app_id`。SMTP 配置控制商家告警和履约通知。`PLAN2_POLL_INTERVAL_SECONDS` 控制后台上游轮询间隔，默认 1200 秒，代码下限为 10 秒。
 
+### 阿奇索（淘宝）与 16688 渠道联动配置（可选）
+
+支持淘宝阿奇索 Webhook 自动发码、退款自动作废、退款关闭自动恢复，以及阿奇索卡券库和 16688 卡密库存的低水位定时补码。完整默认值见同目录 [`.env.example`](.env.example)：
+
+- **阿奇索鉴权与防重放**：`PLAN2_AGISO_APP_ID`、`PLAN2_AGISO_APP_SECRET`、`PLAN2_AGISO_ACCESS_TOKEN`、`PLAN2_AGISO_API_BASE_URL`、`PLAN2_AGISO_TIMEOUT_SECONDS`、`PLAN2_AGISO_TIMESTAMP_TOLERANCE_SECONDS`（默认 600 秒重放窗口）。
+- **自动发码与退款联动**：`PLAN2_AGISO_AUTO_CREATE_RESULT`、`PLAN2_AGISO_AUTO_DUMMY_SEND`、`PLAN2_AGISO_AUTO_SEND_TB_CARD`、`PLAN2_AGISO_AUTO_SEND_WW_MSG`、`PLAN2_AGISO_AUTO_REVOKE_ON_REFUND`、`PLAN2_AGISO_AUTO_RESTORE_ON_REFUND_CLOSE`。
+- **订单补漏轮询与 SKU 规则**：`PLAN2_AGISO_POLL_ENABLED`、`PLAN2_AGISO_POLL_INTERVAL_SECONDS`、`PLAN2_AGISO_SKU_RULES_JSON`（支持后台数据库规则优先、环境变量规则兜底）。
+- **双渠道低水位自动补码**：阿奇索侧由 `PLAN2_AGISO_RESTOCK_ENABLED` / `PLAN2_AGISO_RESTOCK_INTERVAL_SECONDS` / `PLAN2_AGISO_RESTOCK_RULES_JSON` 控制；16688 侧由 `PLAN2_CHANNEL16688_RESTOCK_ENABLED` / `PLAN2_CHANNEL16688_RESTOCK_INTERVAL_SECONDS` / `PLAN2_CHANNEL16688_RESTOCK_RULES_JSON` 控制。
+
 ### Telegram 保修自动报备配置（可选）
 
 独享整组（`ultra_exclusive_admin`）支持免截图提交保修邮箱后，通过 Telegram 自动私聊向 Canboso 管理员报备（支持 `telethon` MTProto 与 `web` Playwright Telegram Web K 持久化会话两种通道）；失败时自动邮件告警并可在管理后台重试。相关环境变量：
@@ -67,11 +78,20 @@ python -m backend.tg_login
 python -m backend.tg_login --verify-only
 ```
 
-## 验证
+## 前端开发与构建同步门禁
+
+修改 `plan2_redeem_service/frontend/src/`、`public/` 或 `index.html` 后，提交前必须在仓库根目录运行类型检查和生产构建，并将生成的 `plan2_redeem_service/frontend/dist/` 一并提交（`.githooks/pre-commit` 与 CI 会强校验前后端产物一致）：
 
 ```powershell
-python -m pytest
+npm --prefix plan2_redeem_service/frontend run typecheck
+npm --prefix plan2_redeem_service/frontend run build
 ```
 
-测试使用 Mock 网关和 `dry_run`，不会发起真实扣款、真实 16688 收费或真实邮件发送。
+## 后端测试验证
+
+```powershell
+.\plan2_redeem_service\.venv\Scripts\python.exe -X utf8 -m pytest plan2_redeem_service\tests -q
+```
+
+77 项后端测试全部使用 Mock 网关与 `dry_run`，不会发起真实扣款、真实 16688 收费、真实 Telegram 发送或真实邮件发送。
 

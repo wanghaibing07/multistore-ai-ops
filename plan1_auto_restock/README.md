@@ -1,5 +1,7 @@
 # 方案 1：16688 自营卡密秒发 + Canboso 低水位自动补库
 
+> 返回 [仓库首页](../README.md) · 架构说明见 [架构与数据流](../docs/architecture.md) · 运维规范见 [维护手册](../docs/maintenance.md)
+
 本模块专门承接 **Canboso `productType=account` 成品号** 自动补库到 16688 自营卡密商品（`source=local`、`delivery_method=1`）。家庭组车位（`slot`）和代充（`upgrade_account`）会被代码硬拦截，留给方案 2（自助提货/兑换码链路）。
 
 ## 快速开始
@@ -25,14 +27,35 @@
    python -X utf8 -m plan1_auto_restock -c config.local.yaml sync-once --live --i-confirm-real-spend
    python -X utf8 -m plan1_auto_restock -c config.local.yaml daemon --live --i-confirm-real-spend
    ```
-6. 导出兼容 `multistore-ai-ops` 的对账 CSV（零卡密明文）：
+6. 查看本地主账本与保险库状态（不输出任何明文卡密），并在网络中断后恢复待补传卡密：
+   ```powershell
+   python -X utf8 -m plan1_auto_restock -c config.local.yaml status
+   python -X utf8 -m plan1_auto_restock -c config.local.yaml recover
+   ```
+7. 导出兼容根目录 `multistore-ai-ops` 的采购对账 CSV（仅读取 `ledger.db`，零卡密明文，可直接导入根目录账本做采购匹配）：
    ```powershell
    python -X utf8 -m plan1_auto_restock -c config.local.yaml export-csv
    ```
-7. 验证告警通道（发送测试邮件到 QQ 邮箱，零扣费）：
+8. 验证告警通道（发送测试邮件或 Webhook 告警，零扣费）：
    ```powershell
    python -X utf8 -m plan1_auto_restock -c config.local.yaml test-alert
    ```
+
+## CLI 子命令一览
+
+安装可编辑包后可直接使用 `plan1-restock` 或 `python -X utf8 -m plan1_auto_restock` 调用以下 9 个子命令：
+
+| 子命令 | 作用 |
+| --- | --- |
+| `catalog` | 只读查询 Canboso 上游成品号目录（支持 `--in-stock`） |
+| `bootstrap-goods` | 在 16688 预览或创建自营卡密商品（默认预览，加 `--execute` 创建） |
+| `check` | 只读巡检 16688 与 Canboso 余额、现货及 SKU 映射兼容性 |
+| `sync-once` | 执行单轮补库、调价、订单与投诉同步（默认 `dry-run`） |
+| `daemon` | 常驻轮询运行（默认 `dry-run`，实盘需双锁参数） |
+| `recover` | 仅执行异常恢复（保险库待补传卡密 + 网络超时幂等重放） |
+| `status` | 汇总查看 `ledger.db` 与 `secrets_vault.db` 状态（零明文输出） |
+| `export-csv` | 导出兼容根目录账本的零明文采购对账 CSV |
+| `test-alert` | 发送一条测试告警验证 SMTP / Webhook 通道（零扣费） |
 
 ## 内置安全护栏
 - **默认演练**：`dry_run: true`，实盘必须显式传 `--live --i-confirm-real-spend`。
@@ -53,3 +76,11 @@
 - `/openApi/order/list` 按 `card_no` 反查为**全字符串精确匹配**（仅传邮箱子串查不到，传完整卡密字符串才能命中）。
 - `/openApi/stockSecret/list` 出参 `status` 中 `0=未售`、`2=已售`，售出后会自动回填 `trade_no`。
 - 已下架商品（`status=0`）调用 `/openApi/goods/detail` 会返回“商品不存在”；停售商品应同步把配置中的 SKU 置为 `enabled: false`。
+
+## 本地测试验证
+
+在仓库根目录执行全部 17 项单元测试（纯 Mock 与隔离临时目录，不触发真实扣款）：
+
+```powershell
+uv run --no-project --with-editable ./plan1_auto_restock --with pytest pytest plan1_auto_restock/tests -q
+```

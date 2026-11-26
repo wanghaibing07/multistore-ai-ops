@@ -1,55 +1,66 @@
 # 维护手册
 
-这份文档面向继续开发、排障和发布 MultiStore AI Ops 的维护者。先看本页，再进入具体模块，能减少直接改动数据或核算规则带来的风险。
+> 返回 [仓库首页](../README.md) · 系统架构见 [架构与数据流](architecture.md)
+
+本手册面向日常开发、本地验证、云端排障与发布操作。按模块查对应章节，避免跨环境误操作或破坏防泄密门禁。
 
 ## 维护原则
 
-1. 先保存来源事实，再生成计算结果。
-2. 任何影响利润的人工结论都要带有来源、时间和关联订单。
-3. AI 只能识别意图、选择白名单查询工具和整理已验证结果。
-4. 修改导入、退款、成本或删除逻辑后，必须运行完整测试。
-5. 真实订单、采购文件、账号、Cookie、模型密钥和本地数据库不进入 Git。
+1. **先事实后计算**：账本先落来源事实，再做计算与人工核对；任何影响利润的人工结论必须保留时间、依据和关联订单。
+2. **默认安全演练**：方案 1 与方案 2 本地默认均为 `dry_run`；严禁在本地另起连接真实上游的 `live` 实例，避免与云端后台轮询和 Webhook 冲突。
+3. **严格门禁**：不得使用 `--no-verify` 绕过 `.githooks`；不得向共享分支执行强推或重写历史操作。
+4. **凭证不入库**：真实 `.env`、`*.local.yaml`、SQLite 数据库（`*.db`/`*.sqlite*`）、私钥/证书、`data/`、`private/`、`exports/`、`evidence/`、`outputs/` 严禁进入 Git。
 
-## 目录地图
+## 仓库目录地图
 
-| 位置 | 责任 |
+| 位置 | 职责 |
 | --- | --- |
-| `app/main.py` | FastAPI 路由、会话、导入入口、订单删除入口 |
-| `app/models.py` | SQLAlchemy 模型和关系 |
-| `app/importer.py` | CSV、XLSX、复制文本解析、字段归一化和批次预览 |
-| `app/accounting.py` | 订单、退款、成本、利润和待核对状态 |
-| `app/card_reconciliation.py` | 卡网采购去重、类目、候选匹配和确认 |
-| `app/payment_basis_review.py` | 退款前实付与退款后净额的口径核对 |
-| `app/refund_review.py` | 历史退款补录和完整性核对 |
-| `app/agent.py` | AI 意图识别、工具白名单和结果约束 |
-| `app/qianniu_chats.py` | 千牛聊天导入、脱敏和会话分析 |
-| `app/static/index.html` | 页面结构和可见文案 |
-| `app/static/style.css` | 视觉系统、响应式布局和交互状态 |
-| `app/static/app.js` | 页面状态、API 调用和交互行为 |
-| `migrations/versions/` | Alembic 数据库迁移 |
-| `tests/` | 业务规则、接口和回归测试 |
-| `scripts/start-desktop.ps1` | Windows 桌面启动入口 |
+| `app/main.py`、`app/cli.py` | 根目录 FastAPI 路由、导入/删单入口与 CLI 初始化命令 |
+| `app/models.py`、`app/db.py`、`app/auth.py`、`app/backup.py` | 18 张 SQLAlchemy 表、SQLite 引擎、Argon2/会话/CSRF 鉴权与数据库热备份 |
+| `app/importer.py`、`app/qianniu_orders.py`、`app/cashflow.py` | 千牛订单/退款/货款解析、去重、批次预览与 `BEGIN IMMEDIATE` 串行提交 |
+| `app/accounting.py`、`app/card_reconciliation.py`、`app/payment_basis_review.py`、`app/refund_review.py` | 利润核算、采购匹配确认、金额口径核对与历史退款完整性校验 |
+| `app/agent.py`、`app/card_query_ai.py`、`app/qianniu_chats.py` | 受限 AI 问账、卡网查询辅助与千牛聊天知识库 |
+| `app/static/`（`index.html`、`style.css`、`app.js`） | 根目录原生前端工作台（5 个视图） |
+| `migrations/versions/`、`tests/` | 根目录 11 份 Alembic 迁移与 84 项业务/API/隔离测试 |
+| `plan1_auto_restock/` | 方案 1 自动补库守护进程（`cli.py`、`engine.py`、`storage.py`、`pricing.py`、`exporter.py` 等 13 个模块 + 17 项测试） |
+| `plan2_redeem_service/backend/` | 方案 2 后端（`app.py`、`service.py`、`db.py`、`agiso.py`、`gateways.py`、`telegram_forwarder.py` 等 + 77 项测试） |
+| `plan2_redeem_service/frontend/` | 方案 2 前端 React 19 + TypeScript 5.8 + Vite 6.3（构建产物 `frontend/dist/` 随源码同步提交） |
+| `scripts/start-desktop.ps1` | 根目录账本 Windows 本机桌面启动脚本 |
+| `scripts/evaluate_agent.py` | 根目录受限 AI 30 场景离线评测脚本 |
+| `scripts/plan2-cloud.ps1` | 方案 2 云端主机（`plan2-prod`）状态、健康检查、日志与发布脚本 |
+| `.githooks/`、`.github/workflows/ci.yml` | 本地 pre-commit/commit-msg 钩子与 5 个并行 CI Job |
 
-## 本机启动
+## Git 钩子与提交规范
 
-环境要求是 PowerShell 7、Python 3.12 和 uv。
+首次克隆或切换工作区后先启用仓库内建钩子：
+
+```powershell
+git config core.hooksPath .githooks
+```
+
+- **`.githooks/pre-commit`** 会自动拦截：暂存区空白错误（`git diff --cached --check`）、未解决合并冲突标记、敏感路径（`.env`、`*.local.yaml`、`*.db`/`*.sqlite*`、`*.pem`/`*.key`、`data/`、`private/`、`exports/` 等）、疑似密钥正则匹配，以及修改了 `plan2_redeem_service/frontend/` 源码却未同步提交 `frontend/dist/` 的情况。
+- **`.githooks/commit-msg`** 强制校验 Conventional Commits 格式：`<type>(<scope>): <summary>`，允许的 `type` 为 `feat`、`fix`、`refactor`、`chore`、`docs`、`test`、`ci`，`scope` 按受影响模块填 `root`、`plan1`、`plan2`、`git`、`ci`。
+
+合规提交示例：
+
+```text
+fix(root): preserve refund review evidence on partial update
+feat(plan2): add refund close auto-restore guard
+docs(root): align maintenance guide with git hooks
+```
+
+## 模块 1：根目录账本维护
+
+### 本机启动与停止
 
 ```powershell
 uv sync --locked
 uv run alembic upgrade head
-uv run python -m app.cli init --username owner --store '我的店铺' --generate-password
+uv run python -m app.cli init --username owner --store '示例店铺' --generate-password
 uv run uvicorn app.main:app --host 127.0.0.1 --port 8018 --no-access-log
 ```
 
-打开 `http://127.0.0.1:8018`。初始化密码写入被 Git 忽略的 `private/initial-login.txt`。
-
-Windows 桌面启动使用：
-
-```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start-desktop.ps1
-```
-
-停止本机服务：
+访问 `http://127.0.0.1:8018`，初始密码保存在已忽略的 `private/initial-login.txt`。Windows 桌面快捷启动可使用 `pwsh -File .\scripts\start-desktop.ps1`。停止本机监听进程前先核对端口归属：
 
 ```powershell
 Get-NetTCPConnection -LocalPort 8018 -State Listen |
@@ -57,159 +68,109 @@ Get-NetTCPConnection -LocalPort 8018 -State Listen |
   ForEach-Object { Stop-Process -Id $_ -Force }
 ```
 
-如果端口已被占用，先确认占用进程确实属于本项目，再停止进程。不要用不加端口限定的批量终止命令。
-
-## 数据库与迁移
-
-查看当前迁移状态：
+### 数据库迁移与备份
 
 ```powershell
 uv run alembic current
 uv run alembic history
+uv run alembic upgrade head
 uv run alembic check
 ```
 
-新增字段或表时遵循以下顺序：
+变更表结构时遵循：`app/models.py` 改动 → 新增 Alembic migration（处理旧数据默认值、索引与可重复执行）→ 补充测试 → 运行 `alembic upgrade head` 与 `alembic check`。禁止直接手工改写生产 SQLite 结构；做数据修复前先使用 `app/backup.py` 备份数据库。
 
-1. 修改 `app/models.py`。
-2. 创建一份新的 Alembic migration。
-3. 在迁移中处理旧数据的默认值、索引和可重复执行性。
-4. 为新增规则补测试。
-5. 执行 `uv run alembic upgrade head` 和完整测试。
+### 核对与核算规则
 
-不要直接删除线上字段，也不要通过手工修改 SQLite 文件替代迁移。需要修复数据时，优先写可审计、可重复执行的脚本，并先备份数据库。
+- **千牛订单导入**：对应“已卖出宝贝”导出文件，经预览、去重、差异提示和 `changes_token` 确认后入库；不要把未知数量、未知退款或未知成本硬写成零。
+- **卡网采购匹配**：按真实外部订单号去重，分 `成品号`、`激活`、`家庭组` 三类；候选评分仅辅助排序，必须经人工确认才计入利润。
+- **利润与退款口径**：未发货且全额退款订单成本归零且不入有效利润；已发货退款按净收入扣成本核算；未确认成本不默认按零入利润；订单核心字段变更会使旧人工核对失效。修改相关规则时重点回归 `tests/test_accounting.py`、`tests/test_refund_completeness.py`、`tests/test_cashflow_refund_review.py`、`tests/test_payment_basis_review.py`、`tests/test_card_reconciliation.py` 和 `tests/test_cost_invalidation.py`。
 
-## 订单与采购核对规则
+### 受限 AI 与原生前端检查
 
-### 订单导入
+- 涉及 `app/agent.py` 时，需同时确认：意图固定、3 工具零参白名单与租户/日期约束生效、最终数字由 `verified_answer()` 渲染且模型不可用时账本照常工作。验证命令：
+  ```powershell
+  uv run pytest tests/test_api_agent.py -q
+  uv run python -X utf8 scripts/evaluate_agent.py --output .\private\agent-evaluation.json
+  ```
+- 根目录前端（`app/static/index.html`、`style.css`、`app.js`）改动后先执行 `node --check app/static/app.js` 与 `git diff --check`，并在浏览器检查全部 **5 个视图**：工作台（`overview`）、导入订单（`import`）、已入库订单与行内成本核对（`orders`）、千牛聊天（`chats`）、问账（`assistant`）。静态资源带版本参数时同步递增版本号。
 
-千牛订单入口对应“已卖出宝贝”的导出文件。导入流程是预览、识别、去重、确认和入库。订单号、子订单号、商品编号、数量、退款状态、付款时间和履约状态是核算链路中的关键字段。
+## 模块 2：方案 1 自动补库运维
 
-导入异常先看导入结果里的缺失字段，再检查原始表头映射。不要为了让导入通过而把未知数量、未知退款或未知成本改成零。
+日常操作详见 [`plan1_auto_restock/README.md`](../plan1_auto_restock/README.md)。关键维护约束：
 
-### 卡网采购
+- 每次调整 `config.local.yaml` 后先跑 `check` 和 `sync-once --dry-run`，确认补库计划与调价阈值后再启用 `--live --i-confirm-real-spend`。
+- 若遇网络超时或 16688 上传中断，优先执行 `recover` 从 `secrets_vault.db` 补传或按原幂等键查单，避免重复下单。
+- 16688 商品在后台手动下架（`status=0`）时，必须同步将 `config.local.yaml` 对应 SKU 改为 `enabled: false`。
+- 需要将方案 1 采购记录导入根目录账本时，执行 `export-csv` 导出零明文对账文件。
 
-卡网采购按真实外部订单号去重。当前类目是：
+## 模块 3：方案 2 本地开发与云端运维
 
-- 成品号
-- 激活
-- 家庭组
+### 本地与云端分工
 
-采购匹配只提供候选排序。标题、规格、数量、金额和时间用于计算候选分数，人工确认后才会进入利润核算。重复导入应保持幂等，删除卡网订单时要同步更新采购关联和相关核对状态。
-
-### 利润与退款
-
-- 未发货且全额退款的订单，实际成本按零处理，利润不进入有效利润统计。
-- 已发货但发生退款的订单，利润按收入扣除退款和实际成本后的结果计算。
-- 未确认成本的订单不能通过默认零成本进入有效利润。
-- 退款历史与退款快照分开保存。来源不完整时进入待核对状态。
-- 付款前实付和退款后净额是两种不同金额口径。来源发生变化时，必须重新核对口径。
-
-修改这些规则时，优先查看：
-
-- `tests/test_accounting.py`
-- `tests/test_refund_completeness.py`
-- `tests/test_cashflow_refund_review.py`
-- `tests/test_payment_basis_review.py`
-- `tests/test_card_reconciliation.py`
-- `tests/test_cost_invalidation.py`
-
-## AI 维护边界
-
-AI 相关变更必须同时检查三层：
-
-1. 意图解析是否仍限制在固定业务意图。
-2. 工具调用是否仍经过白名单、店铺范围和时间范围校验。
-3. 最终数字是否来自服务端计算结果，而不是模型自由生成。
-
-模型不可用时，订单导入、采购核对、退款核对和利润计算必须继续可用。涉及 AI 的修改至少运行：
+- **本地工作区**：负责修改前后端代码、运行 `pytest`、执行前端 `typecheck` / `build`、提交并推送 Git。本地仅允许以 `PLAN2_EXECUTION_MODE=dry_run` 调试。
+- **云端生产主机（`plan2-prod`）**：应用目录 `/opt/plan2_redeem_service`（非 Git 仓库，属主 `plan2:plan2`），运行 `plan2-redeem.service`（`127.0.0.1:8000`）与 `caddy.service`。排查线上接口报错、真实订单数据库、日志或发布重启一律通过 `scripts/plan2-cloud.ps1` 操作，不查本地数据库。
 
 ```powershell
-uv run pytest tests/test_api_agent.py -q
-uv run python -X utf8 scripts/evaluate_agent.py --output .\private\agent-evaluation.json
+# 检查服务与数据库状态
+pwsh -File .\scripts\plan2-cloud.ps1 -Action status
+# 检查公网 / 本地健康接口
+pwsh -File .\scripts\plan2-cloud.ps1 -Action health
+# 查看最近 80 行 systemd 日志
+pwsh -File .\scripts\plan2-cloud.ps1 -Action logs -Lines 80
+# 同步最新代码与前端 dist 到云端并重启验证
+pwsh -File .\scripts\plan2-cloud.ps1 -Action deploy
 ```
 
-评测结果只能写入 `private/` 或其他已忽略目录。不要把真实聊天、邮箱、订单号、卡密或模型响应提交到仓库。
+### 前端构建产物同步门禁
 
-## 前端维护约定
-
-- 页面结构改动优先编辑 `app/static/index.html`。
-- 交互和 API 状态改动编辑 `app/static/app.js`。
-- 颜色、间距、布局和响应式规则编辑 `app/static/style.css`。
-- 每个操作页面只保留完成任务所需的标签、状态、结果和错误。
-- 动态数据使用 `aria-live` 时，只播报状态变化，不重复播报整页内容。
-- 表格保留语义化表头、键盘滚动容器和可见焦点状态。
-- 前端静态资源有版本查询参数时，结构、样式或脚本更新后同步递增版本。
-
-前端改动后的最小检查：
+只要修改了 `plan2_redeem_service/frontend/src/`、`public/` 或 `index.html`，提交前必须执行：
 
 ```powershell
-node --check app/static/app.js
-git diff --check
+npm --prefix plan2_redeem_service/frontend run typecheck
+npm --prefix plan2_redeem_service/frontend run build
 ```
 
-然后打开工作台、导入订单、成本核对、已入库订单、千牛聊天和问账六个页面，至少确认导航、空状态、错误状态和主要按钮正常。
+并将更新后的 `plan2_redeem_service/frontend/dist/` 一并暂存提交，否则本地 `.githooks/pre-commit` 与 CI `Plan 2 Redeem Frontend` 会直接拦截。
 
-## 测试与提交
+## 全量本地验证门禁
 
-完整验证：
+每次改动至少运行受影响模块门禁；跨模块或发版前运行全部门禁：
 
 ```powershell
+# 1. 根目录账本 + 迁移一致性
 uv run pytest -q
+uv run alembic upgrade head
 uv run alembic check
-node --check app/static/app.js
+
+# 2. 方案 1 自动补库
+uv run --no-project --with-editable ./plan1_auto_restock --with pytest pytest plan1_auto_restock/tests -q
+
+# 3. 方案 2 后端
+.\plan2_redeem_service\.venv\Scripts\python.exe -X utf8 -m pytest plan2_redeem_service\tests -q
+
+# 4. 方案 2 前端
+npm --prefix plan2_redeem_service/frontend run typecheck
+npm --prefix plan2_redeem_service/frontend run build
+
+# 5. 空白与暂存状态检查
 git diff --check
+git status -sb
 ```
 
-提交前检查：
+## 常见问题排查
 
-```powershell
-git status --short
-git diff --stat
-git diff --name-only
-```
+- **根目录页面打不开**：确认监听 `127.0.0.1:8018` 且已执行 `alembic upgrade head`；修改静态资源后硬刷新浏览器清除缓存。
+- **千牛导入提示缺少字段**：确认导出入口为“已卖出宝贝”，检查 `item_id`、`quantity`、`refund_status`、订单号与付款时间表头映射。
+- **利润与预期不一致**：依次核对付款日期范围、退款状态、实付/净额口径、采购成本确认状态与待核对清单，先定位来源层和计算层差异。
+- **Windows 桌面脚本闪退**：在 PowerShell 中直接运行 `.\scripts\start-desktop.ps1` 查看具体异常，常见原因为 `uv` 环境未同步、端口冲突或初始密码文件缺失。
+- **方案 2 线上报备或回调异常**：先用 `plan2-cloud.ps1 -Action logs -Lines 120` 查脱敏日志；Telegram Web K 失败时核对 `PLAYWRIGHT_BROWSERS_PATH` 是否在 `/home`/`/root` 之外且 `plan2` 用户可读，并确认管理员后台是否需要点击重试报备。
 
-提交信息使用简短的动词开头，例如：
+## 变更与发布检查清单
 
-```text
-fix: preserve refund review evidence
-feat: add card purchase category filter
-refine: simplify reconciliation interface
-```
-
-不要提交 `.env`、`data/`、`private/`、`evidence/`、`outputs/`、数据库文件、原始订单文件或真实截图。
-
-## 发布与回滚
-
-推送前先确认工作树干净、测试通过、迁移可执行。发布后检查首页、导入预览、订单筛选、采购删除和利润结果。
-
-发现回归时，先保留日志和复现输入，再回退到上一个已验证提交。涉及数据库迁移时，先确认是否已经执行过迁移，再决定是否需要补偿迁移。不要直接强制重写远端分支历史。
-
-## 常见问题
-
-### 页面打不开
-
-确认服务监听 `127.0.0.1:8018`，查看启动终端的异常，并确认迁移已执行。修改静态资源后先硬刷新浏览器，避免旧缓存遮蔽结果。
-
-### 导入提示缺少字段
-
-先确认导出页面是千牛“已卖出宝贝”，再检查实际表头和字段映射。重点查看 `item_id`、`quantity`、`refund_status` 以及订单号、付款时间等字段是否被识别。
-
-### 利润和预期不一致
-
-依次检查付款日期范围、退款状态、付款金额口径、采购成本确认状态和是否存在待核对记录。不要先改结果，先定位来源和计算层的差异。
-
-### 桌面启动后立即关闭
-
-从 PowerShell 直接运行 `scripts/start-desktop.ps1` 查看错误。常见原因是 Python 环境、uv 同步、端口占用或初始化文件缺失。
-
-## 变更前检查清单
-
-- [ ] 明确变更影响的来源字段、业务规则和页面入口
-- [ ] 检查是否需要数据库迁移
-- [ ] 增加或更新对应测试
-- [ ] 验证导入幂等、删除一致性和租户范围
-- [ ] 手动检查相关页面和空状态
-- [ ] 确认没有真实数据进入 Git
-- [ ] 运行完整测试并记录结果
-- [ ] 提交后再推送，不直接修改远端历史
+- [ ] 已启用 `.githooks`（`git config --get core.hooksPath` 输出 `.githooks`）
+- [ ] 明确变更影响的数据表、业务规则和页面/CLI 入口
+- [ ] 涉及模型改动已补 Alembic 迁移并通过 `alembic upgrade head && alembic check`
+- [ ] 修改方案 2 前端源码时已重新构建并暂存 `frontend/dist/`
+- [ ] 所有受影响模块的 `pytest` / `typecheck` / `build` 全部通过
+- [ ] 核对 `git status -sb` 与 `git diff --cached --stat`，确认无临时文件、真实数据或敏感配置
+- [ ] 使用 Conventional Commits 提交并推送 `origin master`；涉及方案 2 线上改动再执行 `plan2-cloud.ps1 -Action deploy`
