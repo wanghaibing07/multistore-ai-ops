@@ -26,7 +26,6 @@ import type { CodeStatus, ProductType, PublicCodeResponse, WarrantyStatus } from
 import {
   formatDateTime,
   formatElapsedMinutes,
-  getChannelLabel,
   getSkuShortLabel,
   type Tone,
 } from "../utils/format";
@@ -510,7 +509,6 @@ export function RedeemPage() {
               <div className="voucher-head voucher-head--with-sticker redeem-stagger-block" style={staggerStyle(0)}>
                 <div className="row-between">
                   <div className="row" style={{ gap: 8 }}>
-                    <span className="badge badge-accent">{getChannelLabel(record.channel)}订单</span>
                     <span
                       className={`sku-tag ${
                         isExclusive ? "sku-tag-exclusive" : "sku-tag-shared"
