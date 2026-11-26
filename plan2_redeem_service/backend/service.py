@@ -323,27 +323,26 @@ class Service:
             try:
                 order = self.channel.verify_order(code, order_goods)
             except Exception as exc:
-                paused = self._channel16688_paused(exc)
-                error = "CHANNEL16688_OPENAPI_PAUSED" if paused else "UPSTREAM_ERROR"
-                message = "16688 暂停 OpenAPI，订单待核验" if paused else "16688 核验服务暂不可用"
-                if self.ledger.transition(code, "needs_manual_review", "16688_unavailable", {"last_error_code": error, "last_error_message": message}, ("purchasing",)):
-                    if paused:
-                        self._alert_16688_paused()
-                    else:
-                        self.alert(code, error)
-                return self.public_row(self.ledger.get_code(code)), None
-            if not order.get("ok"):
-                if order.get("error") == "ORDER_NOT_ELIGIBLE":
-                    self._release_claim(code, "16688_order_not_eligible")
-                    return {}, "ORDER_NOT_ELIGIBLE"
-                self.ledger.transition(code, "needs_manual_review", "16688_unavailable", {"last_error_code": "UPSTREAM_ERROR", "last_error_message": "16688 verification failed"}, ("purchasing",))
-                self.alert(code, "UPSTREAM_ERROR")
-                return self.public_row(self.ledger.get_code(code)), None
-            verified_trade_no = str(order.get("trade_no") or "").strip()
-            if verified_trade_no:
-                bind_res = self.ledger.bind_code_external_order(code, verified_trade_no, reason="channel16688_order_verified")
-                if bind_res == "conflict":
-                    logger.warning("16688 verified trade_no conflicts with existing external_order_id code=%s", code)
+                if not self._channel16688_paused(exc):
+                    if self.ledger.transition(code, "needs_manual_review", "16688_unavailable", {"last_error_code": "UPSTREAM_ERROR", "last_error_message": "16688 核验服务暂不可用"}, ("purchasing",)):
+                        self.alert(code, "UPSTREAM_ERROR")
+                    return self.public_row(self.ledger.get_code(code)), None
+                if not self.ledger.transition(code, "purchasing", "16688_openapi_paused_auto_purchase", allowed=("purchasing",)):
+                    return self.public_row(self.ledger.get_code(code)), None
+                self._alert_16688_paused()
+            else:
+                if not order.get("ok"):
+                    if order.get("error") == "ORDER_NOT_ELIGIBLE":
+                        self._release_claim(code, "16688_order_not_eligible")
+                        return {}, "ORDER_NOT_ELIGIBLE"
+                    self.ledger.transition(code, "needs_manual_review", "16688_unavailable", {"last_error_code": "UPSTREAM_ERROR", "last_error_message": "16688 verification failed"}, ("purchasing",))
+                    self.alert(code, "UPSTREAM_ERROR")
+                    return self.public_row(self.ledger.get_code(code)), None
+                verified_trade_no = str(order.get("trade_no") or "").strip()
+                if verified_trade_no:
+                    bind_res = self.ledger.bind_code_external_order(code, verified_trade_no, reason="channel16688_order_verified")
+                    if bind_res == "conflict":
+                        logger.warning("16688 verified trade_no conflicts with existing external_order_id code=%s", code)
         try:
             preflight_ok, reason, cost = self.upstream_preflight(sku)
             error_message = self._preflight_error_message(reason, sku, cost)
@@ -864,7 +863,7 @@ class Service:
     def _alert_16688_paused(self) -> None:
         if self.ledger.claim_notification(CHANNEL16688_OPENAPI_PAUSED_KEY) and not self._safe_send(
             "16688 暂停 OpenAPI，库存查询和验单受影响",
-            "16688 报告已暂停 OpenAPI。自动补卡任务会继续检查，待人工订单可到商家后台核验。",
+            "16688 报告已暂停 OpenAPI。买家提交有效兑换码时，系统会通过 Canboso 下单检查后自动续单。暂停期间无法实时核验 16688 订单，自动补卡任务会继续检查库存接口。",
         ):
             self.ledger.clear_notification(CHANNEL16688_OPENAPI_PAUSED_KEY)
 

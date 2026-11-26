@@ -183,6 +183,8 @@ function translateAuditReason(rawReason: string): { title?: string; detail: stri
       return { title: "缺 16688 商品号", detail: "还没填 16688 商品编号，已退回待提货" };
     case "16688_unavailable":
       return { title: "16688 连不上", detail: "校验订单时 16688 接口异常，先转人工处理" };
+    case "16688_openapi_paused_auto_purchase":
+      return { title: "16688 暂停期间自动下单", detail: "已接受有效兑换码，继续检查 Canboso 价格、库存和余额" };
     case "16688_order_not_eligible":
       return { title: "订单不能提货", detail: "16688 订单还没付款、已退款或有退款投诉，已拦下" };
     case "PRICE_LIMIT_EXCEEDED":

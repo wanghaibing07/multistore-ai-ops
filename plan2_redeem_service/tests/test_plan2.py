@@ -34,6 +34,14 @@ def issue(c, sku="ultra_shared_slot", channel="taobao", **extra):
     return response.json()["code"]
 
 
+def issue_16688_batch(c, count=1):
+    response = c.post("/api/v1/admin/codes/batch", headers=ADMIN, json={
+        "sku_key": "ultra_shared_slot", "channel": "16688", "goods_no": "G100", "count": count,
+    })
+    assert response.status_code == 201, response.text
+    return response.json()["codes"]
+
+
 def test_poll_interval_defaults_to_twenty_minutes_and_supports_env_override(monkeypatch):
     monkeypatch.delenv("PLAN2_CONFIG_FILE", raising=False)
     monkeypatch.delenv("PLAN2_POLL_INTERVAL_SECONDS", raising=False)
@@ -238,13 +246,15 @@ def test_price_guard_uses_usd_amount_and_ignores_vnd_promotion(components):
 
 
 def test_16688_refund_or_complaint_is_blocked(components):
-    app, _, _, channel, _ = components
+    app, _, canboso, channel, _ = components
     channel.allowed = False
     c = client(app)
-    code = issue(c, channel="16688")
+    code, = issue_16688_batch(c)
     response = c.post(f"/api/v1/public/codes/{code}/redeem", json={"buyer_email": "a@gmail.com", "buyer_email_confirm": "a@gmail.com", "preflight_confirmed": True})
     assert response.status_code == 409 and response.json()["error_code"] == "ORDER_NOT_ELIGIBLE"
     assert app.state.ledger.get_code(code)["status"] == "unused"
+    assert app.state.ledger.audit(code)[-1]["reason"] == "16688_order_not_eligible"
+    assert canboso.charge_count == 0
 
 
 def test_over_24h_alert_and_no_6h_alert(components):
@@ -403,32 +413,71 @@ def test_16688_verification_error_keeps_replay_key_and_retry_reports_failure(com
         assert "admin_retry_failed:PRICE_LIMIT_EXCEEDED" in [event["reason"] for event in app.state.ledger.audit(code)]
 
 
-def test_16688_paused_requires_merchant_verification_and_reuses_purchase_key(components, monkeypatch):
+def raise_16688_paused(*_):
+    raise UpstreamError(502, "系统长时间超负载，已影响平台稳定性，暂停OpenAPI", rejected=True)
+
+
+def test_16688_paused_public_redeem_purchases_once_per_code(components, monkeypatch):
+    app, _, canboso, channel, mailer = components
+    with client(app) as c:
+        codes = issue_16688_batch(c, count=2)
+        monkeypatch.setattr(channel, "verify_order", raise_16688_paused)
+        ledger = app.state.ledger
+        payload = {"buyer_email": "buyer@example.com", "preflight_confirmed": True}
+        for code in codes:
+            endpoint = f"/api/v1/public/codes/{code}/redeem"
+            first = c.post(endpoint, json=payload)
+            assert first.status_code == 200 and first.json()["status"] == "waiting_fulfillment"
+            assert c.post(endpoint, json=payload).json() == first.json()
+            row = ledger.get_code(code)
+            assert row["upstream_order_code"] in canboso.orders
+            assert row["idempotency_key"] in canboso.idempotent
+            assert not row["external_order_id"]
+            assert "16688_openapi_paused_auto_purchase" in [event["reason"] for event in ledger.audit(code)]
+        assert canboso.charge_count == 2
+        assert len(mailer.sent) == 1
+
+
+@pytest.mark.parametrize("guard", ["PRICE_LIMIT_EXCEEDED", "LOW_BALANCE", "UPSTREAM_OUT_OF_STOCK"])
+def test_16688_paused_redeem_keeps_canboso_preflight_guards(components, monkeypatch, guard):
+    app, _, canboso, channel, _ = components
+    monkeypatch.setattr(channel, "verify_order", raise_16688_paused)
+    with client(app) as c:
+        code, = issue_16688_batch(c)
+        product = canboso.products[app.state.ledger.get_sku("ultra_shared_slot")["product_id"]]
+        if guard == "PRICE_LIMIT_EXCEEDED":
+            product["price"]["amount"] = 999
+        elif guard == "LOW_BALANCE":
+            canboso.balance = 0
+        else:
+            product["availability"]["available"] = 0
+        response = c.post(f"/api/v1/public/codes/{code}/redeem", json={
+            "buyer_email": "buyer@example.com", "preflight_confirmed": True,
+        })
+        assert response.status_code == 200 and response.json()["status"] == "needs_manual_review"
+        assert app.state.ledger.get_code(code)["last_error_code"] == guard
+        assert canboso.charge_count == 0
+
+
+def test_16688_paused_admin_retry_can_bind_merchant_verified_order_and_reuse_key(components, monkeypatch):
     app, _, canboso, channel, mailer = components
 
-    def paused(code, goods_no):
-        raise UpstreamError(502, "系统长时间超负载，已影响平台稳定性，暂停OpenAPI", rejected=True)
-
-    def not_paused(code, goods_no):
+    def not_paused(*_):
         raise UpstreamError(502, "未暂停 OpenAPI", rejected=True)
 
-    monkeypatch.setattr(channel, "verify_order", paused)
+    monkeypatch.setattr(channel, "verify_order", not_paused)
     with client(app) as c:
         ledger = app.state.ledger
-        batch = c.post("/api/v1/admin/codes/batch", headers=ADMIN, json={
-            "sku_key": "ultra_shared_slot", "channel": "16688", "goods_no": "G100", "count": 2,
+        code, = issue_16688_batch(c)
+        result = c.post(f"/api/v1/public/codes/{code}/redeem", json={
+            "buyer_email": "buyer@example.com", "preflight_confirmed": True,
         })
-        assert batch.status_code == 201
-        codes = batch.json()["codes"]
-        for code in codes:
-            result = c.post(f"/api/v1/public/codes/{code}/redeem", json={
-                "buyer_email": "buyer@example.com", "preflight_confirmed": True,
-            })
-            assert result.json()["status"] == "needs_manual_review"
-        code = codes[0]
+        assert result.json()["status"] == "needs_manual_review"
+        assert ledger.get_code(code)["last_error_code"] == "UPSTREAM_ERROR"
+        monkeypatch.setattr(channel, "verify_order", raise_16688_paused)
         endpoint = f"/api/v1/admin/codes/{code}/retry"
         assert c.post(endpoint, headers=ADMIN, json={}).json()["error_code"] == "CHANNEL16688_OPENAPI_PAUSED"
-        assert len(mailer.sent) == 1
+        assert len(mailer.sent) == 2
         assert not canboso.orders
         original = ledger.get_code(code)
         assert ledger.bind_code_external_order(code, "merchant-123") == "bound"
@@ -443,7 +492,7 @@ def test_16688_paused_requires_merchant_verification_and_reuses_purchase_key(com
         assert c.post(endpoint, headers=ADMIN, json=payload).json()["error_code"] == "UPSTREAM_ERROR"
         assert not canboso.orders
 
-        monkeypatch.setattr(channel, "verify_order", paused)
+        monkeypatch.setattr(channel, "verify_order", raise_16688_paused)
         retry = c.post(endpoint, headers=ADMIN, json=payload)
         assert retry.status_code == 200 and retry.json()["status"] == "waiting_fulfillment"
         assert retry.json()["external_order_id"] == "merchant-123"
