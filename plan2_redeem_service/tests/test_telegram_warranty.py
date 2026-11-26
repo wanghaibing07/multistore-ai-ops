@@ -19,7 +19,9 @@ from backend.telegram_forwarder import (
     PlaywrightTelegramWebForwarder,
     TelegramForwardError,
     TelegramWarrantyForwarder,
+    _build_playwright_env,
     build_telegram_forwarder,
+    normalize_web_timeout_seconds,
     resolve_tg_transport,
     sanitize_tg_error,
 )
@@ -818,6 +820,23 @@ def test_build_telegram_forwarder_transport_selection(tmp_path: Path):
     web_fwd = build_telegram_forwarder(auto_web_settings)
     assert isinstance(web_fwd, PlaywrightTelegramWebForwarder)
     assert web_fwd.is_ready is True
+    assert web_fwd.timeout_seconds == 45.0
+
+    low_timeout_web_settings = Settings(
+        execution_mode="live",
+        tg_warranty_enabled=True,
+        tg_transport="web",
+        tg_web_profile_dir=str(profile_dir),
+        tg_admin_target="998877",
+        tg_timeout_seconds=15.0,
+    )
+    low_timeout_web_fwd = build_telegram_forwarder(low_timeout_web_settings)
+    assert isinstance(low_timeout_web_fwd, PlaywrightTelegramWebForwarder)
+    assert low_timeout_web_fwd.timeout_seconds == 30.0
+    assert normalize_web_timeout_seconds(None) == 45.0
+    assert normalize_web_timeout_seconds(0) == 45.0
+    assert normalize_web_timeout_seconds(15) == 30.0
+    assert normalize_web_timeout_seconds(60) == 60.0
 
     auto_telethon_settings = Settings(
         execution_mode="live",
@@ -1001,3 +1020,183 @@ def test_tg_login_verify_only_web_transport(tmp_path: Path, monkeypatch, capsys)
 
     assert tg_login.main(["--env-file", str(valid_env)]) == 1
     assert "--verify-only" in capsys.readouterr().err
+
+
+def test_tg_login_verify_only_web_enforces_timeout_floor(tmp_path: Path, monkeypatch, capsys):
+    from backend import tg_login
+
+    tg_keys = (
+        "PLAN2_CONFIG_FILE",
+        "PLAN2_TG_WARRANTY_ENABLED",
+        "PLAN2_TG_TRANSPORT",
+        "PLAN2_TG_API_ID",
+        "PLAN2_TG_API_HASH",
+        "PLAN2_TG_SESSION",
+        "PLAN2_TG_WEB_PROFILE_DIR",
+        "PLAN2_TG_WEB_URL",
+        "PLAN2_TG_ADMIN_TARGET",
+        "PLAN2_TG_TIMEOUT_SECONDS",
+    )
+    for key in tg_keys:
+        monkeypatch.delenv(key, raising=False)
+    monkeypatch.setattr(tg_login.os, "environ", tg_login.os.environ.copy())
+
+    profile_dir = tmp_path / "tg_web_profile"
+    profile_dir.mkdir()
+
+    recorded_timeouts: list[float] = []
+
+    def fake_web_verify(self):
+        recorded_timeouts.append(self.timeout_seconds)
+        return {
+            "ok": True,
+            "mode": "live",
+            "transport": "web",
+            "target": self.target,
+            "me_id": 100,
+            "target_id": "998877",
+            "target_title": "Admin",
+            "composer_ready": True,
+        }
+
+    monkeypatch.setattr(PlaywrightTelegramWebForwarder, "verify_connection", fake_web_verify)
+
+    low_timeout_env = tmp_path / "web_low_timeout.env"
+    low_timeout_env.write_text(
+        "PLAN2_TG_TRANSPORT=web\n"
+        f"PLAN2_TG_WEB_PROFILE_DIR={profile_dir}\n"
+        "PLAN2_TG_ADMIN_TARGET=998877\n"
+        "PLAN2_TG_TIMEOUT_SECONDS=15\n",
+        encoding="utf-8",
+    )
+    assert tg_login.main(["--verify-only", "--env-file", str(low_timeout_env)]) == 0
+    capsys.readouterr()
+    assert recorded_timeouts == [30.0]
+
+    tg_login.os.environ.pop("PLAN2_TG_TIMEOUT_SECONDS", None)
+    high_timeout_env = tmp_path / "web_high_timeout.env"
+    high_timeout_env.write_text(
+        "PLAN2_TG_TRANSPORT=web\n"
+        f"PLAN2_TG_WEB_PROFILE_DIR={profile_dir}\n"
+        "PLAN2_TG_ADMIN_TARGET=998877\n"
+        "PLAN2_TG_TIMEOUT_SECONDS=60\n",
+        encoding="utf-8",
+    )
+    assert tg_login.main(["--verify-only", "--env-file", str(high_timeout_env)]) == 0
+    capsys.readouterr()
+    assert recorded_timeouts == [30.0, 60.0]
+
+
+def test_build_playwright_env_isolates_fallback_dirs_by_user_or_uid(tmp_path: Path, monkeypatch):
+    from backend import telegram_forwarder
+
+    env_keys = (
+        "HOME",
+        "XDG_CONFIG_HOME",
+        "XDG_CACHE_HOME",
+        "XDG_DATA_HOME",
+        "XDG_RUNTIME_DIR",
+        "USERNAME",
+        "USER",
+        "LOGNAME",
+        "LNAME",
+    )
+    for key in env_keys:
+        monkeypatch.delenv(key, raising=False)
+
+    posix_tmp = tmp_path / "posix_tmp"
+    posix_tmp.mkdir()
+    unwritable_dir = tmp_path / "missing_home"
+    chmod_calls: list[tuple[str, int]] = []
+
+    def fake_chmod(path: str, mode: int) -> None:
+        chmod_calls.append((path, mode))
+
+    with monkeypatch.context() as mp_ctx:
+        mp_ctx.setenv("HOME", str(unwritable_dir))
+        mp_ctx.setenv("XDG_CONFIG_HOME", str(tmp_path / "missing_cfg"))
+        mp_ctx.setattr(telegram_forwarder.tempfile, "gettempdir", lambda: str(posix_tmp))
+        mp_ctx.setattr(telegram_forwarder.os, "getuid", lambda: 1042, raising=False)
+        mp_ctx.setattr(telegram_forwarder.os, "name", "posix")
+        mp_ctx.setattr(telegram_forwarder.os, "chmod", fake_chmod)
+        posix_env = _build_playwright_env()
+
+    expected_posix_root = posix_tmp / "plan2-pw-1042"
+    assert Path(posix_env["HOME"]) == expected_posix_root
+    assert expected_posix_root.is_dir()
+    expected_subdirs = {
+        "XDG_CONFIG_HOME": ".config",
+        "XDG_CACHE_HOME": ".cache",
+        "XDG_DATA_HOME": ".local-share",
+        "XDG_RUNTIME_DIR": ".runtime",
+    }
+    for key, subdir in expected_subdirs.items():
+        target_dir = expected_posix_root / subdir
+        assert Path(posix_env[key]) == target_dir
+        assert target_dir.is_dir()
+    assert (str(expected_posix_root), 0o700) in chmod_calls
+    assert (str(expected_posix_root / ".runtime"), 0o700) in chmod_calls
+
+    def failing_chmod(path: str, mode: int) -> None:
+        raise PermissionError("chmod denied")
+
+    with monkeypatch.context() as mp_ctx:
+        mp_ctx.setattr(telegram_forwarder.tempfile, "gettempdir", lambda: str(posix_tmp))
+        mp_ctx.setattr(telegram_forwarder.os, "getuid", lambda: 1042, raising=False)
+        mp_ctx.setattr(telegram_forwarder.os, "name", "posix")
+        mp_ctx.setattr(telegram_forwarder.os, "chmod", failing_chmod)
+        tolerated_env = _build_playwright_env()
+    assert Path(tolerated_env["HOME"]) == expected_posix_root
+
+    win_tmp = tmp_path / "win_tmp"
+    win_tmp.mkdir()
+    with monkeypatch.context() as mp_ctx:
+        mp_ctx.delattr(telegram_forwarder.os, "getuid", raising=False)
+        mp_ctx.setattr(telegram_forwarder.tempfile, "gettempdir", lambda: str(win_tmp))
+        mp_ctx.setattr(telegram_forwarder.getpass, "getuser", lambda: "CORP\\Alice Smith")
+        win_env = _build_playwright_env()
+
+    expected_win_root = win_tmp / "plan2-pw-CORP_Alice_Smith"
+    assert Path(win_env["HOME"]) == expected_win_root
+    assert expected_win_root.is_dir()
+    for key, subdir in expected_subdirs.items():
+        target_dir = expected_win_root / subdir
+        assert Path(win_env[key]) == target_dir
+        assert target_dir.is_dir()
+
+    def raise_getuser() -> str:
+        raise RuntimeError("no user")
+
+    with monkeypatch.context() as mp_ctx:
+        mp_ctx.delattr(telegram_forwarder.os, "getuid", raising=False)
+        mp_ctx.setattr(telegram_forwarder.tempfile, "gettempdir", lambda: str(win_tmp))
+        mp_ctx.setattr(telegram_forwarder.getpass, "getuser", raise_getuser)
+        mp_ctx.setenv("USERNAME", "ops.bot@host")
+        env_user_fallback = _build_playwright_env()
+    assert Path(env_user_fallback["HOME"]) == win_tmp / "plan2-pw-ops_bot_host"
+
+    with monkeypatch.context() as mp_ctx:
+        mp_ctx.delattr(telegram_forwarder.os, "getuid", raising=False)
+        mp_ctx.setattr(telegram_forwarder.tempfile, "gettempdir", lambda: str(win_tmp))
+        mp_ctx.setattr(telegram_forwarder.getpass, "getuser", raise_getuser)
+        default_env = _build_playwright_env()
+    expected_default_root = win_tmp / "plan2-pw-default"
+    assert Path(default_env["HOME"]) == expected_default_root
+    assert expected_default_root.is_dir()
+    assert (expected_default_root / ".runtime").is_dir()
+
+    writable_tmp = tmp_path / "writable_tmp"
+    writable_tmp.mkdir()
+    existing_dirs = {}
+    for key in ("HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR"):
+        dir_path = tmp_path / f"existing_{key.lower()}"
+        dir_path.mkdir()
+        existing_dirs[key] = str(dir_path)
+    with monkeypatch.context() as mp_ctx:
+        mp_ctx.setattr(telegram_forwarder.tempfile, "gettempdir", lambda: str(writable_tmp))
+        for key, dir_value in existing_dirs.items():
+            mp_ctx.setenv(key, dir_value)
+        preserved_env = _build_playwright_env()
+    for key, dir_value in existing_dirs.items():
+        assert preserved_env[key] == dir_value
+    assert list(writable_tmp.iterdir()) == []

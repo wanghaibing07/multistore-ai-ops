@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager, contextmanager
+import getpass
 import inspect
+import math
 import os
 from pathlib import Path
 import re
@@ -21,6 +23,20 @@ from .db import now_iso
 
 NUMERIC_PEER_RE = re.compile(r"^-?\d+\Z")
 ERROR_PREFIX_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*(?:Error|Exception|Warning):")
+WEB_MIN_TIMEOUT_SECONDS = 30.0
+WEB_DEFAULT_TIMEOUT_SECONDS = 45.0
+
+
+def normalize_web_timeout_seconds(timeout_seconds: Any) -> float:
+    if timeout_seconds is None or timeout_seconds == "":
+        resolved = WEB_DEFAULT_TIMEOUT_SECONDS
+    else:
+        try:
+            parsed = float(timeout_seconds)
+        except (TypeError, ValueError):
+            parsed = WEB_DEFAULT_TIMEOUT_SECONDS
+        resolved = parsed if math.isfinite(parsed) and parsed > 0 else WEB_DEFAULT_TIMEOUT_SECONDS
+    return max(WEB_MIN_TIMEOUT_SECONDS, resolved)
 
 
 class TelegramForwardError(RuntimeError):
@@ -333,12 +349,47 @@ def _cleanup_stale_singleton_files(profile_dir: Path) -> None:
             pass
 
 
+def _playwright_fallback_dir_name(env: dict[str, str]) -> str:
+    getuid = getattr(os, "getuid", None)
+    if callable(getuid):
+        return f"plan2-pw-{getuid()}"
+    raw_user = ""
+    try:
+        raw_user = getpass.getuser() or ""
+    except Exception:
+        raw_user = ""
+    if not raw_user.strip():
+        raw_user = env.get("USERNAME") or env.get("USER") or ""
+    cleaned = re.sub(r"[^A-Za-z0-9_-]+", "_", raw_user.strip()).strip("_-")
+    return f"plan2-pw-{cleaned or 'default'}"
+
+
+def _ensure_playwright_dir(path: str, *, private: bool = False) -> None:
+    if private and os.name == "posix":
+        os.makedirs(path, mode=0o700, exist_ok=True)
+        try:
+            os.chmod(path, 0o700)
+        except OSError:
+            pass
+        return
+    os.makedirs(path, exist_ok=True)
+
+
 def _build_playwright_env() -> dict[str, str]:
     env = os.environ.copy()
-    tmp_dir = tempfile.gettempdir()
+    fallback_root = os.path.join(tempfile.gettempdir(), _playwright_fallback_dir_name(env))
+    fallback_root_ready = False
+
+    def _ensure_fallback_root() -> str:
+        nonlocal fallback_root_ready
+        if not fallback_root_ready:
+            _ensure_playwright_dir(fallback_root, private=True)
+            fallback_root_ready = True
+        return fallback_root
+
     home = env.get("HOME", "")
     if not home or not os.path.isdir(home) or not os.access(home, os.W_OK):
-        env["HOME"] = tmp_dir
+        env["HOME"] = _ensure_fallback_root()
     for key, subdir in (
         ("XDG_CONFIG_HOME", ".config"),
         ("XDG_CACHE_HOME", ".cache"),
@@ -347,8 +398,9 @@ def _build_playwright_env() -> dict[str, str]:
     ):
         current = env.get(key, "")
         if not current or not os.path.isdir(current) or not os.access(current, os.W_OK):
-            fallback = os.path.join(tmp_dir, subdir)
-            os.makedirs(fallback, exist_ok=True)
+            root = _ensure_fallback_root()
+            fallback = os.path.join(root, subdir)
+            _ensure_playwright_dir(fallback, private=(key == "XDG_RUNTIME_DIR"))
             env[key] = fallback
     return env
 
@@ -810,7 +862,7 @@ def build_telegram_forwarder(settings: Any) -> Any:
             profile_dir=getattr(settings, "tg_web_profile_dir", ""),
             target=settings.tg_admin_target,
             web_url=getattr(settings, "tg_web_url", "https://web.telegram.org/k/"),
-            timeout_seconds=max(30.0, float(settings.tg_timeout_seconds or 45.0)),
+            timeout_seconds=normalize_web_timeout_seconds(getattr(settings, "tg_timeout_seconds", None)),
         )
     return TelegramWarrantyForwarder(
         enabled=settings.tg_warranty_enabled,

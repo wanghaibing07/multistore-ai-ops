@@ -17,6 +17,7 @@ from .telegram_forwarder import (
     TelegramWarrantyForwarder,
     _resolve_entity,
     _safe_disconnect,
+    normalize_web_timeout_seconds,
     resolve_tg_transport,
     sanitize_tg_error,
 )
@@ -76,7 +77,7 @@ def _verify_only(args: argparse.Namespace) -> int:
             profile_dir=profile_dir,
             target=target,
             web_url=settings.tg_web_url,
-            timeout_seconds=settings.tg_timeout_seconds,
+            timeout_seconds=normalize_web_timeout_seconds(settings.tg_timeout_seconds),
         )
         try:
             result = forwarder.verify_connection()
