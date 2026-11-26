@@ -112,6 +112,8 @@ def status_for(code: str) -> int:
         "WARRANTY_NOT_ALLOWED": 409,
         "INVALID_EMAIL": 422,
         "EMAIL_MISMATCH": 422,
+        "CHANNEL16688_ORDER_NO_REQUIRED": 422,
+        "MERCHANT_RECIPIENT_CONFIRMATION_REQUIRED": 422,
         "PREFLIGHT_REQUIRED": 422,
         "INVALID_SCREENSHOT_TYPE": 422,
         "SCREENSHOT_TOO_LARGE": 422,
@@ -400,13 +402,17 @@ def create_app(
 
     @app.post("/api/v1/public/codes/{code}/redeem")
     def public_redeem(code: str, body: RedeemRequest, svc: Service = Depends(get_service)) -> Any:
-        result, err_code = svc.redeem(code, body.buyer_email, body.buyer_email_confirm, body.preflight_confirmed)
+        result, err_code = svc.redeem(
+            code, body.buyer_email, body.buyer_email_confirm, body.preflight_confirmed, body.channel_order_no,
+        )
         if err_code:
             messages = {
                 "CODE_NOT_FOUND": "没找到这个兑换码，请核对后重试",
                 "CODE_REVOKED": "这个兑换码已作废，有问题请联系客服",
                 "CONCURRENT_IN_PROGRESS": "正在处理中，请等几秒刷新看看",
-                "ORDER_NOT_ELIGIBLE": "这笔订单暂时领不了，请确认已付款且没退款",
+                "ORDER_NOT_ELIGIBLE": "这笔订单暂时领不了，请核对订单号与兑换码是否匹配，并确认已付款且没退款",
+                "CHANNEL16688_ORDER_NO_REQUIRED": "请填写 16688 购买记录里的订单号",
+                "CHANNEL16688_ORDER_CHECK_PENDING": "暂时无法核对 16688 订单，兑换码未使用。请稍后重试，或带订单号联系客服。",
                 "INVALID_EMAIL": "请填正确的邮箱地址",
                 "EMAIL_MISMATCH": "两次填的邮箱不一样，请核对后再提交",
                 "PREFLIGHT_REQUIRED": "请先勾选上面的确认项再提交",
@@ -668,12 +674,16 @@ def create_app(
             return error("CODE_NOT_FOUND", "没找到这个兑换码", 404)
         if row["status"] != "needs_manual_review":
             return svc.admin_detail(row)
-        detail, err_code = svc.replay(code, body.override_price_limit, body.note, body.merchant_verified_order_no)
+        detail, err_code = svc.replay(
+            code, body.override_price_limit, body.note, body.merchant_verified_order_no,
+            body.merchant_verified_recipient_email,
+        )
         if err_code:
             messages = {
                 "RETRY_NOT_AVAILABLE": "这笔单已有上游订单、正在处理，或没有可重试的原始请求，请核对详情",
                 "ORDER_NOT_ELIGIBLE": "16688 单号或订单状态不符合领货条件，已拦截重试",
                 "CHANNEL16688_OPENAPI_PAUSED": "16688 暂停 OpenAPI，请在商家后台核验订单后再试",
+                "MERCHANT_RECIPIENT_CONFIRMATION_REQUIRED": "请和买家核对收邀请邮箱，并确认它与原请求一致。邮箱不一致时请停止续单。",
                 "PRICE_LIMIT_EXCEEDED": "上游现价还是高于上限，确认接受再勾选放行重试",
                 "LOW_BALANCE": "Canboso 余额不够，充值后再试",
                 "UPSTREAM_OUT_OF_STOCK": "上游暂时没货，等补货后再试",

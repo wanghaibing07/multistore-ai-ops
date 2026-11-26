@@ -88,7 +88,7 @@ export async function getPublicCode(code: string): Promise<PublicCodeResponse> {
 
 export async function redeemPublicCode(
   code: string,
-  payload: RedeemSlotRequest | RedeemExclusiveRequest
+  payload: (RedeemSlotRequest | RedeemExclusiveRequest) & { channel_order_no?: string }
 ): Promise<PublicCodeResponse> {
   return requestJson<PublicCodeResponse>(
     `/api/v1/public/codes/${encodeURIComponent(code)}/redeem`,
@@ -247,7 +247,12 @@ export async function revokeAdminCode(
 export async function retryAdminCode(
   token: string,
   code: string,
-  payload: { override_price_limit?: boolean; note?: string; merchant_verified_order_no?: string }
+  payload: {
+    override_price_limit?: boolean;
+    note?: string;
+    merchant_verified_order_no?: string;
+    merchant_verified_recipient_email?: string;
+  }
 ): Promise<AdminCodeDetail> {
   return requestJson<AdminCodeDetail>(`/api/v1/admin/codes/${encodeURIComponent(code)}/retry`, {
     method: "POST",

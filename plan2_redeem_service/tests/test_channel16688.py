@@ -182,7 +182,7 @@ def test_redeem_16688_binds_verified_trade_no(tmp_path: Path):
 
         res = c.post(
             f"/api/v1/public/codes/{code}/redeem",
-            json={"buyer_email": "buyer@gmail.com", "buyer_email_confirm": "buyer@gmail.com", "preflight_confirmed": True},
+            json={"buyer_email": "buyer@gmail.com", "preflight_confirmed": True, "channel_order_no": "DRY-16688-" + code[-8:]},
         )
         assert res.status_code == 200
         updated = app.state.ledger.get_code(code)
@@ -356,7 +356,7 @@ def test_channel16688_restock_alerts_once_per_openapi_pause(
         assert len(sent) == 2
 
 
-def test_redeem_16688_unknown_verify_failure_and_retry_rechecks_verify_order(tmp_path: Path):
+def test_16688_unverified_attempt_does_not_block_the_owner(tmp_path: Path):
     class Strange16688(DryRun16688):
         def __init__(self):
             super().__init__()
@@ -379,29 +379,33 @@ def test_redeem_16688_unknown_verify_failure_and_retry_rechecks_verify_order(tmp
             json={"sku_key": "ultra_shared_slot", "channel": "16688", "count": 1, "batch_label": "test"},
         ).json()
         code = batch["codes"][0]
+        endpoint = f"/api/v1/public/codes/{code}/redeem"
+        payload = {"buyer_email": "buyer@gmail.com", "preflight_confirmed": True, "channel_order_no": "T-RETRY-OK"}
         res = c.post(
-            f"/api/v1/public/codes/{code}/redeem",
-            json={"buyer_email": "buyer@gmail.com", "buyer_email_confirm": "buyer@gmail.com", "preflight_confirmed": True},
+            endpoint,
+            json={**payload, "buyer_email": "other@gmail.com"},
         )
-        assert res.status_code == 200
-        assert res.json()["status"] == "needs_manual_review"
+        assert res.status_code == 503 and res.json()["error_code"] == "CHANNEL16688_ORDER_CHECK_PENDING"
+        assert app.state.ledger.get_code(code)["status"] == "unused"
+        assert not app.state.ledger.get_code(code)["buyer_email"]
         assert canboso.charge_count == 0
 
-        # Admin retry must NOT bypass 16688 verify_order when order is ineligible
         chan.mode = "not_eligible"
-        retry_blocked = c.post(f"/api/v1/admin/codes/{code}/retry", headers=ADMIN, json={"note": "复核"})
+        retry_blocked = c.post(endpoint, json=payload)
         assert retry_blocked.status_code == 409
         assert retry_blocked.json()["error_code"] == "ORDER_NOT_ELIGIBLE"
         assert canboso.charge_count == 0
-        assert app.state.ledger.get_code(code)["status"] == "needs_manual_review"
+        assert app.state.ledger.get_code(code)["status"] == "unused"
 
-        # Once verify_order succeeds, admin retry binds trade_no and proceeds to Canboso
         chan.mode = "ok"
-        retry_ok = c.post(f"/api/v1/admin/codes/{code}/retry", headers=ADMIN, json={"note": "核验恢复"})
+        assert c.post(endpoint, json={**payload, "channel_order_no": "T-WRONG"}).status_code == 409
+        assert canboso.charge_count == 0
+        retry_ok = c.post(endpoint, json=payload)
         assert retry_ok.status_code == 200
         assert canboso.charge_count == 1
         updated = app.state.ledger.get_code(code)
         assert updated["external_order_id"] == "T-RETRY-OK"
+        assert updated["buyer_email"] == "buyer@gmail.com"
         assert updated["status"] == "waiting_fulfillment"
 
 
@@ -523,7 +527,7 @@ def test_channel16688_multi_goods_per_sku_restock_sync_and_redeem(tmp_path: Path
         sold_code = sold_secret.rsplit("兑换码：", 1)[-1].strip()
         redeem_res = c.post(
             f"/api/v1/public/codes/{sold_code}/redeem",
-            json={"buyer_email": "buyer@gmail.com", "buyer_email_confirm": "buyer@gmail.com", "preflight_confirmed": True},
+            json={"buyer_email": "buyer@gmail.com", "preflight_confirmed": True, "channel_order_no": "T-SEC-001"},
         )
         assert redeem_res.status_code == 200
         assert redeem_res.json()["status"] == "waiting_fulfillment"

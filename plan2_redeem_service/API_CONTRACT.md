@@ -23,7 +23,7 @@
 
 ### 2.2 渠道 (`channel`)
 - `taobao`：淘宝订单（支持手动单笔发码、批量制码导出，以及阿奇索 Webhook 自动发码、退款作废/恢复与低水位补库）
-- `16688`：16688 自营卡密单。核销时实时核验付款、退款和投诉状态。16688 明确返回暂停 OpenAPI 时，带商品编号的有效兑换码可继续通过 Canboso 价格、库存和余额检查并自动下单。该路径记录 `16688_openapi_paused_auto_purchase`，16688 订单状态暂时无法核实。
+- `16688`：16688 自营卡密单。提交核销时需要购买记录里的订单号，与兑换码及商品一起核验，同时检查付款、退款和投诉状态。16688 明确返回暂停 OpenAPI 时，订单号必须匹配已核验或已同步的售出记录，并通过 Canboso 价格、库存和余额检查才能自动下单。暂停期间无法实时核对退款和投诉，暂时无法核验的兑换码保留供重试。
 
 ### 2.3 兑换码/订单生命周期状态 (`status`)
 - `unused`：未使用，等待买家提交核销
@@ -130,11 +130,12 @@
 }
 ```
 - `200 OK`：返回最新 `PublicCodeResponse`（共享车位进入 `waiting_fulfillment`，独享整组进入 `delivered_pending_warranty`，若触发熔断/余额不足/上游异常则进入 `needs_manual_review` 并返回友好 `buyer_notice`）。
+- 两类 16688 商品均需传入 `channel_order_no`。16688 共享车位的公开响应仅返回掩码邮箱，完整邮箱可在鉴权后的商家后台查看。
 - 常见错误码：
   - `404` `CODE_NOT_FOUND`
   - `409` `CODE_REVOKED` / `CODE_ALREADY_REDEEMED` / `ORDER_NOT_ELIGIBLE` / `CONCURRENT_IN_PROGRESS`
-  - `422` `INVALID_EMAIL` / `EMAIL_MISMATCH` / `PREFLIGHT_REQUIRED`
-  - `503` `TEMPORARILY_UNAVAILABLE`
+  - `422` `INVALID_EMAIL` / `EMAIL_MISMATCH` / `PREFLIGHT_REQUIRED` / `CHANNEL16688_ORDER_NO_REQUIRED`
+  - `503` `CHANNEL16688_ORDER_CHECK_PENDING`，订单暂无法核对，可用同一码重试。
 
 ### 4.3 买家手动刷新上游进度
 `POST /api/v1/public/codes/{code}/refresh`
@@ -347,7 +348,7 @@
 ### 5.8 后台操作动作
 - `POST /api/v1/admin/codes/{code}/poll`：立即查一次 Canboso 订单状态。上游终止的订单转待人工，保留订单号和采购记录，退款以钱包入账为准。
 - `POST /api/v1/admin/codes/{code}/revoke`：请求 `{ "reason": "买家退款" }`，作废兑换码，返回最新 `AdminCodeDetail`。
-- `POST /api/v1/admin/codes/{code}/retry`：对有原始请求、尚无上游单号的 `needs_manual_review` 订单复用已落库 `Idempotency-Key`。请求可带 `override_price_limit`、`note` 和 `merchant_verified_order_no`。仅在 16688 明确暂停 OpenAPI 时使用商家核验的单号，实时验单明确拒绝时会拦截。上游未确认或返回取消时返回对应错误，订单详情保留核对信息。
+- `POST /api/v1/admin/codes/{code}/retry`：对有原始请求、尚无上游单号的 `needs_manual_review` 订单复用已落库 `Idempotency-Key`。请求可带 `override_price_limit`、`note` 和 `merchant_verified_order_no`。16688 共享车位还需填写与买家核实的收邀请邮箱 `merchant_verified_recipient_email`，并与原请求一致。仅在 16688 明确暂停 OpenAPI 时使用商家核验的单号，实时验单明确拒绝时会拦截。上游未确认或返回取消时返回对应错误，订单详情保留核对信息。
 - `POST /api/v1/admin/codes/{code}/warranty-ack`：请求 `{ "note": "已发Canboso管理员" }`，将独享保修状态标记为 `registered_upstream`，返回最新 `AdminCodeDetail`。
 - `POST /api/v1/admin/codes/{code}/warranty-forward`：管理员手动触发 / 重试 Telegram 私聊保修报备（带单号锁幂等防重发）。成功返回 `200 AdminCodeDetail`（状态流转为 `registered_upstream`）；未配置/未就绪返回 `503 TG_NOT_CONFIGURED`，发送失败返回 `503 TG_FORWARD_FAILED`（返回脱敏错误并记录 `warranty_tg_forward_failed` 审计），已报备返回 `409 WARRANTY_LOCKED`。
 

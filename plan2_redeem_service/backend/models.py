@@ -9,6 +9,7 @@ class RedeemRequest(BaseModel):
     buyer_email: Optional[str] = None
     buyer_email_confirm: Optional[str] = None
     preflight_confirmed: bool = False
+    channel_order_no: str = Field(default="", max_length=100)
 
 
 class WarrantyForm(BaseModel):
@@ -40,6 +41,7 @@ class RetryRequest(BaseModel):
     override_price_limit: bool = False
     note: str = ""
     merchant_verified_order_no: str = Field(default="", max_length=100)
+    merchant_verified_recipient_email: str = Field(default="", max_length=254)
 
 
 class WarrantyAckRequest(BaseModel):

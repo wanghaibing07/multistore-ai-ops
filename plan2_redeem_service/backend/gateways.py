@@ -224,12 +224,13 @@ class Channel16688Client:
         return self._call("openApi/stockSecret/list", params)
 
     def verify_order(self, code: str, goods_no: str) -> dict[str, Any]:
+        card_pattern = re.compile(rf"(?<![A-Za-z0-9-]){re.escape(code)}(?![A-Za-z0-9-])")
         trade_no = ""
         stock = self.stock_secret_list(goods_no, keywords=code, page_no=1, page_size=20)
         stock_matches = [
             item
             for item in (stock.get("list") or [])
-            if isinstance(item, dict) and code in str(item.get("secret_code") or "")
+            if isinstance(item, dict) and card_pattern.search(str(item.get("secret_code") or ""))
         ]
         if len(stock_matches) > 1:
             return {"ok": False, "error": "ORDER_NOT_ELIGIBLE"}
@@ -259,7 +260,7 @@ class Channel16688Client:
             return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": trade_no}
         cards = detail.get("cards") or []
         code_in_cards = any(
-            code in str((item.get("code") if isinstance(item, dict) else item) or "")
+            card_pattern.search(str((item.get("code") if isinstance(item, dict) else item) or ""))
             for item in cards
         )
         if detail.get("goods_no") != goods_no or not code_in_cards:

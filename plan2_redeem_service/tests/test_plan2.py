@@ -251,7 +251,9 @@ def test_16688_refund_or_complaint_is_blocked(components):
     channel.allowed = False
     c = client(app)
     code, = issue_16688_batch(c)
-    response = c.post(f"/api/v1/public/codes/{code}/redeem", json={"buyer_email": "a@gmail.com", "buyer_email_confirm": "a@gmail.com", "preflight_confirmed": True})
+    response = c.post(f"/api/v1/public/codes/{code}/redeem", json={
+        "buyer_email": "a@gmail.com", "preflight_confirmed": True, "channel_order_no": "TB-001",
+    })
     assert response.status_code == 409 and response.json()["error_code"] == "ORDER_NOT_ELIGIBLE"
     assert app.state.ledger.get_code(code)["status"] == "unused"
     assert app.state.ledger.audit(code)[-1]["reason"] == "16688_order_not_eligible"
@@ -385,31 +387,20 @@ def test_sku_patch_persists_cap_and_can_clear_goods_no(components):
         assert cleared.status_code == 200 and cleared.json()["goods_no"] is None
 
 
-def test_16688_verification_error_keeps_replay_key_and_retry_reports_failure(components):
+def test_16688_admin_retry_reports_price_guard_after_verified_redemption(components):
     app, _, canboso, _, _ = components
-
-    class Broken16688:
-        def verify_order(self, code, goods_no):
-            raise RuntimeError("channel unavailable")
-
-        def stock_secret_add(self, goods_no, content):
-            return {"import_count": 1}
-
-    app.state.service.channel = Broken16688()
     with client(app) as c:
-        configured = c.patch(
-            "/api/v1/admin/settings/skus/ultra_shared_slot",
-            headers=ADMIN,
-            json={"max_cost_usd": 16.0, "goods_no": "G100"},
-        )
-        assert configured.status_code == 200
-        code = issue(c, channel="16688")
-        first = c.post(f"/api/v1/public/codes/{code}/redeem", json={"buyer_email": "a@gmail.com", "buyer_email_confirm": "a@gmail.com", "preflight_confirmed": True})
+        code, = issue_16688_batch(c)
+        canboso.products["6ac26aaeec73a42d6430a837"]["price"]["amount"] = 99
+        first = c.post(f"/api/v1/public/codes/{code}/redeem", json={
+            "buyer_email": "a@gmail.com", "preflight_confirmed": True, "channel_order_no": "TB-001",
+        })
         assert first.status_code == 200 and first.json()["status"] == "needs_manual_review"
         row = app.state.ledger.get_code(code)
         assert row["idempotency_key"] and row["request_payload_json"]
-        canboso.products["6ac26aaeec73a42d6430a837"]["price"]["amount"] = 99
-        retry = c.post(f"/api/v1/admin/codes/{code}/retry", headers=ADMIN, json={"note": "再次检查"})
+        retry = c.post(f"/api/v1/admin/codes/{code}/retry", headers=ADMIN, json={
+            "note": "再次检查", "merchant_verified_recipient_email": "a@gmail.com",
+        })
         assert retry.status_code == 503 and retry.json()["error_code"] == "PRICE_LIMIT_EXCEEDED"
         assert "admin_retry_failed:PRICE_LIMIT_EXCEEDED" in [event["reason"] for event in app.state.ledger.audit(code)]
 
@@ -418,25 +409,90 @@ def raise_16688_paused(*_):
     raise UpstreamError(502, "系统长时间超负载，已影响平台稳定性，暂停OpenAPI", rejected=True)
 
 
+def test_16688_pause_does_not_consume_code_without_a_verified_sale(components, monkeypatch):
+    app, _, canboso, channel, _ = components
+    monkeypatch.setattr(channel, "verify_order", raise_16688_paused)
+    with client(app) as c:
+        first, second = issue_16688_batch(c, count=2)
+        ledger = app.state.ledger
+        # A merchant-entered order number alone is not a sale record.
+        ledger.bind_code_external_order(second, "T-UNVERIFIED", reason="merchant_entered")
+        for code in (first, second):
+            result = c.post(f"/api/v1/public/codes/{code}/redeem", json={
+                "buyer_email": "other@example.com", "channel_order_no": "T-UNVERIFIED",
+                "preflight_confirmed": True,
+            })
+            assert result.status_code == 503 and result.json()["error_code"] == "CHANNEL16688_ORDER_CHECK_PENDING"
+            assert c.get(f"/api/v1/public/codes/{code}").json()["status"] == "unused"
+            row = ledger.get_code(code)
+            assert not row["buyer_email"] and not row["idempotency_key"]
+        assert canboso.charge_count == 0
+
+
 def test_16688_paused_public_redeem_purchases_once_per_code(components, monkeypatch):
     app, _, canboso, channel, mailer = components
     with client(app) as c:
         codes = issue_16688_batch(c, count=2)
         monkeypatch.setattr(channel, "verify_order", raise_16688_paused)
         ledger = app.state.ledger
-        payload = {"buyer_email": "buyer@example.com", "preflight_confirmed": True}
-        for code in codes:
+        for index, code in enumerate(codes):
+            trade_no = f"T-TEST-{index}"
+            assert ledger.bind_code_external_order(code, trade_no, reason="channel16688_sold_sync") == "bound"
+            payload = {"buyer_email": "buyer@example.com", "preflight_confirmed": True, "channel_order_no": trade_no}
             endpoint = f"/api/v1/public/codes/{code}/redeem"
+            assert c.post(endpoint, json={**payload, "channel_order_no": "T-MISMATCH"}).status_code == 503
             first = c.post(endpoint, json=payload)
             assert first.status_code == 200 and first.json()["status"] == "waiting_fulfillment"
             assert c.post(endpoint, json=payload).json() == first.json()
             row = ledger.get_code(code)
             assert row["upstream_order_code"] in canboso.orders
             assert row["idempotency_key"] in canboso.idempotent
-            assert not row["external_order_id"]
+            assert row["external_order_id"] == trade_no
+            assert first.json()["buyer_email_masked"] == "b***@example.com"
             assert "16688_openapi_paused_auto_purchase" in [event["reason"] for event in ledger.audit(code)]
         assert canboso.charge_count == 2
         assert len(mailer.sent) == 1
+
+
+def test_16688_live_rejection_overrides_cached_sale_during_pause(components, monkeypatch):
+    app, _, canboso, channel, _ = components
+    with client(app) as c:
+        code, = issue_16688_batch(c)
+        ledger = app.state.ledger
+        ledger.bind_code_external_order(code, "TB-001", reason="channel16688_sold_sync")
+        endpoint = f"/api/v1/public/codes/{code}/redeem"
+        payload = {"buyer_email": "buyer@example.com", "preflight_confirmed": True}
+        assert c.post(endpoint, json=payload).json()["error_code"] == "CHANNEL16688_ORDER_NO_REQUIRED"
+        channel.allowed = False
+        payload["channel_order_no"] = "TB-001"
+        assert c.post(endpoint, json=payload).json()["error_code"] == "ORDER_NOT_ELIGIBLE"
+        monkeypatch.setattr(channel, "verify_order", raise_16688_paused)
+        assert c.post(endpoint, json=payload).json()["error_code"] == "CHANNEL16688_ORDER_CHECK_PENDING"
+        assert ledger.get_code(code)["status"] == "unused"
+        assert canboso.charge_count == 0
+
+
+def test_16688_recipient_dispute_hides_invitation_without_reopening_purchase(components):
+    app, _, canboso, _, _ = components
+    with client(app) as c:
+        code, = issue_16688_batch(c)
+        ledger = app.state.ledger
+        endpoint = f"/api/v1/public/codes/{code}"
+        payload = {"buyer_email": "buyer@example.com", "preflight_confirmed": True, "channel_order_no": "TB-001"}
+        assert c.post(endpoint + "/redeem", json=payload).status_code == 200
+        stored = ledger.get_code(code)
+        assert ledger.transition(code, "completed", "shared_fulfillment_completed", allowed=("waiting_fulfillment",))
+        assert ledger.transition(code, "completed", "16688_recipient_disputed", {
+            "last_error_code": "CHANNEL16688_RECIPIENT_DISPUTED",
+        }, ("completed",))
+        view = c.get(endpoint).json()
+        assert view["status"] == "needs_manual_review"
+        assert view["buyer_email_masked"] is None
+        assert "新兑换码" in view["buyer_notice"]
+        assert c.post(endpoint + "/redeem", json=payload).json() == view
+        admin = c.get(f"/api/v1/admin/codes/{code}", headers=ADMIN).json()
+        assert admin["status"] == "completed" and admin["buyer_email"] == payload["buyer_email"]
+        assert admin["upstream_order_code"] == stored["upstream_order_code"] and canboso.charge_count == 1
 
 
 @pytest.mark.parametrize("guard", ["PRICE_LIMIT_EXCEEDED", "LOW_BALANCE", "UPSTREAM_OUT_OF_STOCK"])
@@ -445,7 +501,9 @@ def test_16688_paused_redeem_keeps_canboso_preflight_guards(components, monkeypa
     monkeypatch.setattr(channel, "verify_order", raise_16688_paused)
     with client(app) as c:
         code, = issue_16688_batch(c)
-        product = canboso.products[app.state.ledger.get_sku("ultra_shared_slot")["product_id"]]
+        ledger = app.state.ledger
+        ledger.bind_code_external_order(code, "T-TEST", reason="channel16688_sold_sync")
+        product = canboso.products[ledger.get_sku("ultra_shared_slot")["product_id"]]
         if guard == "PRICE_LIMIT_EXCEEDED":
             product["price"]["amount"] = 999
         elif guard == "LOW_BALANCE":
@@ -453,7 +511,7 @@ def test_16688_paused_redeem_keeps_canboso_preflight_guards(components, monkeypa
         else:
             product["availability"]["available"] = 0
         response = c.post(f"/api/v1/public/codes/{code}/redeem", json={
-            "buyer_email": "buyer@example.com", "preflight_confirmed": True,
+            "buyer_email": "buyer@example.com", "preflight_confirmed": True, "channel_order_no": "T-TEST",
         })
         assert response.status_code == 200 and response.json()["status"] == "needs_manual_review"
         assert app.state.ledger.get_code(code)["last_error_code"] == guard
@@ -466,26 +524,29 @@ def test_16688_paused_admin_retry_can_bind_merchant_verified_order_and_reuse_key
     def not_paused(*_):
         raise UpstreamError(502, "未暂停 OpenAPI", rejected=True)
 
-    monkeypatch.setattr(channel, "verify_order", not_paused)
     with client(app) as c:
         ledger = app.state.ledger
         code, = issue_16688_batch(c)
-        result = c.post(f"/api/v1/public/codes/{code}/redeem", json={
-            "buyer_email": "buyer@example.com", "preflight_confirmed": True,
-        })
-        assert result.json()["status"] == "needs_manual_review"
-        assert ledger.get_code(code)["last_error_code"] == "UPSTREAM_ERROR"
+        # Requests moved to review before the public ownership check was added.
+        email = "buyer@example.com"
+        product_id = ledger.get_sku("ultra_shared_slot")["product_id"]
+        state, _ = ledger.claim_for_purchase(code, {"product_id": product_id, "quantity": 1, "customer_email": email}, email, email)
+        assert state == "claimed"
+        assert ledger.transition(code, "needs_manual_review", "16688_unavailable", allowed=("purchasing",))
         monkeypatch.setattr(channel, "verify_order", raise_16688_paused)
         endpoint = f"/api/v1/admin/codes/{code}/retry"
-        assert c.post(endpoint, headers=ADMIN, json={}).json()["error_code"] == "CHANNEL16688_OPENAPI_PAUSED"
-        assert len(mailer.sent) == 2
+        recipient = {"merchant_verified_recipient_email": email}
+        assert c.post(endpoint, headers=ADMIN, json={}).json()["error_code"] == "MERCHANT_RECIPIENT_CONFIRMATION_REQUIRED"
+        assert c.post(endpoint, headers=ADMIN, json={"merchant_verified_recipient_email": "other@example.com"}).status_code == 422
+        assert c.post(endpoint, headers=ADMIN, json=recipient).json()["error_code"] == "CHANNEL16688_OPENAPI_PAUSED"
+        assert len(mailer.sent) == 1
         assert not canboso.orders
         original = ledger.get_code(code)
         assert ledger.bind_code_external_order(code, "merchant-123") == "bound"
-        assert c.post(endpoint, headers=ADMIN, json={"merchant_verified_order_no": "wrong-123"}).status_code == 409
+        assert c.post(endpoint, headers=ADMIN, json={**recipient, "merchant_verified_order_no": "wrong-123"}).status_code == 409
 
         monkeypatch.setattr(channel, "verify_order", lambda *_: {"ok": False, "error": "ORDER_NOT_ELIGIBLE"})
-        payload = {"merchant_verified_order_no": "merchant-123"}
+        payload = {**recipient, "merchant_verified_order_no": "merchant-123"}
         assert c.post(endpoint, headers=ADMIN, json=payload).status_code == 409
         assert not canboso.orders
 

@@ -131,6 +131,7 @@ class Ledger:
             CREATE INDEX IF NOT EXISTS idx_codes_filter ON codes(channel, sku_key, created_at);
             CREATE INDEX IF NOT EXISTS idx_codes_submitted_at ON codes(submitted_at DESC);
             CREATE INDEX IF NOT EXISTS idx_codes_external_order ON codes(external_order_id);
+            CREATE INDEX IF NOT EXISTS idx_audit_events_code_reason ON audit_events(code, reason);
             CREATE INDEX IF NOT EXISTS idx_agiso_deliveries_tid ON agiso_deliveries(tid);
             CREATE INDEX IF NOT EXISTS idx_agiso_deliveries_oid ON agiso_deliveries(oid);
             CREATE INDEX IF NOT EXISTS idx_agiso_events_created ON agiso_events(created_at DESC);
@@ -435,6 +436,23 @@ class Ledger:
                 (code, row["status"], row["status"], reason, t),
             )
             return "bound"
+
+    def has_16688_sale_binding(self, code: str, trade_no: str) -> bool:
+        with closing(self.connect()) as c:
+            return c.execute(
+                """SELECT 1 FROM codes
+                   WHERE code=? AND channel='16688' AND external_order_id=?
+                   AND EXISTS (
+                       SELECT 1 FROM audit_events
+                       WHERE code=codes.code
+                       AND reason IN ('channel16688_sold_sync', 'channel16688_order_verified')
+                   )
+                   AND NOT EXISTS (
+                       SELECT 1 FROM audit_events
+                       WHERE code=codes.code AND reason='16688_order_rejected_live'
+                   )""",
+                (code, trade_no),
+            ).fetchone() is not None
 
     def claim_agiso_trade_delivery(self, tid: str, stale_seconds: int = 60, force_retry: bool = False) -> list[dict[str, Any]]:
         with self.transaction(immediate=True) as c:

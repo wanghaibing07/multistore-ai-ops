@@ -288,7 +288,10 @@ class Service:
             ),
         }
 
-    def redeem(self, code: str, buyer_email: Optional[str], confirm: Optional[str], preflight: bool) -> tuple[dict[str, Any], Optional[str]]:
+    def redeem(
+        self, code: str, buyer_email: Optional[str], confirm: Optional[str], preflight: bool,
+        channel_order_no: str = "",
+    ) -> tuple[dict[str, Any], Optional[str]]:
         row = self.ledger.get_code(code)
         if not row:
             return {}, "CODE_NOT_FOUND"
@@ -303,6 +306,9 @@ class Service:
         sku = self.ledger.get_sku(row["sku_key"])
         if not preflight:
             return {}, "PREFLIGHT_REQUIRED"
+        trade_no = channel_order_no.strip()
+        if row["channel"] == "16688" and not CHANNEL16688_TRADE_NO_RE.fullmatch(trade_no):
+            return {}, "CHANNEL16688_ORDER_NO_REQUIRED"
         payload: dict[str, Any] = {"product_id": sku["product_id"], "quantity": 1}
         normalized: Optional[str] = None
         if sku["product_type"] == "slot":
@@ -320,29 +326,11 @@ class Service:
             if not order_goods:
                 self._release_claim(code, "16688_goods_missing")
                 return {}, "ORDER_NOT_ELIGIBLE"
-            try:
-                order = self.channel.verify_order(code, order_goods)
-            except Exception as exc:
-                if not self._channel16688_paused(exc):
-                    if self.ledger.transition(code, "needs_manual_review", "16688_unavailable", {"last_error_code": "UPSTREAM_ERROR", "last_error_message": "16688 核验服务暂不可用"}, ("purchasing",)):
-                        self.alert(code, "UPSTREAM_ERROR")
-                    return self.public_row(self.ledger.get_code(code)), None
-                if not self.ledger.transition(code, "purchasing", "16688_openapi_paused_auto_purchase", allowed=("purchasing",)):
-                    return self.public_row(self.ledger.get_code(code)), None
-                self._alert_16688_paused()
-            else:
-                if not order.get("ok"):
-                    if order.get("error") == "ORDER_NOT_ELIGIBLE":
-                        self._release_claim(code, "16688_order_not_eligible")
-                        return {}, "ORDER_NOT_ELIGIBLE"
-                    self.ledger.transition(code, "needs_manual_review", "16688_unavailable", {"last_error_code": "UPSTREAM_ERROR", "last_error_message": "16688 verification failed"}, ("purchasing",))
-                    self.alert(code, "UPSTREAM_ERROR")
-                    return self.public_row(self.ledger.get_code(code)), None
-                verified_trade_no = str(order.get("trade_no") or "").strip()
-                if verified_trade_no:
-                    bind_res = self.ledger.bind_code_external_order(code, verified_trade_no, reason="channel16688_order_verified")
-                    if bind_res == "conflict":
-                        logger.warning("16688 verified trade_no conflicts with existing external_order_id code=%s", code)
+            verify_error = self._verify_16688_redemption(code, order_goods, trade_no)
+            if verify_error:
+                reason = "16688_order_not_eligible" if verify_error == "ORDER_NOT_ELIGIBLE" else "16688_verification_pending"
+                self._release_claim(code, reason)
+                return {}, verify_error
         try:
             preflight_ok, reason, cost = self.upstream_preflight(sku)
             error_message = self._preflight_error_message(reason, sku, cost)
@@ -355,6 +343,31 @@ class Service:
             self.alert(code, reason)
             return self.public_row(self.ledger.get_code(code)), None
         return self._purchase(code, claimed, sku, cost), None
+
+    def _verify_16688_redemption(self, code: str, goods_no: str, trade_no: str) -> Optional[str]:
+        try:
+            order = self.channel.verify_order(code, goods_no)
+        except Exception as exc:
+            if not self._channel16688_paused(exc):
+                return "CHANNEL16688_ORDER_CHECK_PENDING"
+            self._alert_16688_paused()
+            if not self.ledger.has_16688_sale_binding(code, trade_no):
+                return "CHANNEL16688_ORDER_CHECK_PENDING"
+            if not self.ledger.transition(
+                code, "purchasing", "16688_openapi_paused_auto_purchase", allowed=("purchasing",),
+            ):
+                return "CONCURRENT_IN_PROGRESS"
+            return None
+        if order.get("error") == "ORDER_NOT_ELIGIBLE":
+            self.ledger.transition(code, "purchasing", "16688_order_rejected_live", allowed=("purchasing",))
+            return "ORDER_NOT_ELIGIBLE"
+        if not order.get("ok"):
+            return "CHANNEL16688_ORDER_CHECK_PENDING"
+        verified_trade_no = str(order.get("trade_no") or "").strip()
+        if verified_trade_no != trade_no:
+            return "ORDER_NOT_ELIGIBLE"
+        binding = self.ledger.bind_code_external_order(code, verified_trade_no, reason="channel16688_order_verified")
+        return None if binding in {"bound", "already_bound"} else "ORDER_NOT_ELIGIBLE"
 
     def upstream_preflight(self, sku: dict[str, Any], override: bool = False) -> tuple[bool, str, float]:
         catalog = self.canboso.list_products()
@@ -419,7 +432,10 @@ class Service:
             logger.error("Canboso accepted purchase but order could not be recorded")
         return self.public_row(self.ledger.get_code(code))
 
-    def replay(self, code: str, override: bool = False, note: str = "", merchant_verified_order_no: str = "") -> tuple[dict[str, Any], Optional[str]]:
+    def replay(
+        self, code: str, override: bool = False, note: str = "", merchant_verified_order_no: str = "",
+        merchant_verified_recipient_email: str = "",
+    ) -> tuple[dict[str, Any], Optional[str]]:
         row = self.ledger.get_code(code)
         if not row or row["status"] != "needs_manual_review" or row.get("upstream_order_code") or not row.get("idempotency_key") or not row.get("request_payload_json"):
             return (self.admin_detail(row) if row else {}), "RETRY_NOT_AVAILABLE"
@@ -427,6 +443,11 @@ class Service:
         if manual_trade_no and (row["channel"] != "16688" or not CHANNEL16688_TRADE_NO_RE.fullmatch(manual_trade_no)):
             return self.admin_detail(row), "ORDER_NOT_ELIGIBLE"
         sku = self.ledger.get_sku(row["sku_key"])
+        if row["channel"] == "16688" and sku["product_type"] == "slot":
+            recipient = merchant_verified_recipient_email.strip().lower()
+            payload = json.loads(row["request_payload_json"])
+            if not recipient or recipient != payload.get("customer_email"):
+                return self.admin_detail(row), "MERCHANT_RECIPIENT_CONFIRMATION_REQUIRED"
         try:
             ok, reason, cost = self.upstream_preflight(sku, override)
             error_message = self._preflight_error_message(reason, sku, cost)
@@ -480,6 +501,8 @@ class Service:
                 self.alert(code, verify_err)
                 return self.admin_detail(self.ledger.get_code(code)), verify_err
             verified_trade_no = str(order.get("trade_no") or "").strip()
+            if not verified_trade_no or (manual_trade_no and manual_trade_no != verified_trade_no):
+                return self.admin_detail(row), "ORDER_NOT_ELIGIBLE"
         audit_reason = "admin_retry_16688_merchant_verified" if manually_verified else "admin_retry"
         if note.strip():
             audit_reason += f":{note.strip()[:200]}"
@@ -863,7 +886,7 @@ class Service:
     def _alert_16688_paused(self) -> None:
         if self.ledger.claim_notification(CHANNEL16688_OPENAPI_PAUSED_KEY) and not self._safe_send(
             "16688 暂停 OpenAPI，库存查询和验单受影响",
-            "16688 报告已暂停 OpenAPI。买家提交有效兑换码时，系统会通过 Canboso 下单检查后自动续单。暂停期间无法实时核验 16688 订单，自动补卡任务会继续检查库存接口。",
+            "16688 报告已暂停 OpenAPI。订单号与已同步售出记录匹配时，买家仍可在 Canboso 检查通过后自动提货。其他兑换码保留，买家可稍后重试。",
         ):
             self.ledger.clear_notification(CHANNEL16688_OPENAPI_PAUSED_KEY)
 
@@ -942,7 +965,16 @@ class Service:
             or (warranty.get("admin_email_masked") if warranty else None)
             or normalize_display_email(row.get("buyer_email_masked"))
         )
-        return {"code": row["code"], "sku_key": row["sku_key"], "sku_title": sku["title"], "product_type": sku["product_type"], "channel": row["channel"], "status": row["status"], "buyer_email_masked": display_email, "delivery": delivery, "warranty": warranty, "fulfillment": {"eta_text": "一般 2-6 小时内发家庭组邀请，最晚 24 小时" if sku["product_type"] == "slot" else None, "submitted_at": row.get("submitted_at"), "completed_at": row.get("completed_at"), "last_polled_at": row.get("last_polled_at"), "elapsed_minutes": elapsed}, "buyer_notice": notice, "support_hint": "有问题请把订单号和兑换码发给客服。", "created_at": row["created_at"], "updated_at": row["updated_at"]}
+        status = row["status"]
+        if row["channel"] == "16688" and sku["product_type"] == "slot":
+            if row.get("last_error_code") == "CHANNEL16688_RECIPIENT_DISPUTED":
+                status = "needs_manual_review"
+                display_email = None
+                notice = "原邀请的收件邮箱需要核对。如商家已补发，请使用新兑换码。需要帮助时请带 16688 订单号联系客服。"
+            elif display_email:
+                local, domain = display_email.rsplit("@", 1)
+                display_email = f"{local[:1]}***@{domain}"
+        return {"code": row["code"], "sku_key": row["sku_key"], "sku_title": sku["title"], "product_type": sku["product_type"], "channel": row["channel"], "status": status, "buyer_email_masked": display_email, "delivery": delivery, "warranty": warranty, "fulfillment": {"eta_text": "一般 2-6 小时内发家庭组邀请，最晚 24 小时" if sku["product_type"] == "slot" else None, "submitted_at": row.get("submitted_at"), "completed_at": row.get("completed_at"), "last_polled_at": row.get("last_polled_at"), "elapsed_minutes": elapsed}, "buyer_notice": notice, "support_hint": "有问题请把订单号和兑换码发给客服。", "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
     def admin_summary(self, row: dict[str, Any]) -> dict[str, Any]:
         sku = self.ledger.get_sku(row["sku_key"])
@@ -2684,6 +2716,10 @@ class Service:
                             code_row = self.ledger.get_code(found_code)
                             if not code_row or code_row.get("channel") != "16688":
                                 missing += 1
+                                continue
+                            code_goods = code_row.get("goods_no") or self.ledger.get_sku(code_row["sku_key"])["goods_no"]
+                            if code_row["sku_key"] != sku_key or code_goods != goods_no:
+                                conflicts += 1
                                 continue
                             result = self.ledger.bind_code_external_order(
                                 found_code,

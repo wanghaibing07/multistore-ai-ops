@@ -184,7 +184,11 @@ function translateAuditReason(rawReason: string): { title?: string; detail: stri
     case "16688_unavailable":
       return { title: "16688 连不上", detail: "校验订单时 16688 接口异常，先转人工处理" };
     case "16688_openapi_paused_auto_purchase":
-      return { title: "16688 暂停期间自动下单", detail: "已接受有效兑换码，继续检查 Canboso 价格、库存和余额" };
+      return { title: "16688 暂停期间自动下单", detail: "订单号与已知售出记录匹配，继续检查 Canboso 价格、库存和余额" };
+    case "16688_verification_pending":
+      return { title: "16688 暂无法核对", detail: "兑换码保留，买家可带订单号稍后重试" };
+    case "16688_recipient_disputed":
+      return { title: "收邀请邮箱有争议", detail: "原链接已隐藏收件信息，保留原 Canboso 订单和采购记录" };
     case "16688_order_not_eligible":
       return { title: "订单不能提货", detail: "16688 订单还没付款、已退款或有退款投诉，已拦下" };
     case "PRICE_LIMIT_EXCEEDED":

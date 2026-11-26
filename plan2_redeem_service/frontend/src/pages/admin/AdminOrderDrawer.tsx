@@ -63,6 +63,7 @@ export function AdminOrderDrawer({
   const [overridePriceLimit, setOverridePriceLimit] = useState(false);
   const [retryNote, setRetryNote] = useState("");
   const [merchantVerifiedOrderNo, setMerchantVerifiedOrderNo] = useState("");
+  const [merchantVerifiedRecipientEmail, setMerchantVerifiedRecipientEmail] = useState("");
   const [retryConfirmOpen, setRetryConfirmOpen] = useState(false);
   const [retrying, setRetrying] = useState(false);
 
@@ -95,6 +96,8 @@ export function AdminOrderDrawer({
     setOverridePriceLimit(false);
     setRetryNote("");
     setMerchantVerifiedOrderNo("");
+    setMerchantVerifiedRecipientEmail("");
+    setRetryConfirmOpen(false);
     setAckNote("");
     setRevokeReason("买家退款或手动作废");
     if (code) {
@@ -246,18 +249,21 @@ export function AdminOrderDrawer({
   };
 
   const handleRetryConfirm = async () => {
+    if (retrying || !canRetry || !retryRecipientReady || detail?.code !== code) return;
     setRetrying(true);
     try {
       const updated = await retryAdminCode(token, code, {
         override_price_limit: overridePriceLimit,
         note: retryNote.trim() || undefined,
         merchant_verified_order_no: merchantVerifiedOrderNo.trim() || undefined,
+        merchant_verified_recipient_email: needsRecipientConfirmation ? verifiedRecipient : undefined,
       });
       setDetail(updated);
       setRetryConfirmOpen(false);
       setOverridePriceLimit(false);
       setRetryNote("");
       setMerchantVerifiedOrderNo("");
+      setMerchantVerifiedRecipientEmail("");
       onMutated();
       if (updated.upstream_order_code) {
         pushToast("已取得上游订单号", "success");
@@ -265,6 +271,11 @@ export function AdminOrderDrawer({
     } catch (caught) {
       if (caught instanceof ApiError && caught.status === 401) {
         onUnauthorized();
+        return;
+      }
+      if (caught instanceof ApiError && caught.errorCode === "MERCHANT_RECIPIENT_CONFIRMATION_REQUIRED") {
+        setRetryConfirmOpen(false);
+        pushToast(caught.message, "error");
         return;
       }
       void loadDetail();
@@ -309,6 +320,9 @@ export function AdminOrderDrawer({
     detail && detail.status === "waiting_fulfillment" && detail.upstream_order_code
   );
   const canRetry = Boolean(detail && detail.status === "needs_manual_review" && detail.idempotency_key && !detail.upstream_order_code);
+  const needsRecipientConfirmation = detail?.channel === "16688" && detail.product_type === "slot";
+  const verifiedRecipient = merchantVerifiedRecipientEmail.trim();
+  const retryRecipientReady = !needsRecipientConfirmation || Boolean(verifiedRecipient);
   const canRevoke = Boolean(
     detail && detail.status !== "completed" && detail.status !== "revoked" && detail.status !== "purchasing"
   );
@@ -854,7 +868,13 @@ export function AdminOrderDrawer({
                     )}
 
                     {canRetry && (
-                      <div className="inset-panel stack-sm">
+                      <form
+                        className="inset-panel stack-sm"
+                        onSubmit={(event) => {
+                          event.preventDefault();
+                          if (retryRecipientReady) setRetryConfirmOpen(true);
+                        }}
+                      >
                         <strong style={{ fontSize: 13.5 }}>重新向上游下单</strong>
                         {detail.channel === "16688" && (
                           <label className="stack-sm">
@@ -868,6 +888,30 @@ export function AdminOrderDrawer({
                             />
                             <small>请先在 16688 商家后台确认该订单已付款、兑换码和商品相符，且没有退款或投诉。</small>
                           </label>
+                        )}
+                        {needsRecipientConfirmation && (
+                          <div className="field-group">
+                            <label className="field-label" htmlFor={`${titleId}-retry-recipient`}>
+                              人工核对的收邀请邮箱（必填）
+                            </label>
+                            <input
+                              id={`${titleId}-retry-recipient`}
+                              name="merchant_verified_recipient_email"
+                              type="email"
+                              className="input mono"
+                              autoComplete="off"
+                              autoCapitalize="none"
+                              spellCheck={false}
+                              maxLength={254}
+                              required
+                              aria-describedby={`${titleId}-retry-recipient-hint`}
+                              value={merchantVerifiedRecipientEmail}
+                              onChange={(event) => setMerchantVerifiedRecipientEmail(event.target.value)}
+                            />
+                            <small id={`${titleId}-retry-recipient-hint`} className="field-hint">
+                              请先向买家核对实际收邀请的完整邮箱，再手动填入。系统只用它匹配原提货请求，不能在这里改邮箱或重复扣费。
+                            </small>
+                          </div>
                         )}
                         <label className={`check-card ${overridePriceLimit ? "is-checked" : ""}`}>
                           <input
@@ -890,16 +934,16 @@ export function AdminOrderDrawer({
                           onChange={(event) => setRetryNote(event.target.value)}
                         />
                         <button
-                          type="button"
+                          type="submit"
                           className="btn btn-warm btn-block"
-                          onClick={() => setRetryConfirmOpen(true)}
+                          disabled={!retryRecipientReady || retrying}
                         >
                           <CastoriceIcon name="retry" size={17} />
                           <span>
                             {overridePriceLimit ? "按当前进价放行并重下" : "重新向上游下单"}
                           </span>
                         </button>
-                      </div>
+                      </form>
                     )}
                   </section>
                 )}
@@ -984,7 +1028,7 @@ export function AdminOrderDrawer({
       )}
 
       <ConfirmDialog
-        open={retryConfirmOpen}
+        open={retryConfirmOpen && canRetry && detail?.code === code}
         title="确认重新向上游下单"
         confirmLabel={overridePriceLimit ? "确认放行并重下" : "确认重新下单"}
         busy={retrying}
@@ -999,6 +1043,9 @@ export function AdminOrderDrawer({
         </p>
         {merchantVerifiedOrderNo.trim() && (
           <p>确认你已在 16688 商家后台核验订单 <strong className="mono">{merchantVerifiedOrderNo.trim()}</strong>。</p>
+        )}
+        {needsRecipientConfirmation && (
+          <p>确认你已向买家核对收邀请邮箱 <strong className="mono">{verifiedRecipient}</strong>。系统会用它匹配原提货请求。</p>
         )}
       </ConfirmDialog>
 
