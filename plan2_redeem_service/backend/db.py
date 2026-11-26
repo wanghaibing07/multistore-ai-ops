@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import secrets
 import sqlite3
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, Optional
@@ -219,6 +219,15 @@ class Ledger:
                 (dedupe_key, now_iso()),
             )
             return result.rowcount == 1
+
+    def has_notification(self, dedupe_key: str) -> bool:
+        with closing(self.connect()) as c:
+            row = c.execute("SELECT 1 FROM notification_keys WHERE dedupe_key=?", (dedupe_key,)).fetchone()
+            return row is not None
+
+    def clear_notification(self, dedupe_key: str) -> None:
+        with self.transaction(immediate=True) as c:
+            c.execute("DELETE FROM notification_keys WHERE dedupe_key=?", (dedupe_key,))
 
     def list_codes(
         self,

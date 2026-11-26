@@ -38,6 +38,9 @@ from .telegram_forwarder import build_telegram_forwarder, sanitize_tg_error
 
 logger = logging.getLogger(__name__)
 
+CHANNEL16688_OPENAPI_PAUSED_KEY = "channel16688:restock-openapi-paused"
+CHANNEL16688_OPENAPI_PAUSED_RE = re.compile(r"暂停\s*openapi", re.IGNORECASE)
+
 EMAIL_RE = re.compile(
     r"^[A-Za-z0-9](?:[A-Za-z0-9._%+-]{0,62}[A-Za-z0-9])?@"
     r"(?:[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+"
@@ -2758,6 +2761,8 @@ class Service:
             total_pushed = 0
             errors: list[str] = list(sync_result.get("errors") or [])
             items: list[dict[str, Any]] = []
+            openapi_paused = False
+            checked_stock = False
 
             for rule in rules:
                 sku_key = rule["sku_key"]
@@ -2791,7 +2796,9 @@ class Service:
                     detail = str(exc) or type(exc).__name__
                     err_msg = f"{sku_key}({goods_no}) 查询库存失败: {detail}"
                     errors.append(err_msg)
-                    if not dry_check:
+                    if isinstance(exc, UpstreamError) and CHANNEL16688_OPENAPI_PAUSED_RE.search(detail):
+                        openapi_paused = True
+                    elif not dry_check:
                         self._channel16688_alert(
                             f"restock-stock:{sku_key}:{goods_no}:{hour_bucket}",
                             "16688 自动补卡查询库存失败（需人工排查）",
@@ -2834,6 +2841,7 @@ class Service:
                         }
                     )
                     continue
+                checked_stock = True
                 if current_qty > rule["min_stock"]:
                     items.append(
                         {
@@ -2925,6 +2933,18 @@ class Service:
                         "pushed_count": pushed_count,
                     }
                 )
+
+            if not dry_check and openapi_paused:
+                logger.warning("16688 OpenAPI is paused (restock trigger=%s)", trigger)
+                if not self.ledger.has_notification(CHANNEL16688_OPENAPI_PAUSED_KEY):
+                    sent = self._safe_send(
+                        "16688 暂停 OpenAPI，自动补卡查询受影响",
+                        "16688 报告已暂停 OpenAPI。定时任务会继续查询库存，受影响的商品在查询恢复后按原规则补卡。",
+                    )
+                    if sent:
+                        self.ledger.claim_notification(CHANNEL16688_OPENAPI_PAUSED_KEY)
+            elif not dry_check and checked_stock:
+                self.ledger.clear_notification(CHANNEL16688_OPENAPI_PAUSED_KEY)
 
             return {
                 "trigger": trigger,

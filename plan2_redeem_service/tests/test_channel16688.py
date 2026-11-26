@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -280,6 +281,79 @@ def test_channel16688_restock_handles_upstream_error_with_deduped_alert(tmp_path
         # Repeat in same hour dedupes alert email
         c.post("/api/v1/admin/channel16688/restock", headers=ADMIN, json={"dry_check": False, "sync_sold": False})
         assert len(sent) == 1
+
+
+def test_channel16688_restock_alerts_once_per_openapi_pause(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    paused_message = "系统长时间超负载，已影响平台稳定性，暂停OpenAPI"
+    now = datetime(2026, 1, 1, 10, 30, tzinfo=timezone.utc)
+
+    class RestockClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return now.astimezone(tz) if tz is not None else now.astimezone().replace(tzinfo=None)
+
+    class Pausable16688(DryRun16688):
+        paused = True
+
+        def stock_secret_list(self, goods_no, **kwargs):
+            if self.paused:
+                raise UpstreamError(502, paused_message, rejected=True)
+            return super().stock_secret_list(goods_no, **kwargs)
+
+    def restock_actions(client: TestClient) -> dict[str, str]:
+        response = client.post(
+            "/api/v1/admin/channel16688/restock",
+            headers=ADMIN,
+            json={"dry_check": False, "sync_sold": False},
+        )
+        assert response.status_code == 200
+        return {item["goods_no"]: item["action"] for item in response.json()["items"]}
+
+    monkeypatch.setattr("backend.service.datetime", RestockClock)
+    goods_by_sku = {"ultra_shared_slot": "G10000001", "ultra_exclusive_admin": "G10000002"}
+    rules = [
+        {"sku_key": sku_key, "goods_no": goods_no, "min_stock": 1, "target_stock": 2, "enabled": True}
+        for sku_key, goods_no in goods_by_sku.items()
+    ]
+    channel = Pausable16688()
+    for goods_no in goods_by_sku.values():
+        channel.stock_secret_add(goods_no, "TEST-CARD-1\n\nTEST-CARD-2")
+    app, _, _, _, mailer = _make_app(tmp_path, rules=rules, channel=channel)
+    sent = []
+    attempts = 0
+
+    def send(subject, body, attachment=None):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("simulated mail transport failure")
+        sent.append((subject, body))
+
+    mailer.send = send
+
+    stock_errors = dict.fromkeys(goods_by_sku.values(), "stock_error")
+    with TestClient(app) as client:
+        assert restock_actions(client) == stock_errors
+        assert sent == []
+        assert restock_actions(client) == stock_errors
+        assert len(sent) == 1
+
+    now += timedelta(hours=1)
+    restarted_app, _, _, _, restarted_mailer = _make_app(tmp_path, rules=rules, channel=channel)
+    restarted_mailer.send = send
+    with TestClient(restarted_app) as client:
+        assert restock_actions(client) == stock_errors
+        assert len(sent) == 1
+
+        channel.paused = False
+        assert restock_actions(client) == dict.fromkeys(goods_by_sku.values(), "sufficient")
+        assert len(sent) == 1
+
+        channel.paused = True
+        assert restock_actions(client) == stock_errors
+        assert len(sent) == 2
 
 
 def test_redeem_16688_unknown_verify_failure_and_retry_rechecks_verify_order(tmp_path: Path):
