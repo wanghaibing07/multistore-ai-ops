@@ -688,3 +688,86 @@ class Ledger:
         with self.connect() as c:
             return int(c.execute("SELECT COUNT(*) FROM agiso_events").fetchone()[0])
 
+    def list_reconciliation_rows(
+        self,
+        *,
+        start_date: str | None = None,
+        end_date: str | None = None,
+        channel: str | None = None,
+    ) -> list[dict[str, Any]]:
+        clauses = ["COALESCE(c.upstream_order_code, '') <> ''"]
+        params: list[Any] = []
+        channel_val = (channel or "").strip()
+        if channel_val:
+            channel_low = channel_val.lower()
+            if channel_low in ("qianniu", "taobao", "千牛", "淘宝"):
+                channel_val = "taobao"
+            elif channel_low in ("16688", "16688_store", "16688自营", "16688卖货"):
+                channel_val = "16688"
+            clauses.append("c.channel = ?")
+            params.append(channel_val)
+        start_val = (start_date or "").strip()
+        if start_val:
+            clauses.append("substr(COALESCE(NULLIF(c.submitted_at, ''), c.created_at), 1, 10) >= ?")
+            params.append(start_val)
+        end_val = (end_date or "").strip()
+        if end_val:
+            clauses.append("substr(COALESCE(NULLIF(c.submitted_at, ''), c.created_at), 1, 10) <= ?")
+            params.append(end_val)
+        sql = (
+            "SELECT "
+            "c.code, "
+            "c.sku_key, "
+            "s.title AS sku_title, "
+            "s.product_type AS product_type, "
+            "c.channel, "
+            "c.external_order_id, "
+            "ad.tid AS agiso_tid, "
+            "ad.oid AS agiso_oid, "
+            "c.goods_no, "
+            "c.upstream_order_code, "
+            "c.upstream_status, "
+            "c.status, "
+            "c.cost_usd, "
+            "c.submitted_at, "
+            "c.completed_at, "
+            "c.created_at, "
+            "c.updated_at "
+            "FROM codes c "
+            "LEFT JOIN sku_settings s ON s.sku_key = c.sku_key "
+            "LEFT JOIN agiso_deliveries ad ON ad.code = c.code "
+            f"WHERE {' AND '.join(clauses)} "
+            "ORDER BY COALESCE(NULLIF(c.submitted_at, ''), c.created_at) DESC, c.code DESC"
+        )
+        with closing(self.connect()) as conn:
+            rows = conn.execute(sql, tuple(params)).fetchall()
+        items: list[dict[str, Any]] = []
+        for row in rows:
+            sku_title = (row["sku_title"] or "").strip() or row["sku_key"]
+            external_order_id = (row["external_order_id"] or "").strip() or (row["agiso_tid"] or "").strip()
+            items.append(
+                {
+                    "code": row["code"],
+                    "sku_key": row["sku_key"],
+                    "sku_title": sku_title,
+                    "product_type": row["product_type"] or "",
+                    "channel": row["channel"],
+                    "external_order_id": external_order_id,
+                    "agiso_tid": (row["agiso_tid"] or "").strip(),
+                    "agiso_oid": (row["agiso_oid"] or "").strip(),
+                    "goods_no": (row["goods_no"] or "").strip(),
+                    "upstream_order_code": row["upstream_order_code"],
+                    "upstream_status": (row["upstream_status"] or "").strip(),
+                    "status": row["status"],
+                    "cost_usd": row["cost_usd"],
+                    "quantity": 1,
+                    "source": "tg_fatbunny",
+                    "seller": "FatBunny Hub (方案二)",
+                    "submitted_at": (row["submitted_at"] or "").strip(),
+                    "completed_at": (row["completed_at"] or "").strip(),
+                    "created_at": (row["created_at"] or "").strip(),
+                    "updated_at": (row["updated_at"] or "").strip(),
+                }
+            )
+        return items
+

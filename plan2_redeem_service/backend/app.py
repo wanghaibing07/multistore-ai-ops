@@ -2,15 +2,18 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
-from datetime import datetime, timezone
+import csv
+from datetime import date, datetime, timezone
+import io
 import json
 import logging
 from pathlib import Path
+import re
 import time
 from typing import Any, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse
+from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
 
@@ -56,6 +59,38 @@ from .service import (
 
 
 logger = logging.getLogger(__name__)
+
+RECONCILIATION_CSV_COLUMNS = [
+    "采购单号",
+    "来源",
+    "商品名称",
+    "商家名称",
+    "数量",
+    "原币币种",
+    "原币金额",
+    "付款时间",
+    "状态",
+    "关联渠道",
+    "关联销售单号",
+    "关联子单号",
+    "兑换码",
+    "SKU",
+]
+
+
+def _parse_iso_date_param(raw: Optional[str], field_name: str) -> Optional[str]:
+    if raw is None:
+        return None
+    trimmed = raw.strip()
+    if not trimmed:
+        return None
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", trimmed):
+        raise ValueError(f"{field_name} 必须为 YYYY-MM-DD 格式")
+    try:
+        date.fromisoformat(trimmed)
+    except ValueError as exc:
+        raise ValueError(f"{field_name} 不是合法日期") from exc
+    return trimmed
 
 
 def error(code: str, message: str, status: int) -> JSONResponse:
@@ -867,6 +902,78 @@ def create_app(
             return error("CHANNEL_16688_TIMEOUT", str(exc) or "16688 自动补卡超时", 504)
         except UpstreamError as exc:
             return error("CHANNEL_16688_ERROR", exc.message or "16688 自动补卡失败", 503)
+
+    @app.get("/api/v1/admin/reconciliation-export", dependencies=[Depends(require_admin)])
+    def admin_reconciliation_export(
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        channel: Optional[str] = None,
+        format: str = "json",
+    ) -> Any:
+        try:
+            parsed_start = _parse_iso_date_param(start_date, "start_date")
+            parsed_end = _parse_iso_date_param(end_date, "end_date")
+        except ValueError as exc:
+            return error("INVALID_DATE", str(exc), 400)
+
+        export_format = (format or "").strip().lower()
+        if export_format not in ("json", "csv"):
+            return error("INVALID_FORMAT", "format 仅支持 json 或 csv", 400)
+
+        items = ledger.list_reconciliation_rows(
+            start_date=parsed_start,
+            end_date=parsed_end,
+            channel=channel,
+        )
+        if export_format == "json":
+            return {"source": "tg_fatbunny", "count": len(items), "items": items}
+
+        buf = io.StringIO()
+        buf.write("\ufeff")
+        writer = csv.DictWriter(buf, fieldnames=RECONCILIATION_CSV_COLUMNS)
+        writer.writeheader()
+
+        def _csv_safe(value: Any, *, allow_numeric_sign: bool = False) -> str:
+            text = "" if value is None else str(value)
+            if not text:
+                return ""
+            if allow_numeric_sign:
+                stripped = text.lstrip()
+                if stripped and stripped[0] in ("+", "-"):
+                    try:
+                        float(stripped)
+                        return text
+                    except ValueError:
+                        pass
+            if text[0] in ("=", "+", "-", "@", "\t", "\r"):
+                return f"'{text}"
+            return text
+
+        for item in items:
+            cost_usd = item["cost_usd"]
+            writer.writerow(
+                {
+                    "采购单号": _csv_safe(item["upstream_order_code"]),
+                    "来源": _csv_safe(item["source"]),
+                    "商品名称": _csv_safe(item["sku_title"]),
+                    "商家名称": _csv_safe(item["seller"]),
+                    "数量": _csv_safe(item["quantity"], allow_numeric_sign=True),
+                    "原币币种": "USD",
+                    "原币金额": _csv_safe(f"{cost_usd:.4f}" if cost_usd is not None else "", allow_numeric_sign=True),
+                    "付款时间": _csv_safe(item["submitted_at"] or item["created_at"]),
+                    "状态": _csv_safe(item["status"]),
+                    "关联渠道": _csv_safe(item["channel"]),
+                    "关联销售单号": _csv_safe(item["external_order_id"]),
+                    "关联子单号": _csv_safe(item["agiso_oid"]),
+                    "兑换码": _csv_safe(item["code"]),
+                    "SKU": _csv_safe(item["sku_key"]),
+                }
+            )
+        return Response(
+            content=buf.getvalue(),
+            media_type="text/csv; charset=utf-8",
+            headers={"Content-Disposition": 'attachment; filename="plan2-reconciliation.csv"'},
+        )
 
     @app.get("/api/{path:path}")
     def api_not_found(path: str) -> JSONResponse:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import concurrent.futures
 from contextlib import closing
+import csv
 import hashlib
 import hmac
 import json
@@ -1550,4 +1551,262 @@ def test_admin_codes_sorting_and_all_excludes_in_stock(components):
         # Verify revoked tab returns revoked codes sorted by usage/revoke recency
         revoked_resp = c.get("/api/v1/admin/codes", headers=ADMIN, params={"status": "revoked"}).json()
         assert [item["code"] for item in revoked_resp["items"]] == [revoked_unused]
+
+
+def test_admin_reconciliation_export_auth_filters_sanitization_and_csv(components):
+    app, _, _, _, _ = components
+    ledger = app.state.ledger
+
+    with client(app) as c:
+        assert c.get("/api/v1/admin/reconciliation-export").status_code == 401
+        assert c.get("/api/v1/admin/reconciliation-export", params={"format": "csv"}).status_code == 401
+
+        assert c.get("/api/v1/admin/reconciliation-export", headers=ADMIN, params={"start_date": "2026-11-3"}).status_code == 400
+        assert c.get("/api/v1/admin/reconciliation-export", headers=ADMIN, params={"end_date": "2026-02-30"}).status_code == 400
+        assert c.get("/api/v1/admin/reconciliation-export", headers=ADMIN, params={"format": "xml"}).status_code == 400
+
+        code_tb = issue(c, sku="ultra_shared_slot", channel="taobao", external_order_id="")
+        code_16688 = issue(c, sku="ultra_exclusive_admin", channel="16688", external_order_id="EXT-16688-01", goods_no="G200")
+        code_unused = issue(c, sku="ultra_shared_slot", channel="taobao", external_order_id="EXT-UNUSED-01")
+        code_fallback = issue(c, sku="ultra_shared_slot", channel="taobao", external_order_id="EXT-TB-FALLBACK-01")
+
+        with ledger.transaction(immediate=True) as conn:
+            conn.execute(
+                """
+                UPDATE codes
+                SET status='completed',
+                    buyer_email='secret.buyer@gmail.com',
+                    buyer_email_masked='se***@gmail.com',
+                    request_payload_json='{"buyer_email":"secret.buyer@gmail.com"}',
+                    upstream_order_code='CB-PLAN2-TB-01',
+                    upstream_status='completed',
+                    cost_usd=12.5,
+                    delivery_json='{"email":"delivered_acct@example.com","password":"TopSecretPwd_999"}',
+                    warranty_json='{"note":"private_warranty_secret"}',
+                    submitted_at='2026-11-24T10:30:00+08:00',
+                    completed_at='2026-11-24T10:35:00+08:00',
+                    created_at='2026-11-20T09:00:00+08:00',
+                    updated_at='2026-11-24T10:35:00+08:00'
+                WHERE code=?
+                """,
+                (code_tb,),
+            )
+            conn.execute(
+                """
+                INSERT INTO agiso_deliveries(
+                    delivery_key, tid, oid, seq, num_iid, sku_id, sku_key, code,
+                    buyer_nick, delivery_status, result_created, card_sent, ww_sent, dummy_sent,
+                    last_error, created_at, updated_at
+                ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                """,
+                (
+                    "TB-TID-9001:TB-OID-9001:1",
+                    "TB-TID-9001",
+                    "TB-OID-9001",
+                    1,
+                    "1001",
+                    "2001",
+                    "ultra_shared_slot",
+                    code_tb,
+                    "tb_secret_buyer_nick_888",
+                    "delivered",
+                    1,
+                    1,
+                    1,
+                    1,
+                    None,
+                    "2026-11-24T10:00:00+08:00",
+                    "2026-11-24T10:05:00+08:00",
+                ),
+            )
+            conn.execute(
+                """
+                UPDATE codes
+                SET status='waiting_fulfillment',
+                    buyer_email='other.secret@gmail.com',
+                    buyer_email_masked='ot***@gmail.com',
+                    upstream_order_code='CB-PLAN2-16688-02',
+                    upstream_status='processing',
+                    cost_usd=62.25,
+                    delivery_json='{"password":"AnotherSecretPassword_777"}',
+                    submitted_at='2026-11-25T15:00:00+08:00',
+                    completed_at=NULL,
+                    created_at='2026-11-25T14:00:00+08:00',
+                    updated_at='2026-11-25T15:05:00+08:00'
+                WHERE code=?
+                """,
+                (code_16688,),
+            )
+            conn.execute(
+                """
+                UPDATE codes
+                SET sku_key='orphan_sku_key',
+                    status='needs_manual_review',
+                    upstream_order_code='CB-PLAN2-MAN-03',
+                    upstream_status='cancelled',
+                    cost_usd=NULL,
+                    submitted_at='',
+                    completed_at='',
+                    created_at='2026-11-22T08:15:00+08:00',
+                    updated_at='2026-11-22T08:20:00+08:00'
+                WHERE code=?
+                """,
+                (code_fallback,),
+            )
+
+        json_resp = c.get("/api/v1/admin/reconciliation-export", headers=ADMIN)
+        assert json_resp.status_code == 200
+        raw_json_text = json_resp.text
+        payload = json_resp.json()
+        assert payload["source"] == "tg_fatbunny"
+        assert payload["count"] == 3
+        assert [item["code"] for item in payload["items"]] == [code_16688, code_tb, code_fallback]
+        assert code_unused not in [item["code"] for item in payload["items"]]
+
+        tb_item = payload["items"][1]
+        assert tb_item == {
+            "code": code_tb,
+            "sku_key": "ultra_shared_slot",
+            "sku_title": SKUS["ultra_shared_slot"]["title"],
+            "product_type": SKUS["ultra_shared_slot"]["product_type"],
+            "channel": "taobao",
+            "external_order_id": "TB-TID-9001",
+            "agiso_tid": "TB-TID-9001",
+            "agiso_oid": "TB-OID-9001",
+            "goods_no": "",
+            "upstream_order_code": "CB-PLAN2-TB-01",
+            "upstream_status": "completed",
+            "status": "completed",
+            "cost_usd": 12.5,
+            "quantity": 1,
+            "source": "tg_fatbunny",
+            "seller": "FatBunny Hub (方案二)",
+            "submitted_at": "2026-11-24T10:30:00+08:00",
+            "completed_at": "2026-11-24T10:35:00+08:00",
+            "created_at": "2026-11-20T09:00:00+08:00",
+            "updated_at": "2026-11-24T10:35:00+08:00",
+        }
+        fallback_item = payload["items"][2]
+        assert fallback_item["sku_title"] == "orphan_sku_key"
+        assert fallback_item["product_type"] == ""
+        assert fallback_item["cost_usd"] is None
+
+        forbidden_tokens = [
+            "buyer_email",
+            "buyer_email_masked",
+            "delivery_json",
+            "request_payload_json",
+            "warranty_json",
+            "buyer_nick",
+            "secret.buyer@gmail.com",
+            "se***@gmail.com",
+            "other.secret@gmail.com",
+            "ot***@gmail.com",
+            "delivered_acct@example.com",
+            "TopSecretPwd_999",
+            "AnotherSecretPassword_777",
+            "private_warranty_secret",
+            "tb_secret_buyer_nick_888",
+        ]
+        for token in forbidden_tokens:
+            assert token not in raw_json_text
+
+        channel_resp = c.get("/api/v1/admin/reconciliation-export", headers=ADMIN, params={"channel": "16688"}).json()
+        assert [item["code"] for item in channel_resp["items"]] == [code_16688]
+        assert channel_resp["count"] == 1
+        taobao_resp = c.get("/api/v1/admin/reconciliation-export", headers=ADMIN, params={"channel": "taobao"}).json()
+        assert [item["code"] for item in taobao_resp["items"]] == [code_tb, code_fallback]
+        assert taobao_resp["count"] == 2
+        qianniu_resp = c.get("/api/v1/admin/reconciliation-export", headers=ADMIN, params={"channel": "qianniu"}).json()
+        assert [item["code"] for item in qianniu_resp["items"]] == [code_tb, code_fallback]
+        assert qianniu_resp["count"] == 2
+        zh_qianniu_resp = c.get("/api/v1/admin/reconciliation-export", headers=ADMIN, params={"channel": "千牛"}).json()
+        assert [item["code"] for item in zh_qianniu_resp["items"]] == [code_tb, code_fallback]
+        store_16688_resp = c.get("/api/v1/admin/reconciliation-export", headers=ADMIN, params={"channel": "16688_store"}).json()
+        assert [item["code"] for item in store_16688_resp["items"]] == [code_16688]
+
+        date_resp = c.get(
+            "/api/v1/admin/reconciliation-export",
+            headers=ADMIN,
+            params={"start_date": "2026-11-22", "end_date": "2026-11-24"},
+        ).json()
+        assert [item["code"] for item in date_resp["items"]] == [code_tb, code_fallback]
+        assert date_resp["count"] == 2
+
+        csv_resp = c.get("/api/v1/admin/reconciliation-export", headers=ADMIN, params={"format": "csv"})
+        assert csv_resp.status_code == 200
+        assert "text/csv" in csv_resp.headers["content-type"]
+        assert "charset=utf-8" in csv_resp.headers["content-type"].lower()
+        assert csv_resp.headers["content-disposition"] == 'attachment; filename="plan2-reconciliation.csv"'
+        assert csv_resp.content.startswith(b"\xef\xbb\xbf")
+
+        csv_text = csv_resp.content.decode("utf-8-sig")
+        for token in forbidden_tokens:
+            assert token not in csv_text
+
+        rows = list(csv.DictReader(csv_text.splitlines()))
+        assert list(rows[0].keys()) == [
+            "采购单号",
+            "来源",
+            "商品名称",
+            "商家名称",
+            "数量",
+            "原币币种",
+            "原币金额",
+            "付款时间",
+            "状态",
+            "关联渠道",
+            "关联销售单号",
+            "关联子单号",
+            "兑换码",
+            "SKU",
+        ]
+        assert len(rows) == 3
+        assert rows[0]["采购单号"] == "CB-PLAN2-16688-02"
+        assert rows[0]["原币币种"] == "USD"
+        assert rows[0]["原币金额"] == "62.2500"
+        assert rows[0]["付款时间"] == "2026-11-25T15:00:00+08:00"
+        assert rows[0]["关联销售单号"] == "EXT-16688-01"
+        assert rows[0]["关联子单号"] == ""
+
+        assert rows[1]["采购单号"] == "CB-PLAN2-TB-01"
+        assert rows[1]["来源"] == "tg_fatbunny"
+        assert rows[1]["商品名称"] == SKUS["ultra_shared_slot"]["title"]
+        assert rows[1]["商家名称"] == "FatBunny Hub (方案二)"
+        assert rows[1]["数量"] == "1"
+        assert rows[1]["原币币种"] == "USD"
+        assert rows[1]["原币金额"] == "12.5000"
+        assert rows[1]["付款时间"] == "2026-11-24T10:30:00+08:00"
+        assert rows[1]["状态"] == "completed"
+        assert rows[1]["关联渠道"] == "taobao"
+        assert rows[1]["关联销售单号"] == "TB-TID-9001"
+        assert rows[1]["关联子单号"] == "TB-OID-9001"
+        assert rows[1]["兑换码"] == code_tb
+        assert rows[1]["SKU"] == "ultra_shared_slot"
+
+        assert rows[2]["采购单号"] == "CB-PLAN2-MAN-03"
+        assert rows[2]["商品名称"] == "orphan_sku_key"
+        assert rows[2]["原币金额"] == ""
+        assert rows[2]["付款时间"] == "2026-11-22T08:15:00+08:00"
+
+        # Formula injection escaping in CSV export
+        code_formula = issue(c, sku="ultra_shared_slot", channel="taobao", external_order_id="=SUM(A1:A2)")
+        with ledger.transaction(immediate=True) as conn:
+            conn.execute(
+                """
+                UPDATE codes
+                SET status = 'completed',
+                    upstream_order_code = '+CMD|calc!A0',
+                    cost_usd = 9.50,
+                    submitted_at = '2026-11-26T10:00:00+08:00'
+                WHERE code = ?
+                """,
+                (code_formula,),
+            )
+        csv_formula = c.get("/api/v1/admin/reconciliation-export", headers=ADMIN, params={"format": "csv"}).content.decode("utf-8-sig")
+        formula_rows = list(csv.DictReader(csv_formula.splitlines()))
+        assert formula_rows[0]["采购单号"] == "'+CMD|calc!A0"
+        assert formula_rows[0]["关联销售单号"] == "'=SUM(A1:A2)"
+        assert formula_rows[0]["原币金额"] == "9.5000"
+        assert formula_rows[0]["数量"] == "1"
 
