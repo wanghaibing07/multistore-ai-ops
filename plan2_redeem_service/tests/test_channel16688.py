@@ -54,6 +54,16 @@ def test_parse_env_channel16688_restock_rules_validation():
     assert rules[1]["goods_no"] == "G10000002"
     assert rules[1]["max_push"] == 20
 
+    multi = parse_env_channel16688_restock_rules(
+        json.dumps(
+            [
+                {"sku_key": "ultra_shared_slot", "goods_no": "G10000001", "min_stock": 5, "target_stock": 15},
+                {"sku_key": "ultra_shared_slot", "goods_no": "G10000003", "min_stock": 3, "target_stock": 10},
+            ]
+        )
+    )
+    assert [item["goods_no"] for item in multi] == ["G10000001", "G10000003"]
+
     with pytest.raises(ValueError):
         parse_env_channel16688_restock_rules('{"sku_key":"ultra_shared_slot"}')
     with pytest.raises(ValueError):
@@ -365,3 +375,83 @@ def test_channel16688_sold_sync_reports_truncated_and_handles_blank_or_bad_qty(t
         restock_bad = c.post("/api/v1/admin/channel16688/restock", headers=ADMIN, json={"dry_check": True, "sync_sold": False}).json()
         assert restock_bad["items"][0]["action"] == "stock_error"
         assert restock_bad["total_pushed"] == 0
+
+
+def test_channel16688_multi_goods_per_sku_restock_sync_and_redeem(tmp_path: Path):
+    class RecordingMultiGoods16688(DryRun16688):
+        def __init__(self):
+            super().__init__()
+            self.verify_calls: list[tuple[str, str]] = []
+
+        def verify_order(self, code: str, goods_no: str) -> dict:
+            self.verify_calls.append((code, goods_no))
+            for item in self.stock.get(goods_no, []):
+                if code in str(item.get("secret_code") or "") and int(item.get("status", -1)) == 2 and item.get("trade_no"):
+                    return {"ok": True, "trade_no": str(item["trade_no"])}
+            return {"ok": False, "error": "ORDER_NOT_ELIGIBLE"}
+
+    rules = [
+        {"sku_key": "ultra_shared_slot", "goods_no": "G10000001", "min_stock": 2, "target_stock": 4, "max_push": 10, "enabled": True},
+        {"sku_key": "ultra_shared_slot", "goods_no": "G10000003", "min_stock": 2, "target_stock": 4, "max_push": 10, "enabled": True},
+        {"sku_key": "ultra_shared_slot", "min_stock": 2, "target_stock": 4, "max_push": 10, "enabled": True},
+        {"sku_key": "ultra_exclusive_admin", "goods_no": "G10000002", "min_stock": 1, "target_stock": 2, "max_push": 10, "enabled": True},
+    ]
+    chan = RecordingMultiGoods16688()
+    app, _, canboso, _, _ = _make_app(tmp_path, rules=rules, enabled=True, channel=chan)
+    with TestClient(app) as c:
+        assert c.patch("/api/v1/admin/settings/skus/ultra_shared_slot", headers=ADMIN, json={"max_cost_usd": 16.0, "goods_no": "G10000001"}).status_code == 200
+        assert c.patch("/api/v1/admin/settings/skus/ultra_exclusive_admin", headers=ADMIN, json={"max_cost_usd": 65.0, "goods_no": "G10000002"}).status_code == 200
+
+        # Duplicate default rule resolving to G10000001 is deduplicated cleanly
+        active_rules = app.state.service.channel16688_restock_rules(enabled_only=True)
+        assert [rule["goods_no"] for rule in active_rules] == ["G10000001", "G10000003", "G10000002"]
+
+        # Initial restock pushes cards to all 3 goods independently
+        first = c.post("/api/v1/admin/channel16688/restock", headers=ADMIN, json={"dry_check": False})
+        assert first.status_code == 200
+        first_body = first.json()
+        assert first_body["checked"] == 3
+        assert first_body["restocked"] == 3
+        assert first_body["total_pushed"] == 10
+        assert len(chan.stock["G10000001"]) == 4
+        assert len(chan.stock["G10000003"]) == 4
+        assert len(chan.stock["G10000002"]) == 2
+
+        # Simulate 2 sold cards on secondary goods G10000003 (remaining=2 <= min_stock=2)
+        chan.stock["G10000003"][0]["status"] = 2
+        chan.stock["G10000003"][0]["trade_no"] = "T-SEC-001"
+        chan.stock["G10000003"][1]["status"] = 2
+        chan.stock["G10000003"][1]["trade_no"] = "T-SEC-002"
+
+        # Next restock syncs sold trade_nos on G10000003 and tops up only G10000003
+        second = c.post("/api/v1/admin/channel16688/restock", headers=ADMIN, json={"dry_check": False})
+        assert second.status_code == 200
+        second_body = second.json()
+        assert second_body["sync_sold"]["bound"] == 2
+        items_by_goods = {item["goods_no"]: item for item in second_body["items"]}
+        assert items_by_goods["G10000001"]["action"] == "sufficient"
+        assert items_by_goods["G10000003"]["action"] == "restocked"
+        assert items_by_goods["G10000003"]["pushed_count"] == 2
+        assert items_by_goods["G10000003"]["after_qty"] == 4
+        assert items_by_goods["G10000002"]["action"] == "sufficient"
+
+        # Stock endpoint reports per-goods_no local counts cleanly
+        stock_body = c.get("/api/v1/admin/channel16688/stock?sku_keys=ultra_shared_slot", headers=ADMIN).json()
+        stock_by_goods = {item["goods_no"]: item for item in stock_body["items"]}
+        assert set(stock_by_goods.keys()) == {"G10000001", "G10000003"}
+        assert stock_by_goods["G10000001"]["local_in_stock_16688"] == 4
+        assert stock_by_goods["G10000001"]["local_dispatched_unused_16688"] == 0
+        assert stock_by_goods["G10000003"]["local_in_stock_16688"] == 4
+        assert stock_by_goods["G10000003"]["local_dispatched_unused_16688"] == 2
+
+        # Redeeming a sold code from secondary goods G10000003 verifies against G10000003
+        sold_secret = str(chan.stock["G10000003"][0]["secret_code"])
+        sold_code = sold_secret.rsplit("兑换码：", 1)[-1].strip()
+        redeem_res = c.post(
+            f"/api/v1/public/codes/{sold_code}/redeem",
+            json={"buyer_email": "buyer@gmail.com", "buyer_email_confirm": "buyer@gmail.com", "preflight_confirmed": True},
+        )
+        assert redeem_res.status_code == 200
+        assert redeem_res.json()["status"] == "waiting_fulfillment"
+        assert chan.verify_calls == [(sold_code, "G10000003")]
+        assert canboso.charge_count == 1

@@ -2499,6 +2499,7 @@ class Service:
             logger.warning("invalid PLAN2_CHANNEL16688_RESTOCK_RULES_JSON: %s", exc)
             return []
         valid: list[dict[str, Any]] = []
+        seen_resolved_goods: set[str] = set()
         for rule in rules:
             sku_key = rule["sku_key"]
             if sku_key not in SKUS:
@@ -2508,6 +2509,15 @@ class Service:
                 continue
             sku_row = self.ledger.get_sku(sku_key) or {}
             resolved_goods = (rule.get("goods_no") or "").strip() or (sku_row.get("goods_no") or "").strip()
+            if resolved_goods:
+                if resolved_goods in seen_resolved_goods:
+                    logger.warning(
+                        "ignoring duplicate resolved 16688 restock rule sku_key=%s goods_no=%s",
+                        sku_key,
+                        resolved_goods,
+                    )
+                    continue
+                seen_resolved_goods.add(resolved_goods)
             valid.append({**rule, "goods_no": resolved_goods})
         return valid
 
@@ -2670,6 +2680,8 @@ class Service:
             planned_push = 0
             if stock_found and current_qty is not None and rule["enabled"] and current_qty <= rule["min_stock"]:
                 planned_push = min(max(0, rule["target_stock"] - current_qty), rule["max_push"])
+            goods_clause = " AND goods_no=?" if goods_no else ""
+            count_params: tuple[Any, ...] = (sku_key, goods_no) if goods_no else (sku_key,)
             items.append(
                 {
                     "sku_key": sku_key,
@@ -2687,16 +2699,16 @@ class Service:
                     "planned_push": planned_push,
                     "error": item_error,
                     "local_unused_16688": self._count(
-                        "sku_key=? AND channel='16688' AND status='unused'",
-                        (sku_key,),
+                        f"sku_key=?{goods_clause} AND channel='16688' AND status='unused'",
+                        count_params,
                     ),
                     "local_in_stock_16688": self._count(
-                        f"sku_key=? AND channel='16688' AND {IN_STOCK_SQL}",
-                        (sku_key,),
+                        f"sku_key=?{goods_clause} AND channel='16688' AND {IN_STOCK_SQL}",
+                        count_params,
                     ),
                     "local_dispatched_unused_16688": self._count(
-                        f"sku_key=? AND channel='16688' AND {DISPATCHED_UNUSED_SQL}",
-                        (sku_key,),
+                        f"sku_key=?{goods_clause} AND channel='16688' AND {DISPATCHED_UNUSED_SQL}",
+                        count_params,
                     ),
                 }
             )
@@ -2734,7 +2746,7 @@ class Service:
                 }
 
             hour_bucket = datetime.now(timezone.utc).strftime("%Y%m%d%H")
-            target_skus = [rule["sku_key"] for rule in rules]
+            target_skus = list(dict.fromkeys(rule["sku_key"] for rule in rules))
             if not sync_sold:
                 sync_result: dict[str, Any] = {"skipped": True, "reason": "disabled"}
             elif dry_check:
@@ -2781,7 +2793,7 @@ class Service:
                     errors.append(err_msg)
                     if not dry_check:
                         self._channel16688_alert(
-                            f"restock-stock:{sku_key}:{hour_bucket}",
+                            f"restock-stock:{sku_key}:{goods_no}:{hour_bucket}",
                             "16688 自动补卡查询库存失败（需人工排查）",
                             f"触发来源 {trigger} 查询 {sku_key}（goods_no={goods_no}）16688 库存失败：{detail}",
                         )
@@ -2805,7 +2817,7 @@ class Service:
                     errors.append(err_msg)
                     if not dry_check:
                         self._channel16688_alert(
-                            f"restock-stock:{sku_key}:{hour_bucket}",
+                            f"restock-stock:{sku_key}:{goods_no}:{hour_bucket}",
                             "16688 自动补卡查询库存失败（需人工排查）",
                             f"触发来源 {trigger} 查询 {sku_key}（goods_no={goods_no}）16688 库存返回异常数据。",
                         )
@@ -2872,14 +2884,14 @@ class Service:
                         "16688",
                         needed,
                         goods_no,
-                        f"auto-restock-{trigger}-{sku_key}",
+                        f"auto-restock-{trigger}-{sku_key}-{goods_no}",
                     )
                 except (UpstreamTimeout, UpstreamError, ValueError) as exc:
                     detail = str(exc) or type(exc).__name__
                     err_msg = f"{sku_key}({goods_no}) 补卡失败: {detail}"
                     errors.append(err_msg)
                     self._channel16688_alert(
-                        f"restock-push:{sku_key}:{hour_bucket}",
+                        f"restock-push:{sku_key}:{goods_no}:{hour_bucket}",
                         "16688 自动补卡导入失败（需人工处理）",
                         f"触发来源 {trigger} 为 {sku_key}（goods_no={goods_no}，当前库存 {current_qty}）自动补发 {needed} 张卡密失败：{detail}",
                     )

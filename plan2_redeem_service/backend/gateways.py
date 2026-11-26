@@ -336,7 +336,7 @@ def parse_env_channel16688_restock_rules(raw_json: str) -> list[dict[str, Any]]:
     if not isinstance(parsed, list):
         raise ValueError("PLAN2_CHANNEL16688_RESTOCK_RULES_JSON must be a JSON array")
     normalized: list[dict[str, Any]] = []
-    seen_skus: set[str] = set()
+    seen_default_skus: set[str] = set()
     seen_goods: set[str] = set()
     for idx, entry in enumerate(parsed):
         if not isinstance(entry, dict):
@@ -344,14 +344,15 @@ def parse_env_channel16688_restock_rules(raw_json: str) -> list[dict[str, Any]]:
         sku_key = str(entry.get("sku_key") or "").strip()
         if not sku_key:
             raise ValueError(f"16688 restock rule at index {idx} requires sku_key")
-        if sku_key in seen_skus:
-            raise ValueError(f"16688 restock rule at index {idx} has duplicate sku_key: {sku_key}")
-        seen_skus.add(sku_key)
         goods_no = str(entry.get("goods_no") or "").strip()
         if goods_no:
             if goods_no in seen_goods:
                 raise ValueError(f"16688 restock rule at index {idx} has duplicate goods_no: {goods_no}")
             seen_goods.add(goods_no)
+        else:
+            if sku_key in seen_default_skus:
+                raise ValueError(f"16688 restock rule at index {idx} has duplicate default sku_key: {sku_key}")
+            seen_default_skus.add(sku_key)
         min_stock = _parse_rule_int(entry, "min_stock", default=0, minimum=0, idx=idx)
         target_stock = _parse_rule_int(entry, "target_stock", minimum=max(1, min_stock), idx=idx)
         max_push = _parse_rule_int(entry, "max_push", default=20, minimum=1, maximum=500, idx=idx)
