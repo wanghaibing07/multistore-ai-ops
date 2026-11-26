@@ -200,7 +200,6 @@ export function HomePage() {
                       aria-invalid={Boolean(error) || undefined}
                       aria-describedby={error ? "redeem-code-error" : undefined}
                       className={`zzz-input mono ${error ? "is-error" : ""}`}
-                      placeholder="U20S-8K3M-9P2Q 或直接粘贴链接"
                       value={rawInput}
                       onFocus={() => setInputFocused(true)}
                       onBlur={() => setInputFocused(false)}

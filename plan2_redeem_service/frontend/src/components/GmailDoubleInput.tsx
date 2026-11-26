@@ -19,7 +19,7 @@ export function GmailDoubleInput({
   onEmailChange,
   primaryLabel = "你的邮箱",
   warningText = "提交就占名额，填错或受限换号需补 49.9 元，提交前请核对。",
-  placeholder = "yourname@gmail.com 或其他邮箱",
+  placeholder = "",
   disabled = false,
 }: GmailDoubleInputProps) {
   const [touchedPrimary, setTouchedPrimary] = useState(false);
@@ -60,7 +60,7 @@ export function GmailDoubleInput({
               ? "input-success"
               : ""
           }`}
-          placeholder={placeholder}
+          placeholder={placeholder || undefined}
           value={email}
           onChange={(event) => onEmailChange(event.target.value)}
           onBlur={() => setTouchedPrimary(true)}
