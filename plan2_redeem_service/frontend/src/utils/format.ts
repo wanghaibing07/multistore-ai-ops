@@ -149,6 +149,8 @@ function translateAuditReason(rawReason: string): { title?: string; detail: stri
       return { title: "上游下单待核对", detail: "Canboso 没有返回订单号，原请求已保留" };
     case "issued":
       return { title: "生成兑换码", detail: "已建好兑换码，等买家打开链接提货" };
+    case "issued_16688_import_uncertain":
+      return { title: "16688 库存导入待核对", detail: "兑换码已生成，待确认 16688 是否已完整导入本批库存" };
     case "agiso_card_pool_push":
       return { title: "推送至阿奇索库存", detail: "已入库等待自动发卡" };
     case "agiso_card_bound":
@@ -184,13 +186,40 @@ function translateAuditReason(rawReason: string): { title?: string; detail: stri
     case "16688_unavailable":
       return { title: "16688 连不上", detail: "校验订单时 16688 接口异常，先转人工处理" };
     case "16688_openapi_paused_auto_purchase":
-      return { title: "16688 暂停期间自动下单", detail: "订单号与已知售出记录匹配，继续检查 Canboso 价格、库存和余额" };
+      return {
+        title: "16688 暂停期间进入采购检查（旧流程）",
+        detail: "OpenAPI 暂停时按旧流程继续检查 Canboso 价格、库存和余额，订单与兑换码的归属核验情况未明确记录。",
+      };
+    case "16688_openapi_paused_verified_sale":
+      return {
+        title: "16688 售出记录已匹配",
+        detail: "OpenAPI 暂停时，系统确认此兑换码与已核验的 16688 售出订单匹配，随后继续检查 Canboso 价格、库存和余额。",
+      };
+    case "16688_openapi_unavailable_code_purchase":
+      return { title: "16688 接口不可用，已通过兑换码核验", detail: "根据系统中的有效未使用兑换码继续检查 Canboso 价格、库存和余额。" };
+    case "16688_platform_sale_rejected":
+      return { title: "16688 交易暂不可提货", detail: "平台返回交易已关闭、退款或存在投诉，暂缓提货。" };
+    case "16688_confirmed_sale_replacement_issued":
+      return { title: "已签发补发码", detail: "补发码已绑定商家核实的原交易，由买家首次提交后履约。" };
+    case "channel16688_sold_sync":
+      return { title: "已同步 16688 售出订单", detail: "已根据 16688 售出记录将订单号绑定到兑换码" };
+    case "channel16688_order_verified":
+      return { title: "16688 订单实时核验通过", detail: "已将核验通过的订单号绑定到兑换码" };
+    case "16688_order_rejected_live":
+      return { title: "16688 订单实时核验未通过", detail: "16688 接口返回订单不符合提货条件，已拦下这次提货" };
     case "16688_verification_pending":
-      return { title: "16688 暂无法核对", detail: "兑换码保留，买家可带订单号稍后重试" };
+      return { title: "16688 暂无法核对", detail: "当时未能完成订单核验，兑换码已退回待提货" };
+    case "admin_manual_canboso_purchase_16688_api_paused":
+      return { title: "16688 暂停期间商家手动采购", detail: "OpenAPI 暂停时，商家手动发起 Canboso 采购。请结合售出记录核对订单归属。" };
+    case "16688_platform_resold_redeemed_code":
+      return { title: "16688 售出记录与已有履约冲突", detail: "平台售出的兑换码已有履约记录，需核对历史交付" };
+    case "16688_consumed_unsold_stock":
+      return { title: "16688 未售库存出现提货记录", detail: "未售库存中的兑换码已有提货记录，需核对历史交付" };
     case "16688_recipient_disputed":
+    case "CHANNEL16688_RECIPIENT_DISPUTED":
       return { title: "收邀请邮箱有争议", detail: "原链接已隐藏收件信息，保留原 Canboso 订单和采购记录" };
     case "16688_order_not_eligible":
-      return { title: "订单不能提货", detail: "16688 订单还没付款、已退款或有退款投诉，已拦下" };
+      return { title: "订单不能提货", detail: "16688 订单与兑换码的匹配或订单状态未通过核对，兑换码已退回待提货" };
     case "PRICE_LIMIT_EXCEEDED":
       return { title: "进价超上限了", detail: "上游涨价超过你设的最高成本，已自动暂停下单" };
     case "LOW_BALANCE":

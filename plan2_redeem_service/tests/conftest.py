@@ -17,11 +17,13 @@ class Fake16688:
         self.imported = []
 
     def verify_order(self, code, goods_no):
-        return {"ok": self.allowed, "error": None if self.allowed else "ORDER_NOT_ELIGIBLE", "trade_no": "TB-001"}
+        if not self.allowed:
+            return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": "TB-001", "final_rejection": True}
+        return {"ok": True, "trade_no": "TB-001"}
 
     def stock_secret_add(self, goods_no, content):
         self.imported.append((goods_no, content))
-        return {"import_count": len(content.split("\n\n"))}
+        return {"goods_no": goods_no, "import_count": len(content.split("\n\n")), "stock_dup_count": 0}
 
 
 class TimeoutAfterCharge(DryRunCanboso):

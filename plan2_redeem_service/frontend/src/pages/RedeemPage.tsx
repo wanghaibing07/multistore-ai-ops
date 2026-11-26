@@ -1,7 +1,6 @@
 import {
   useCallback,
   useEffect,
-  useId,
   useState,
   type CSSProperties,
   type FormEvent,
@@ -34,20 +33,9 @@ import { validateGmailInput } from "../utils/validation";
 import { runRedeemViewTransition } from "../utils/viewTransition";
 
 const AUTO_POLL_INTERVAL_MS = 30_000;
-const CHANNEL_ORDER_REQUIRED = "请从 16688 的购买记录里打开订单详情，复制并填写订单号。";
 
 interface RedeemRouteState {
   prefetchedRecord?: PublicCodeResponse;
-}
-
-function getRedeemErrorMessage(error: unknown, fallback: string): string {
-  if (error instanceof ApiError) {
-    if (error.errorCode === "CHANNEL16688_ORDER_NO_REQUIRED") return CHANNEL_ORDER_REQUIRED;
-    if (error.errorCode === "CHANNEL16688_ORDER_CHECK_PENDING") {
-      return "暂时无法核对 16688 订单，兑换码还没使用。已保留你填写的信息，请稍后再提交，或带订单号联系客服。";
-    }
-  }
-  return error instanceof Error ? error.message : fallback;
 }
 
 function staggerStyle(index: number): CSSProperties {
@@ -135,7 +123,6 @@ export function RedeemPage() {
 function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForCode: PublicCodeResponse | null }) {
   const navigate = useNavigate();
   const { pushToast } = useToast();
-  const channelOrderInputId = useId();
 
   const [record, setRecord] = useState<PublicCodeResponse | null>(() => prefetchedForCode);
   const [loading, setLoading] = useState(() => !prefetchedForCode);
@@ -148,7 +135,6 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
   const [checkExclusiveRule, setCheckExclusiveRule] = useState(false);
 
   const [buyerEmail, setBuyerEmail] = useState("");
-  const [channelOrderNo, setChannelOrderNo] = useState("");
   const [submittingRedeem, setSubmittingRedeem] = useState(false);
   const [redeemError, setRedeemError] = useState<string | null>(null);
 
@@ -251,8 +237,6 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
 
   const isExclusive = record?.product_type === "account";
   const is16688 = record?.channel === "16688";
-  const channelOrderPayload = is16688 ? { channel_order_no: channelOrderNo.trim() } : {};
-  const channelOrderReady = !is16688 || Boolean(channelOrderPayload.channel_order_no);
   const sharedRecipientLabel = is16688 ? "收邀请的邮箱（部分隐藏）" : "收邀请的邮箱";
   const slotEmailCheck = validateGmailInput(buyerEmail);
   const preflightReady = isExclusive
@@ -270,16 +254,11 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
       setRedeemError(slotEmailCheck.error || "请检查一下邮箱拼写对不对。");
       return;
     }
-    if (!channelOrderReady) {
-      setRedeemError(CHANNEL_ORDER_REQUIRED);
-      return;
-    }
     setSubmittingRedeem(true);
     try {
       const updated = await redeemPublicCode(code, {
         buyer_email: slotEmailCheck.normalized,
         preflight_confirmed: true,
-        ...channelOrderPayload,
       });
       setRecord(updated);
       if (updated.status === "needs_manual_review") {
@@ -292,7 +271,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
         pushToast("这个码已经提过货了，已帮你刷新进度", "info");
         await fetchRecord(false);
       } else {
-        const message = getRedeemErrorMessage(err, "提交没成功，请稍后再试。");
+        const message = err instanceof Error ? err.message : "提交没成功，请稍后再试。";
         setRedeemError(message);
         pushToast(message, "error");
       }
@@ -308,15 +287,10 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
       setRedeemError("请先勾选上面的三项提货前确认。");
       return;
     }
-    if (!channelOrderReady) {
-      setRedeemError(CHANNEL_ORDER_REQUIRED);
-      return;
-    }
     setSubmittingRedeem(true);
     try {
       const updated = await redeemPublicCode(code, {
         preflight_confirmed: true,
-        ...channelOrderPayload,
       });
       setRecord(updated);
       if (updated.status === "needs_manual_review") {
@@ -328,7 +302,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
       if (err instanceof ApiError && err.errorCode === "CODE_ALREADY_REDEEMED") {
         await fetchRecord(false);
       } else {
-        const message = getRedeemErrorMessage(err, "领取没成功，请稍后再试。");
+        const message = err instanceof Error ? err.message : "领取没成功，请稍后再试。";
         setRedeemError(message);
         pushToast(message, "error");
       }
@@ -431,26 +405,6 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
   const hasMobileGmailDock = Boolean(
     record && !isExclusive && record.status === "completed" && isBuyerGmail
   );
-  const channelOrderField = is16688 ? (
-    <div className="field-group">
-      <label className="field-label" htmlFor={channelOrderInputId}>16688 订单号</label>
-      <input
-        id={channelOrderInputId}
-        name="channel_order_no"
-        type="text"
-        className="input mono"
-        autoComplete="off"
-        spellCheck={false}
-        maxLength={100}
-        required
-        disabled={submittingRedeem}
-        aria-describedby={`${channelOrderInputId}-hint`}
-        value={channelOrderNo}
-        onChange={(event) => setChannelOrderNo(event.target.value)}
-      />
-      <small id={`${channelOrderInputId}-hint`} className="field-hint">{CHANNEL_ORDER_REQUIRED}</small>
-    </div>
-  ) : null;
   const exclusiveWarrantyNotice = (
     <div className="inset-panel stack-sm">
       <strong style={{ fontSize: 13.5 }}>质保和退换说明</strong>
@@ -762,7 +716,6 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                     primaryLabel="收邀请的邮箱"
                     warningText="别填错邮箱！提交就占名额，换邮箱需补 49.9 元手续费。"
                   />
-                  {channelOrderField}
 
                   <div className="presubmit-card" aria-live="polite">
                     <div className="presubmit-title">提交前看一眼</div>
@@ -796,7 +749,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                   <button
                     type="submit"
                     className={`btn btn-primary btn-lg btn-block ${submittingRedeem ? "is-loading" : ""}`}
-                    disabled={!preflightReady || !slotEmailCheck.valid || !channelOrderReady || submittingRedeem}
+                    disabled={!preflightReady || !slotEmailCheck.valid || submittingRedeem}
                     aria-busy={submittingRedeem}
                   >
                     {submittingRedeem ? (
@@ -1020,12 +973,11 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                   </div>
                 ) : null}
 
-                <form onSubmit={handleExclusiveRedeem} className={is16688 ? "stack" : undefined}>
-                  {channelOrderField}
+                <form onSubmit={handleExclusiveRedeem}>
                   <button
                     type="submit"
                     className={`btn btn-primary btn-lg btn-block ${submittingRedeem ? "is-loading" : ""}`}
-                    disabled={!preflightReady || !channelOrderReady || submittingRedeem}
+                    disabled={!preflightReady || submittingRedeem}
                     aria-busy={submittingRedeem}
                   >
                     {submittingRedeem ? (

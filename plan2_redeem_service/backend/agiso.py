@@ -13,7 +13,7 @@ import httpx
 
 logger = logging.getLogger(__name__)
 
-PLAN2_CODE_RE = re.compile(r"\bU20[SE]-[A-Z0-9]{4}-[A-Z0-9]{4}\b")
+PLAN2_CODE_RE = re.compile(r"(?<![A-Za-z0-9-])U20[SE]-[A-Z0-9]{4}-[A-Z0-9]{4}(?![A-Za-z0-9-])")
 
 AOPIC_BUYER_CREATE = 1
 AOPIC_BUYER_PAY = 2

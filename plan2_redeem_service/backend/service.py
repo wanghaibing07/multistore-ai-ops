@@ -243,54 +243,85 @@ class Service:
             raise ValueError("GOODS_NO_REQUIRED")
         codes = self._generate_unique_codes(sku_key, count)
         if channel == "16688" and resolved_goods:
+            self._persist_batch(
+                batch_id, sku_key, channel, resolved_goods, label, codes,
+                remark=f"16688 导入待核对库存(batch={batch_id})",
+                audit_reason="issued_16688_import_uncertain",
+            )
             content = "\n\n".join(
                 f"提货链接：{build_redeem_url(self.settings.public_base_url, code)}\n兑换码：{code}"
                 for code in codes
             )
             try:
-                self.channel.stock_secret_add(resolved_goods, content)
+                imported = self.channel.stock_secret_add(resolved_goods, content)
+                if (
+                    not isinstance(imported, dict)
+                    or imported.get("goods_no") != resolved_goods
+                    or self._parse_16688_int(imported.get("import_count")) != count
+                    or self._parse_16688_int(imported.get("stock_dup_count")) != 0
+                ):
+                    raise UpstreamError(502, "16688 未确认完整导入，须核对本批次库存", rejected=False)
             except UpstreamTimeout:
-                self._persist_batch(
-                    batch_id,
-                    sku_key,
-                    channel,
-                    resolved_goods,
-                    label,
-                    codes,
-                    remark=f"16688 导入超时待核对库存(batch={batch_id})",
-                    audit_reason="issued_16688_import_uncertain",
-                )
+                self._mark_channel16688_batch_import(batch_id, "16688 导入超时待核对库存")
                 raise
             except UpstreamError as exc:
-                if not exc.rejected:
-                    self._persist_batch(
-                        batch_id,
-                        sku_key,
-                        channel,
-                        resolved_goods,
-                        label,
-                        codes,
-                        remark=f"16688 导入结果待核对库存(batch={batch_id})",
-                        audit_reason="issued_16688_import_uncertain",
-                    )
+                self._mark_channel16688_batch_import(
+                    batch_id, "16688 导入结果待核对库存", rejected=exc.rejected and (
+                        "仅卡密商品支持导入库存" in exc.message
+                        or exc.status_code == 400 and "goods_no invalid" in exc.message
+                    ),
+                )
                 raise
-        self._persist_batch(batch_id, sku_key, channel, resolved_goods, label, codes)
+            self._mark_channel16688_batch_import(batch_id, "")
+        else:
+            self._persist_batch(batch_id, sku_key, channel, resolved_goods, label, codes)
+        # Live 16688 batches are delivered exclusively by the platform.
+        export_codes = [] if channel == "16688" and self.settings.execution_mode == "live" else codes
         return {
             "batch_id": batch_id,
             "sku_key": sku_key,
             "channel": channel,
             "count": count,
-            "codes": codes,
-            "export_lines_code_only": "\n".join(codes),
+            "codes": export_codes,
+            "export_lines_code_only": "\n".join(export_codes),
             "export_lines_with_url": "\n".join(
                 f"提货链接：{build_redeem_url(self.settings.public_base_url, code)} | 兑换码：{code}"
-                for code in codes
+                for code in export_codes
             ),
         }
 
+    def _mark_channel16688_batch_import(
+        self, batch_id: str, uncertain_remark: str, *, rejected: bool = False,
+    ) -> None:
+        with self.ledger.transaction(immediate=True) as conn:
+            if rejected:
+                if conn.execute(
+                    """SELECT 1 FROM codes WHERE batch_id=?
+                       AND (status!='unused' OR COALESCE(external_order_id,'')!='') LIMIT 1""",
+                    (batch_id,),
+                ).fetchone():
+                    raise UpstreamError(502, "16688 拒绝响应与已发生的兑换或发货状态冲突", rejected=False)
+                conn.execute("DELETE FROM audit_events WHERE code IN (SELECT code FROM codes WHERE batch_id=?)", (batch_id,))
+                conn.execute("DELETE FROM codes WHERE batch_id=?", (batch_id,))
+                conn.execute("DELETE FROM batches WHERE batch_id=?", (batch_id,))
+            elif uncertain_remark:
+                conn.execute(
+                    "UPDATE codes SET remark=? WHERE batch_id=? AND status='unused'",
+                    (f"{uncertain_remark}(batch={batch_id})", batch_id),
+                )
+            else:
+                conn.execute(
+                    "UPDATE codes SET remark='' WHERE batch_id=? AND status='unused' AND remark=?",
+                    (batch_id, f"16688 导入待核对库存(batch={batch_id})"),
+                )
+                conn.execute(
+                    """UPDATE audit_events SET reason='issued' WHERE reason='issued_16688_import_uncertain'
+                       AND code IN (SELECT code FROM codes WHERE batch_id=?)""",
+                    (batch_id,),
+                )
+
     def redeem(
         self, code: str, buyer_email: Optional[str], confirm: Optional[str], preflight: bool,
-        channel_order_no: str = "",
     ) -> tuple[dict[str, Any], Optional[str]]:
         row = self.ledger.get_code(code)
         if not row:
@@ -306,9 +337,6 @@ class Service:
         sku = self.ledger.get_sku(row["sku_key"])
         if not preflight:
             return {}, "PREFLIGHT_REQUIRED"
-        trade_no = channel_order_no.strip()
-        if row["channel"] == "16688" and not CHANNEL16688_TRADE_NO_RE.fullmatch(trade_no):
-            return {}, "CHANNEL16688_ORDER_NO_REQUIRED"
         payload: dict[str, Any] = {"product_id": sku["product_id"], "quantity": 1}
         normalized: Optional[str] = None
         if sku["product_type"] == "slot":
@@ -318,19 +346,31 @@ class Service:
             if confirm is not None and confirm.strip() != "" and normalized != confirm.strip().lower():
                 return {}, "EMAIL_MISMATCH"
             payload["customer_email"] = normalized
-        state, claimed = self.ledger.claim_for_purchase(code, payload, normalized, mask_email(normalized))
-        if state != "claimed":
-            return {}, "CONCURRENT_IN_PROGRESS" if state == "busy" else "CODE_NOT_FOUND"
-        if row["channel"] == "16688":
+        trade_no = ""
+        marketplace_unavailable = False
+        verification_revision = 0
+        if row["channel"] == "16688" and not self._is_confirmed_16688_replacement(row):
             order_goods = row.get("goods_no") or sku.get("goods_no")
             if not order_goods:
-                self._release_claim(code, "16688_goods_missing")
                 return {}, "ORDER_NOT_ELIGIBLE"
-            verify_error = self._verify_16688_redemption(code, order_goods, trade_no)
-            if verify_error:
-                reason = "16688_order_not_eligible" if verify_error == "ORDER_NOT_ELIGIBLE" else "16688_verification_pending"
-                self._release_claim(code, reason)
-                return {}, verify_error
+            verification_revision = self.ledger.channel16688_verification_revision(code)
+            trade_no, marketplace_unavailable, error = self._verify_16688_redemption(code, order_goods)
+            if error:
+                return {}, error
+        state, claimed = self.ledger.claim_for_purchase(
+            code, payload, normalized, mask_email(normalized),
+            verified_trade_no=trade_no, marketplace_unavailable=marketplace_unavailable,
+            verification_revision=verification_revision,
+        )
+        if state != "claimed":
+            return {}, {
+                "busy": "CONCURRENT_IN_PROGRESS",
+                "spent": "CODE_REVOKED",
+                "ineligible": "ORDER_NOT_ELIGIBLE",
+                "unconfirmed_stock": "CHANNEL16688_STOCK_IMPORT_PENDING",
+            }.get(state, "CODE_NOT_FOUND")
+        if marketplace_unavailable:
+            self._alert_16688_paused()
         try:
             preflight_ok, reason, cost = self.upstream_preflight(sku)
             error_message = self._preflight_error_message(reason, sku, cost)
@@ -344,30 +384,30 @@ class Service:
             return self.public_row(self.ledger.get_code(code)), None
         return self._purchase(code, claimed, sku, cost), None
 
-    def _verify_16688_redemption(self, code: str, goods_no: str, trade_no: str) -> Optional[str]:
+    def _is_confirmed_16688_replacement(self, row: dict[str, Any]) -> bool:
+        return bool(row.get("external_order_id")) and self.ledger.has_16688_purchase_evidence(
+            row["code"], "16688_confirmed_sale_replacement_issued",
+        )
+
+    def _verify_16688_redemption(self, code: str, goods_no: str) -> tuple[str, bool, str]:
         try:
             order = self.channel.verify_order(code, goods_no)
-        except Exception as exc:
-            if not self._channel16688_paused(exc):
-                return "CHANNEL16688_ORDER_CHECK_PENDING"
-            self._alert_16688_paused()
-            if not self.ledger.has_16688_sale_binding(code, trade_no):
-                return "CHANNEL16688_ORDER_CHECK_PENDING"
-            if not self.ledger.transition(
-                code, "purchasing", "16688_openapi_paused_auto_purchase", allowed=("purchasing",),
-            ):
-                return "CONCURRENT_IN_PROGRESS"
-            return None
+        except (UpstreamError, UpstreamTimeout) as exc:
+            if self._channel16688_unavailable(exc):
+                return "", True, ""
+            return "", False, "CHANNEL16688_VERIFICATION_FAILED"
         if order.get("error") == "ORDER_NOT_ELIGIBLE":
-            self.ledger.transition(code, "purchasing", "16688_order_rejected_live", allowed=("purchasing",))
-            return "ORDER_NOT_ELIGIBLE"
-        if not order.get("ok"):
-            return "CHANNEL16688_ORDER_CHECK_PENDING"
-        verified_trade_no = str(order.get("trade_no") or "").strip()
-        if verified_trade_no != trade_no:
-            return "ORDER_NOT_ELIGIBLE"
-        binding = self.ledger.bind_code_external_order(code, verified_trade_no, reason="channel16688_order_verified")
-        return None if binding in {"bound", "already_bound"} else "ORDER_NOT_ELIGIBLE"
+            if order.get("final_rejection"):
+                row = self.ledger.get_code(code)
+                if row and row["status"] in {"unused", "needs_manual_review"}:
+                    self.ledger.transition(
+                        code, row["status"], "16688_platform_sale_rejected", allowed=(row["status"],),
+                    )
+            return "", False, "ORDER_NOT_ELIGIBLE"
+        trade_no = str(order.get("trade_no") or "").strip()
+        if order.get("ok") and trade_no:
+            return trade_no, False, ""
+        return "", False, "CHANNEL16688_VERIFICATION_FAILED"
 
     def upstream_preflight(self, sku: dict[str, Any], override: bool = False) -> tuple[bool, str, float]:
         catalog = self.canboso.list_products()
@@ -385,15 +425,6 @@ class Service:
         if balance < price:
             return False, "LOW_BALANCE", price
         return True, "OK", price
-
-    def _release_claim(self, code: str, reason: str) -> None:
-        self.ledger.transition(code, "unused", reason, {
-            "buyer_email": None,
-            "buyer_email_masked": None,
-            "idempotency_key": None,
-            "request_payload_json": None,
-            "submitted_at": None,
-        }, ("purchasing",))
 
     def _purchase(self, code: str, row: dict[str, Any], sku: dict[str, Any], cost: float) -> dict[str, Any]:
         try:
@@ -461,7 +492,9 @@ class Service:
             return self.admin_detail(self.ledger.get_code(code)), reason
         verified_trade_no = ""
         manually_verified = False
-        if row["channel"] == "16688":
+        live_verified = False
+        verification_revision = 0
+        if row["channel"] == "16688" and not self._is_confirmed_16688_replacement(row):
             order_goods = row.get("goods_no") or sku.get("goods_no")
             if not order_goods:
                 self.ledger.transition(
@@ -473,24 +506,23 @@ class Service:
                 )
                 self.alert(code, "ORDER_NOT_ELIGIBLE")
                 return self.admin_detail(self.ledger.get_code(code)), "ORDER_NOT_ELIGIBLE"
-            try:
-                order = self.channel.verify_order(code, order_goods)
-            except Exception as exc:
-                paused = self._channel16688_paused(exc)
-                if not paused or not manual_trade_no:
-                    error = "CHANNEL16688_OPENAPI_PAUSED" if paused else "UPSTREAM_ERROR"
-                    message = "16688 暂停 OpenAPI，需到商家后台核验订单" if paused else self._format_upstream_exception("16688 核验失败", exc)
-                    if self.ledger.transition(code, "needs_manual_review", f"admin_retry_failed:{error}", {"last_error_code": error, "last_error_message": message}, ("needs_manual_review",)):
-                        if paused:
-                            self._alert_16688_paused()
-                        else:
-                            self.alert(code, error)
-                    return self.admin_detail(self.ledger.get_code(code)), error
-                order = {"ok": True, "trade_no": manual_trade_no}
-                manually_verified = True
-            if not order.get("ok"):
-                verify_err = "ORDER_NOT_ELIGIBLE" if order.get("error") == "ORDER_NOT_ELIGIBLE" else "UPSTREAM_ERROR"
-                verify_msg = "16688 订单不符合领货条件" if verify_err == "ORDER_NOT_ELIGIBLE" else "16688 核验失败"
+            verification_revision = self.ledger.channel16688_verification_revision(code)
+            verified_trade_no, unavailable, verify_err = self._verify_16688_redemption(code, order_goods)
+            live_verified = bool(verified_trade_no)
+            if unavailable:
+                self._alert_16688_paused()
+                verified_trade_no = manual_trade_no
+                manually_verified = bool(manual_trade_no)
+                if not manually_verified and not self.ledger.has_16688_purchase_evidence(
+                    code, "16688_openapi_unavailable_code_purchase",
+                ):
+                    verify_err = "CHANNEL16688_OPENAPI_PAUSED"
+            if verify_err:
+                verify_err = "UPSTREAM_ERROR" if verify_err == "CHANNEL16688_VERIFICATION_FAILED" else verify_err
+                verify_msg = {
+                    "ORDER_NOT_ELIGIBLE": "16688 订单不符合领货条件",
+                    "CHANNEL16688_OPENAPI_PAUSED": "16688 接口暂不可用，请先到商家后台核验旧订单",
+                }.get(verify_err, "16688 核验失败")
                 self.ledger.transition(
                     code,
                     "needs_manual_review",
@@ -498,15 +530,20 @@ class Service:
                     {"last_error_code": verify_err, "last_error_message": verify_msg},
                     ("needs_manual_review",),
                 )
-                self.alert(code, verify_err)
+                if verify_err != "CHANNEL16688_OPENAPI_PAUSED":
+                    self.alert(code, verify_err)
                 return self.admin_detail(self.ledger.get_code(code)), verify_err
-            verified_trade_no = str(order.get("trade_no") or "").strip()
-            if not verified_trade_no or (manual_trade_no and manual_trade_no != verified_trade_no):
+            if live_verified and manual_trade_no and manual_trade_no != verified_trade_no:
                 return self.admin_detail(row), "ORDER_NOT_ELIGIBLE"
+        elif row["channel"] == "16688" and manual_trade_no and manual_trade_no != row["external_order_id"]:
+            return self.admin_detail(row), "ORDER_NOT_ELIGIBLE"
         audit_reason = "admin_retry_16688_merchant_verified" if manually_verified else "admin_retry"
         if note.strip():
             audit_reason += f":{note.strip()[:200]}"
-        claim_error = self.ledger.claim_purchase_retry(code, row["idempotency_key"], audit_reason, verified_trade_no)
+        claim_error = self.ledger.claim_purchase_retry(
+            code, row["idempotency_key"], audit_reason, verified_trade_no, live_verified=live_verified,
+            verification_revision=verification_revision,
+        )
         if claim_error:
             return self.admin_detail(self.ledger.get_code(code)), claim_error
         self._purchase(code, self.ledger.get_code(code), sku, cost)
@@ -751,7 +788,7 @@ class Service:
                 return {}, "CODE_NOT_FOUND"
             if row["sku_key"] != "ultra_exclusive_admin":
                 return {}, "WARRANTY_NOT_APPLICABLE"
-            if row["status"] not in {"delivered_pending_warranty", "completed"}:
+            if row["status"] not in {"delivered_pending_warranty", "completed"} or self._channel16688_delivery_on_hold(row):
                 return {}, "WARRANTY_NOT_ALLOWED"
             old_warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else {}
             if old_warranty.get("status") == "registered_upstream":
@@ -883,10 +920,22 @@ class Service:
             and bool(CHANNEL16688_EXPLICIT_PAUSE_RE.fullmatch(exc.message.strip()))
         )
 
+    @classmethod
+    def _channel16688_unavailable(cls, exc: Exception) -> bool:
+        return (
+            isinstance(exc, UpstreamTimeout)
+            or cls._channel16688_paused(exc)
+            or isinstance(exc, UpstreamError) and (
+                exc.status_code in {520, 521, 522, 523, 524}
+                or exc.status_code in {500, 502, 503, 504} and not exc.rejected
+                or exc.status_code == 503 and exc.message.startswith("16688 network error")
+            )
+        )
+
     def _alert_16688_paused(self) -> None:
         if self.ledger.claim_notification(CHANNEL16688_OPENAPI_PAUSED_KEY) and not self._safe_send(
-            "16688 暂停 OpenAPI，库存查询和验单受影响",
-            "16688 报告已暂停 OpenAPI。订单号与已同步售出记录匹配时，买家仍可在 Canboso 检查通过后自动提货。其他兑换码保留，买家可稍后重试。",
+            "16688 接口暂不可用，库存同步受影响",
+            "16688 接口暂不可用。有效、未使用且入库已确认的兑换码仍可自动提货，金额、库存和余额检查照常执行。",
         ):
             self.ledger.clear_notification(CHANNEL16688_OPENAPI_PAUSED_KEY)
 
@@ -922,6 +971,30 @@ class Service:
 
     def _code_row(self, code: str) -> dict[str, Any]:
         return self.ledger.get_code(code)
+
+    def _channel16688_delivery_on_hold(self, row: dict[str, Any]) -> bool:
+        if row["channel"] != "16688":
+            return False
+        if row.get("last_error_code") == "CHANNEL16688_RECIPIENT_DISPUTED":
+            return True
+        with closing(self.ledger.connect()) as conn:
+            return conn.execute(
+                """SELECT 1 FROM audit_events AS event
+                   WHERE code=? AND (
+                       reason IN ('16688_recipient_disputed', '16688_platform_resold_redeemed_code',
+                                  '16688_consumed_unsold_stock')
+                       OR (
+                           reason IN ('admin_manual_canboso_purchase_16688_api_paused',
+                                      '16688_openapi_paused_auto_purchase')
+                           AND NOT EXISTS (
+                               SELECT 1 FROM audit_events AS sale
+                               WHERE sale.code=event.code AND sale.event_id<event.event_id
+                               AND sale.reason IN ('channel16688_sold_sync','channel16688_order_verified')
+                           )
+                       )
+                   ) LIMIT 1""",
+                (row["code"],),
+            ).fetchone() is not None
 
     def public_row(self, row: Optional[dict[str, Any]]) -> dict[str, Any]:
         if not row:
@@ -966,17 +1039,20 @@ class Service:
             or normalize_display_email(row.get("buyer_email_masked"))
         )
         status = row["status"]
-        if row["channel"] == "16688" and sku["product_type"] == "slot":
-            if row.get("last_error_code") == "CHANNEL16688_RECIPIENT_DISPUTED":
-                status = "needs_manual_review"
-                display_email = None
-                notice = "原邀请的收件邮箱需要核对。如商家已补发，请使用新兑换码。需要帮助时请带 16688 订单号联系客服。"
-            elif display_email:
-                local, domain = display_email.rsplit("@", 1)
-                display_email = f"{local[:1]}***@{domain}"
-        return {"code": row["code"], "sku_key": row["sku_key"], "sku_title": sku["title"], "product_type": sku["product_type"], "channel": row["channel"], "status": status, "buyer_email_masked": display_email, "delivery": delivery, "warranty": warranty, "fulfillment": {"eta_text": "一般 2-6 小时内发家庭组邀请，最晚 24 小时" if sku["product_type"] == "slot" else None, "submitted_at": row.get("submitted_at"), "completed_at": row.get("completed_at"), "last_polled_at": row.get("last_polled_at"), "elapsed_minutes": elapsed}, "buyer_notice": notice, "support_hint": "有问题请把订单号和兑换码发给客服。", "created_at": row["created_at"], "updated_at": row["updated_at"]}
+        delivery_on_hold = self._channel16688_delivery_on_hold(row)
+        if delivery_on_hold:
+            status = "needs_manual_review"
+            display_email = None
+            delivery = None
+            warranty = None
+            elapsed = None
+            notice = "这枚卡密的历史履约需要核对。如商家已补发，请使用新兑换码。需要帮助时请带 16688 订单号联系客服。"
+        elif row["channel"] == "16688" and sku["product_type"] == "slot" and display_email:
+            local, domain = display_email.rsplit("@", 1)
+            display_email = f"{local[:1]}***@{domain}"
+        return {"code": row["code"], "sku_key": row["sku_key"], "sku_title": sku["title"], "product_type": sku["product_type"], "channel": row["channel"], "status": status, "buyer_email_masked": display_email, "delivery": delivery, "warranty": warranty, "fulfillment": {"eta_text": "一般 2-6 小时内发家庭组邀请，最晚 24 小时" if sku["product_type"] == "slot" else None, "submitted_at": None if delivery_on_hold else row.get("submitted_at"), "completed_at": None if delivery_on_hold else row.get("completed_at"), "last_polled_at": None if delivery_on_hold else row.get("last_polled_at"), "elapsed_minutes": elapsed}, "buyer_notice": notice, "support_hint": "有问题请把订单号和兑换码发给客服。", "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
-    def admin_summary(self, row: dict[str, Any]) -> dict[str, Any]:
+    def admin_summary(self, row: dict[str, Any], *, hide_platform_stock: bool = False) -> dict[str, Any]:
         sku = self.ledger.get_sku(row["sku_key"])
         elapsed = self.public_row(row)["fulfillment"]["elapsed_minutes"]
         warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else None
@@ -985,6 +1061,10 @@ class Service:
         store_email = (delivery.get("account_text") if isinstance(delivery, dict) else None) or None
         warranty_status = warranty.get("status") if isinstance(warranty, dict) else None
         is_dispatched = bool((row.get("external_order_id") or "").strip())
+        stock_code_hidden = (
+            hide_platform_stock and self.settings.execution_mode == "live"
+            and row["channel"] == "16688" and row["status"] == "unused" and not is_dispatched
+        )
         if row["status"] == "unused":
             display_status = "dispatched_unused" if is_dispatched else "in_stock"
         elif row["status"] == "completed" and row["sku_key"] == "ultra_exclusive_admin" and warranty_status == "submitted":
@@ -992,7 +1072,8 @@ class Service:
         else:
             display_status = row["status"]
         return {
-            "code": row["code"],
+            "code": f"{row['code'][:4]}-••••-{row['code'][-4:]}" if stock_code_hidden else row["code"],
+            "stock_code_hidden": stock_code_hidden,
             "sku_key": row["sku_key"],
             "sku_title": sku["title"],
             "product_type": sku["product_type"],
@@ -2710,6 +2791,9 @@ class Service:
                             continue
                         secret_text = str(entry.get("secret_code") or "")
                         extracted_codes = list(dict.fromkeys(PLAN2_CODE_RE.findall(secret_text)))
+                        if len(extracted_codes) > 1:
+                            conflicts += 1
+                            continue
                         for found_code in extracted_codes:
                             sku_scanned += 1
                             scanned += 1
@@ -2842,6 +2926,59 @@ class Service:
             "items": items,
         }
 
+    def _check_channel16688_available_stock(
+        self, goods_no: str, sku_key: str,
+    ) -> tuple[dict[str, Any], int]:
+        page_size = 50
+        page_no = 1
+        stock = self.channel.stock_secret_list(goods_no, status=0, page_no=page_no, page_size=page_size)
+        page = stock
+        conflicts = 0
+        seen_ids: set[int] = set()
+        seen_codes: set[str] = set()
+        while items := page.get("list"):
+            entries: dict[int, set[str]] = {}
+            page_ids: set[int] = set()
+            for item in items:
+                if not isinstance(item, dict) or self._parse_16688_int(item.get("status")) != 0 or item.get("trade_no"):
+                    continue
+                secret_id = self._parse_16688_int(item.get("id"))
+                if secret_id is None or secret_id <= 0:
+                    continue
+                page_ids.add(secret_id)
+                codes = set(PLAN2_CODE_RE.findall(str(item.get("secret_code") or "")))
+                if codes:
+                    entries[secret_id] = codes
+            if len(items) >= page_size and page_ids <= seen_ids:
+                raise UpstreamError(502, "16688 待售卡密分页重复", rejected=False)
+            with closing(self.ledger.connect()) as conn:
+                for secret_id, codes in entries.items():
+                    if secret_id in seen_ids:
+                        continue
+                    placeholders = ",".join("?" for _ in codes)
+                    known = conn.execute(
+                        f"""SELECT code, status, goods_no, sku_key, external_order_id, upstream_order_code, last_error_code
+                            FROM codes WHERE channel='16688' AND code IN ({placeholders})""",
+                        tuple(codes),
+                    ).fetchall()
+                    if (
+                        len(codes) != 1 or len(known) != 1
+                        or known[0]["status"] != "unused" or (known[0]["external_order_id"] or "").strip()
+                        or known[0]["goods_no"] != goods_no or known[0]["sku_key"] != sku_key or known[0]["code"] in seen_codes
+                        or known[0]["upstream_order_code"]
+                        or self.ledger._was_consumed(conn, known[0]["code"], known[0]["last_error_code"])
+                    ):
+                        conflicts += 1
+                    else:
+                        seen_codes.add(known[0]["code"])
+            seen_ids.update(page_ids)
+            if len(items) < page_size:
+                break
+            page_no += 1
+            page = self.channel.stock_secret_list(goods_no, status=0, page_no=page_no, page_size=page_size)
+
+        return stock, conflicts
+
     def check_and_restock_channel16688_cards(
         self,
         *,
@@ -2865,6 +3002,7 @@ class Service:
                     "restocked": 0,
                     "total_pushed": 0,
                     "sync_sold": {"skipped": True, "reason": "no_rules"},
+                    "stock_conflicts": 0,
                     "errors": [],
                     "items": [],
                 }
@@ -2884,6 +3022,7 @@ class Service:
             items: list[dict[str, Any]] = []
             openapi_paused = False
             checked_stock = False
+            stock_conflicts = 0
 
             for rule in rules:
                 sku_key = rule["sku_key"]
@@ -2912,12 +3051,19 @@ class Service:
                     continue
 
                 try:
-                    stock = self.channel.stock_secret_list(goods_no, status=0, page_no=1, page_size=1)
+                    conflicts = 0
+                    if dry_check:
+                        stock = self.channel.stock_secret_list(goods_no, status=0, page_no=1, page_size=1)
+                    else:
+                        stock, conflicts = self._check_channel16688_available_stock(goods_no, sku_key)
+                        stock_conflicts += conflicts
                 except (UpstreamTimeout, UpstreamError) as exc:
                     detail = str(exc) or type(exc).__name__
                     err_msg = f"{sku_key}({goods_no}) 查询库存失败: {detail}"
                     errors.append(err_msg)
-                    if isinstance(exc, UpstreamError) and CHANNEL16688_OPENAPI_PAUSED_RE.search(detail):
+                    if self._channel16688_unavailable(exc) or (
+                        isinstance(exc, UpstreamError) and CHANNEL16688_OPENAPI_PAUSED_RE.search(detail)
+                    ):
                         openapi_paused = True
                     elif not dry_check:
                         self._channel16688_alert(
@@ -2963,6 +3109,23 @@ class Service:
                     )
                     continue
                 checked_stock = True
+                if conflicts:
+                    err_msg = f"{sku_key}({goods_no}) 有 {conflicts} 条 16688 待售库存与本地账本冲突，已暂停该商品补货"
+                    errors.append(err_msg)
+                    logger.warning("%s", err_msg)
+                    items.append(
+                        {
+                            "sku_key": sku_key,
+                            "goods_no": goods_no,
+                            "current_qty": current_qty,
+                            "min_stock": rule["min_stock"],
+                            "target_stock": rule["target_stock"],
+                            "action": "stock_conflict",
+                            "pushed_count": 0,
+                            "error": err_msg,
+                        }
+                    )
+                    continue
                 if current_qty > rule["min_stock"]:
                     items.append(
                         {
@@ -3068,6 +3231,7 @@ class Service:
                 "restocked": restocked,
                 "total_pushed": total_pushed,
                 "sync_sold": sync_result,
+                "stock_conflicts": stock_conflicts,
                 "errors": errors,
                 "items": items,
             }

@@ -23,7 +23,7 @@
 
 ### 2.2 渠道 (`channel`)
 - `taobao`：淘宝订单（支持手动单笔发码、批量制码导出，以及阿奇索 Webhook 自动发码、退款作废/恢复与低水位补库）
-- `16688`：16688 自营卡密单。提交核销时需要购买记录里的订单号，与兑换码及商品一起核验，同时检查付款、退款和投诉状态。16688 明确返回暂停 OpenAPI 时，订单号必须匹配已核验或已同步的售出记录，并通过 Canboso 价格、库存和余额检查才能自动下单。暂停期间无法实时核对退款和投诉，暂时无法核验的兑换码保留供重试。
+- `16688`：16688 自营卡密单。买家持有效未使用的兑换码即可提货。16688 可用时，后台用卡密核对订单和商品，并检查付款、退款与投诉状态。OpenAPI 暂停时，已确认库存的有效兑换码通过本地一次性校验及 Canboso 价格、库存、余额检查后仍可下单。平台库存由 16688 自动发货。补货前会检查已使用、已分配或重复出现的待售码，发现冲突时暂停该商品补货并报告受影响的数量。
 
 ### 2.3 兑换码/订单生命周期状态 (`status`)
 - `unused`：未使用，等待买家提交核销
@@ -130,12 +130,11 @@
 }
 ```
 - `200 OK`：返回最新 `PublicCodeResponse`（共享车位进入 `waiting_fulfillment`，独享整组进入 `delivered_pending_warranty`，若触发熔断/余额不足/上游异常则进入 `needs_manual_review` 并返回友好 `buyer_notice`）。
-- 两类 16688 商品均需传入 `channel_order_no`。16688 共享车位的公开响应仅返回掩码邮箱，完整邮箱可在鉴权后的商家后台查看。
+- 两类 16688 商品均凭兑换码提货，老客户端传入的 `channel_order_no` 为兼容字段。16688 共享车位的公开响应仅返回掩码邮箱，历史争议码隐藏原履约信息。
 - 常见错误码：
   - `404` `CODE_NOT_FOUND`
   - `409` `CODE_REVOKED` / `CODE_ALREADY_REDEEMED` / `ORDER_NOT_ELIGIBLE` / `CONCURRENT_IN_PROGRESS`
-  - `422` `INVALID_EMAIL` / `EMAIL_MISMATCH` / `PREFLIGHT_REQUIRED` / `CHANNEL16688_ORDER_NO_REQUIRED`
-  - `503` `CHANNEL16688_ORDER_CHECK_PENDING`，订单暂无法核对，可用同一码重试。
+  - `422` `INVALID_EMAIL` / `EMAIL_MISMATCH` / `PREFLIGHT_REQUIRED`
 
 ### 4.3 买家手动刷新上游进度
 `POST /api/v1/public/codes/{code}/refresh`
@@ -269,13 +268,14 @@
   "sku_key": "ultra_shared_slot",
   "channel": "16688",
   "count": 20,
-  "codes": ["U20S-...."],
-  "export_lines_code_only": "U20S-....\n...",
-  "export_lines_with_url": "提货链接：https://redeem.example.com/r/U20S-.... | 兑换码：U20S-....\n..."
+  "codes": [],
+  "export_lines_code_only": "",
+  "export_lines_with_url": ""
 }
 ```
-- 16688 渠道导入失败时返回结构化错误，不再裸抛 `500`：
-  - `CHANNEL_16688_REJECTED`（`422` 或 `502`）：16688 明确拒绝（如商品非卡密/自动发货、商品不存在、连接被拒绝），本地不落库、不留孤儿兑换码。
+- 16688 正式环境先记入本地账本，再上传给平台。确认全量入库后返回批次号和数量。淘宝批量制码仍返回导出行。
+- 16688 渠道导入失败时返回结构化错误：
+  - `CHANNEL_16688_REJECTED`（`422` 或 `502`）：16688 明确拒绝，未发出的临时批次会清理。
   - `CHANNEL_16688_TIMEOUT`（`504`）或 `CHANNEL_16688_ERROR`（`502`）：请求结果不明确（超时或 5xx/断流），为防止 16688 实际已导入导致买家找不到码，本地会以「待核对库存」备注保留该批次兑换码并提示商家核对。
 
 ### 5.5 订单与兑换码列表

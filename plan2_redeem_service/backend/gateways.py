@@ -12,6 +12,8 @@ from typing import Any, Optional
 
 import httpx
 
+from .agiso import PLAN2_CODE_RE
+
 
 logger = logging.getLogger(__name__)
 TRANSIENT_HTTP_STATUSES = {500, 502, 503, 504}
@@ -225,6 +227,10 @@ class Channel16688Client:
 
     def verify_order(self, code: str, goods_no: str) -> dict[str, Any]:
         card_pattern = re.compile(rf"(?<![A-Za-z0-9-]){re.escape(code)}(?![A-Za-z0-9-])")
+
+        def matches_single_code(text: str) -> bool:
+            return bool(card_pattern.search(text)) and len(set(PLAN2_CODE_RE.findall(text))) <= 1
+
         trade_no = ""
         stock = self.stock_secret_list(goods_no, keywords=code, page_no=1, page_size=20)
         stock_matches = [
@@ -241,7 +247,7 @@ class Channel16688Client:
             except (TypeError, ValueError):
                 secret_status = -1
             trade_no = str(matched.get("trade_no") or "").strip()
-            if secret_status != 2 or not trade_no:
+            if secret_status != 2 or not trade_no or not matches_single_code(str(matched.get("secret_code") or "")):
                 return {"ok": False, "error": "ORDER_NOT_ELIGIBLE"}
         else:
             listing = self._call("openApi/order/list", {"card_no": code, "page_no": 1, "page_size": 20})
@@ -260,16 +266,18 @@ class Channel16688Client:
             return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": trade_no}
         cards = detail.get("cards") or []
         code_in_cards = any(
-            card_pattern.search(str((item.get("code") if isinstance(item, dict) else item) or ""))
+            matches_single_code(str((item.get("code") if isinstance(item, dict) else item) or ""))
             for item in cards
         )
-        if detail.get("goods_no") != goods_no or not code_in_cards:
+        if detail.get("trade_no") not in (None, "", trade_no) or detail.get("goods_no") != goods_no or not code_in_cards:
             return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": trade_no}
         try:
             status = int(detail.get("status", -1))
         except (TypeError, ValueError):
             status = -1
-        if status in (2, 3) or status not in (4, 5):
+        if status in (2, 3):
+            return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": trade_no, "final_rejection": True}
+        if status not in (4, 5):
             return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": trade_no}
         complaints = self._call("openApi/complaint/list", {"keywords": trade_no, "page_no": 1, "page_size": 20})
         for item in complaints.get("list") or []:
@@ -280,7 +288,7 @@ class Channel16688Client:
             except (TypeError, ValueError):
                 complaint_status = -1
             if complaint_status in (0, 1):
-                return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": trade_no}
+                return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": trade_no, "final_rejection": True}
             if complaint_status == 2:
                 complaint_no = str(item.get("complaint_no") or "").strip()
                 if not complaint_no:
@@ -291,7 +299,7 @@ class Channel16688Client:
                 except (TypeError, ValueError):
                     complaint_result = 0
                 if complaint_result == 2:
-                    return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": trade_no}
+                    return {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": trade_no, "final_rejection": True}
         return {"ok": True, "trade_no": trade_no}
 
     def stock_secret_add(self, goods_no: str, content: str) -> dict[str, Any]:

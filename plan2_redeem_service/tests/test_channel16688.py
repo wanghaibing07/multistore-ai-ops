@@ -139,7 +139,7 @@ def test_verify_order_handles_multiline_sold_card_unsold_duplicate_and_fallback(
         {"identity": "merchant", "goods_no": "G10000001", "cards": [{"code": "兑换码：U20S-COMP-0001"}], "status": 4},
         {"list": [{"trade_no": "T300", "status": 1, "complaint_no": "CP1"}]},
     ]
-    assert client_.verify_order("U20S-COMP-0001", "G10000001") == {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": "T300"}
+    assert client_.verify_order("U20S-COMP-0001", "G10000001") == {"ok": False, "error": "ORDER_NOT_ELIGIBLE", "trade_no": "T300", "final_rejection": True}
 
     # 6. Non-merchant identity on order/info rejected
     calls.clear()
@@ -380,12 +380,12 @@ def test_16688_unverified_attempt_does_not_block_the_owner(tmp_path: Path):
         ).json()
         code = batch["codes"][0]
         endpoint = f"/api/v1/public/codes/{code}/redeem"
-        payload = {"buyer_email": "buyer@gmail.com", "preflight_confirmed": True, "channel_order_no": "T-RETRY-OK"}
+        payload = {"buyer_email": "buyer@gmail.com", "preflight_confirmed": True}
         res = c.post(
             endpoint,
             json={**payload, "buyer_email": "other@gmail.com"},
         )
-        assert res.status_code == 503 and res.json()["error_code"] == "CHANNEL16688_ORDER_CHECK_PENDING"
+        assert res.status_code == 503 and res.json()["error_code"] == "CHANNEL16688_VERIFICATION_FAILED"
         assert app.state.ledger.get_code(code)["status"] == "unused"
         assert not app.state.ledger.get_code(code)["buyer_email"]
         assert canboso.charge_count == 0
@@ -398,8 +398,6 @@ def test_16688_unverified_attempt_does_not_block_the_owner(tmp_path: Path):
         assert app.state.ledger.get_code(code)["status"] == "unused"
 
         chan.mode = "ok"
-        assert c.post(endpoint, json={**payload, "channel_order_no": "T-WRONG"}).status_code == 409
-        assert canboso.charge_count == 0
         retry_ok = c.post(endpoint, json=payload)
         assert retry_ok.status_code == 200
         assert canboso.charge_count == 1

@@ -88,7 +88,7 @@ export async function getPublicCode(code: string): Promise<PublicCodeResponse> {
 
 export async function redeemPublicCode(
   code: string,
-  payload: (RedeemSlotRequest | RedeemExclusiveRequest) & { channel_order_no?: string }
+  payload: RedeemSlotRequest | RedeemExclusiveRequest
 ): Promise<PublicCodeResponse> {
   return requestJson<PublicCodeResponse>(
     `/api/v1/public/codes/${encodeURIComponent(code)}/redeem`,

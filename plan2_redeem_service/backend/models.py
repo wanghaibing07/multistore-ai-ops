@@ -9,7 +9,6 @@ class RedeemRequest(BaseModel):
     buyer_email: Optional[str] = None
     buyer_email_confirm: Optional[str] = None
     preflight_confirmed: bool = False
-    channel_order_no: str = Field(default="", max_length=100)
 
 
 class WarrantyForm(BaseModel):

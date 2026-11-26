@@ -450,7 +450,7 @@ export function AdminIssuePage({
                     共 {batchResult.count} 条
                   </span>
                 </div>
-                <div className="row" style={{ gap: 6 }}>
+                {activeBatchText && <div className="row" style={{ gap: 6 }}>
                   <button
                     type="button"
                     className={`filter-pill ${exportFormat === "with_url" ? "is-active" : ""}`}
@@ -467,12 +467,13 @@ export function AdminIssuePage({
                   >
                     仅兑换码
                   </button>
-                </div>
+                </div>}
               </div>
 
-              <pre className="code-output">{activeBatchText}</pre>
+              {activeBatchText ? <>
+                <pre className="code-output">{activeBatchText}</pre>
 
-              <div className="row">
+                <div className="row">
                 <CopyButton
                   text={activeBatchText}
                   label="复制全部导出行"
@@ -493,7 +494,10 @@ export function AdminIssuePage({
                   <CastoriceIcon name="download" size={16} />
                   <span>下载 TXT</span>
                 </button>
-              </div>
+                </div>
+              </> : (
+                <p>兑换码已导入 16688 库存，由平台统一自动发货。</p>
+              )}
             </div>
           )}
         </section>

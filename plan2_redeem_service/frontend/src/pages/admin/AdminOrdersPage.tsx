@@ -377,13 +377,13 @@ export function AdminOrdersPage({
                 </tr>
               </thead>
               <tbody>
-                {items.map((item) => (
+                {items.map((item, index) => (
                   <tr
-                    key={item.code}
-                    tabIndex={0}
-                    aria-label={`查看兑换码 ${item.code} 详情`}
-                    onClick={() => onSelectCode(item.code)}
-                    onKeyDown={(event) => {
+                    key={item.stock_code_hidden ? `${item.code}-${index}` : item.code}
+                    tabIndex={item.stock_code_hidden ? undefined : 0}
+                    aria-label={item.stock_code_hidden ? "16688 待售库存，兑换码由平台发放" : `查看兑换码 ${item.code} 详情`}
+                    onClick={item.stock_code_hidden ? undefined : () => onSelectCode(item.code)}
+                    onKeyDown={item.stock_code_hidden ? undefined : (event) => {
                       if (event.key === "Enter" || event.key === " ") {
                         event.preventDefault();
                         onSelectCode(item.code);
@@ -447,11 +447,12 @@ export function AdminOrdersPage({
           </div>
 
           <div className="mobile-order-list">
-            {items.map((item) => (
+            {items.map((item, index) => (
               <button
-                key={item.code}
+                key={item.stock_code_hidden ? `${item.code}-${index}` : item.code}
                 type="button"
                 className="mobile-order-card"
+                disabled={item.stock_code_hidden}
                 onClick={() => onSelectCode(item.code)}
               >
                 <div className="row-between">

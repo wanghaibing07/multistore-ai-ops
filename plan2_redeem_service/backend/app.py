@@ -112,7 +112,6 @@ def status_for(code: str) -> int:
         "WARRANTY_NOT_ALLOWED": 409,
         "INVALID_EMAIL": 422,
         "EMAIL_MISMATCH": 422,
-        "CHANNEL16688_ORDER_NO_REQUIRED": 422,
         "MERCHANT_RECIPIENT_CONFIRMATION_REQUIRED": 422,
         "PREFLIGHT_REQUIRED": 422,
         "INVALID_SCREENSHOT_TYPE": 422,
@@ -403,16 +402,16 @@ def create_app(
     @app.post("/api/v1/public/codes/{code}/redeem")
     def public_redeem(code: str, body: RedeemRequest, svc: Service = Depends(get_service)) -> Any:
         result, err_code = svc.redeem(
-            code, body.buyer_email, body.buyer_email_confirm, body.preflight_confirmed, body.channel_order_no,
+            code, body.buyer_email, body.buyer_email_confirm, body.preflight_confirmed,
         )
         if err_code:
             messages = {
                 "CODE_NOT_FOUND": "没找到这个兑换码，请核对后重试",
                 "CODE_REVOKED": "这个兑换码已作废，有问题请联系客服",
                 "CONCURRENT_IN_PROGRESS": "正在处理中，请等几秒刷新看看",
-                "ORDER_NOT_ELIGIBLE": "这笔订单暂时领不了，请核对订单号与兑换码是否匹配，并确认已付款且没退款",
-                "CHANNEL16688_ORDER_NO_REQUIRED": "请填写 16688 购买记录里的订单号",
-                "CHANNEL16688_ORDER_CHECK_PENDING": "暂时无法核对 16688 订单，兑换码未使用。请稍后重试，或带订单号联系客服。",
+                "ORDER_NOT_ELIGIBLE": "这个兑换码关联的交易暂不可提货，请联系客服核对",
+                "CHANNEL16688_VERIFICATION_FAILED": "这个兑换码暂时无法确认可用，请稍后重试或联系客服",
+                "CHANNEL16688_STOCK_IMPORT_PENDING": "这个兑换码还在核对入库结果，请联系客服",
                 "INVALID_EMAIL": "请填正确的邮箱地址",
                 "EMAIL_MISMATCH": "两次填的邮箱不一样，请核对后再提交",
                 "PREFLIGHT_REQUIRED": "请先勾选上面的确认项再提交",
@@ -628,7 +627,10 @@ def create_app(
             (page - 1) * page_size,
             order_by=order_by,
         )
-        return {"items": [svc.admin_summary(row) for row in rows], "total": total, "page": page, "page_size": page_size}
+        return {
+            "items": [svc.admin_summary(row, hide_platform_stock=True) for row in rows],
+            "total": total, "page": page, "page_size": page_size,
+        }
 
     @app.get("/api/v1/admin/codes/{code}", dependencies=[Depends(require_admin)])
     def admin_code(code: str, svc: Service = Depends(get_service)) -> Any:

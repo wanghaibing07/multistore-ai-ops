@@ -171,7 +171,10 @@ class Ledger:
             c.execute(f"INSERT INTO codes({columns}) VALUES({marks})", tuple(row.values()))
             c.execute("INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)", (row["code"], None, row["status"], "issued", row["created_at"]))
 
-    def claim_for_purchase(self, code: str, payload: dict[str, Any], buyer_email: Optional[str], masked: Optional[str]) -> tuple[str, Optional[dict[str, Any]]]:
+    def claim_for_purchase(
+        self, code: str, payload: dict[str, Any], buyer_email: Optional[str], masked: Optional[str],
+        *, verified_trade_no: str = "", marketplace_unavailable: bool = False, verification_revision: int = 0,
+    ) -> tuple[str, Optional[dict[str, Any]]]:
         with self.transaction(immediate=True) as c:
             row = c.execute("SELECT * FROM codes WHERE code=?", (code,)).fetchone()
             if not row:
@@ -179,14 +182,46 @@ class Ledger:
             current = dict(row)
             if current["status"] != "unused":
                 return "busy", current
+            if current["upstream_order_code"] or self._was_consumed(c, code, current["last_error_code"]):
+                return "spent", current
+            existing = (current["external_order_id"] or "").strip()
+            if current["channel"] == "16688":
+                if verified_trade_no and existing and existing != verified_trade_no:
+                    return "ineligible", current
+                if self._16688_sale_rejected(c, code, verification_revision if verified_trade_no else 0):
+                    return "ineligible", current
+                if not verified_trade_no and c.execute(
+                    """SELECT 1 FROM audit_events WHERE code=? AND reason='issued_16688_import_uncertain'
+                       AND NOT EXISTS (SELECT 1 FROM audit_events WHERE code=?
+                           AND reason IN ('channel16688_sold_sync', 'channel16688_order_verified')) LIMIT 1""",
+                    (code, code),
+                ).fetchone():
+                    return "unconfirmed_stock", current
             key = "plan2-" + secrets.token_urlsafe(18)
             t = now_iso()
             c.execute("""UPDATE codes SET status='purchasing', buyer_email=?, buyer_email_masked=?, idempotency_key=?,
-                request_payload_json=?, submitted_at=?, updated_at=?, last_error_code=NULL,last_error_message=NULL WHERE code=?""",
-                (buyer_email, masked, key, json.dumps(payload, ensure_ascii=False), t, t, code))
+                request_payload_json=?, submitted_at=?, updated_at=?, external_order_id=?,
+                last_error_code=NULL,last_error_message=NULL WHERE code=?""",
+                (buyer_email, masked, key, json.dumps(payload, ensure_ascii=False), t, t, verified_trade_no or current["external_order_id"], code))
             c.execute("INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)", (code, "unused", "purchasing", "redeem_claimed", t))
+            evidence = "channel16688_order_verified" if verified_trade_no else "16688_openapi_unavailable_code_purchase" if marketplace_unavailable else ""
+            if evidence:
+                c.execute(
+                    "INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)",
+                    (code, "purchasing", "purchasing", evidence, t),
+                )
             current = dict(c.execute("SELECT * FROM codes WHERE code=?", (code,)).fetchone())
             return "claimed", current
+
+    @staticmethod
+    def _was_consumed(c: sqlite3.Connection, code: str, last_error: Optional[str]) -> bool:
+        return last_error == "CHANNEL16688_RECIPIENT_DISPUTED" or c.execute(
+            """SELECT 1 FROM audit_events WHERE code=? AND reason IN (
+               'shared_order_accepted','exclusive_delivered','canboso_purchase_cancelled',
+               '16688_recipient_disputed','16688_platform_resold_redeemed_code',
+               '16688_consumed_unsold_stock') LIMIT 1""",
+            (code,),
+        ).fetchone() is not None
 
     def transition(self, code: str, to_status: str, reason: str, updates: Optional[dict[str, Any]] = None, allowed: Optional[tuple[str, ...]] = None) -> bool:
         updates = updates or {}
@@ -205,17 +240,27 @@ class Ledger:
         with self.connect() as c:
             return [dict(r) for r in c.execute("SELECT * FROM audit_events WHERE code=? ORDER BY event_id", (code,))]
 
-    def claim_purchase_retry(self, code: str, idempotency_key: str, reason: str, trade_no: str = "") -> str:
+    def claim_purchase_retry(
+        self, code: str, idempotency_key: str, reason: str, trade_no: str = "", *, live_verified: bool = False,
+        verification_revision: int = 0,
+    ) -> str:
         with self.transaction(immediate=True) as c:
             row = c.execute(
-                "SELECT status, upstream_order_code, idempotency_key, request_payload_json, external_order_id FROM codes WHERE code=?",
+                """SELECT status, channel, upstream_order_code, idempotency_key, request_payload_json,
+                   external_order_id, last_error_code FROM codes WHERE code=?""",
                 (code,),
             ).fetchone()
             if (not row or row["status"] != "needs_manual_review" or row["upstream_order_code"]
                     or row["idempotency_key"] != idempotency_key or not row["request_payload_json"]):
                 return "RETRY_NOT_AVAILABLE"
+            if self._was_consumed(c, code, row["last_error_code"]):
+                return "RETRY_NOT_AVAILABLE"
             existing = (row["external_order_id"] or "").strip()
             if trade_no and existing and existing != trade_no:
+                return "ORDER_NOT_ELIGIBLE"
+            if row["channel"] == "16688" and self._16688_sale_rejected(
+                c, code, verification_revision if live_verified else 0,
+            ):
                 return "ORDER_NOT_ELIGIBLE"
             t = now_iso()
             c.execute(
@@ -227,6 +272,11 @@ class Ledger:
                 "INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)",
                 (code, "needs_manual_review", "purchasing", reason, t),
             )
+            if live_verified:
+                c.execute(
+                    "INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)",
+                    (code, "purchasing", "purchasing", "channel16688_order_verified", t),
+                )
             return ""
 
     def canboso_purchase_totals(self, shanghai_day: str) -> dict[str, Any]:
@@ -426,6 +476,13 @@ class Ledger:
                 return "missing"
             existing = (row["external_order_id"] or "").strip()
             if existing == tid:
+                if reason == "channel16688_sold_sync" and not c.execute(
+                    "SELECT 1 FROM audit_events WHERE code=? AND reason=? LIMIT 1", (code, reason),
+                ).fetchone():
+                    c.execute(
+                        "INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)",
+                        (code, row["status"], row["status"], reason, now_iso()),
+                    )
                 return "already_bound"
             if existing:
                 return "conflict"
@@ -437,21 +494,27 @@ class Ledger:
             )
             return "bound"
 
-    def has_16688_sale_binding(self, code: str, trade_no: str) -> bool:
+    @staticmethod
+    def _latest_16688_sale_verification(conn: sqlite3.Connection, code: str) -> Optional[sqlite3.Row]:
+        return conn.execute(
+            """SELECT event_id, reason FROM audit_events WHERE code=? AND reason IN (
+               '16688_platform_sale_rejected','channel16688_order_verified') ORDER BY event_id DESC LIMIT 1""",
+            (code,),
+        ).fetchone()
+
+    def channel16688_verification_revision(self, code: str) -> int:
+        with closing(self.connect()) as conn:
+            latest = self._latest_16688_sale_verification(conn, code)
+            return latest["event_id"] if latest else 0
+
+    def _16688_sale_rejected(self, conn: sqlite3.Connection, code: str, since_revision: int) -> bool:
+        latest = self._latest_16688_sale_verification(conn, code)
+        return bool(latest and latest["reason"] == "16688_platform_sale_rejected" and latest["event_id"] > since_revision)
+
+    def has_16688_purchase_evidence(self, code: str, reason: str) -> bool:
         with closing(self.connect()) as c:
             return c.execute(
-                """SELECT 1 FROM codes
-                   WHERE code=? AND channel='16688' AND external_order_id=?
-                   AND EXISTS (
-                       SELECT 1 FROM audit_events
-                       WHERE code=codes.code
-                       AND reason IN ('channel16688_sold_sync', 'channel16688_order_verified')
-                   )
-                   AND NOT EXISTS (
-                       SELECT 1 FROM audit_events
-                       WHERE code=codes.code AND reason='16688_order_rejected_live'
-                   )""",
-                (code, trade_no),
+                "SELECT 1 FROM audit_events WHERE code=? AND reason=? LIMIT 1", (code, reason),
             ).fetchone() is not None
 
     def claim_agiso_trade_delivery(self, tid: str, stale_seconds: int = 60, force_retry: bool = False) -> list[dict[str, Any]]:
