@@ -458,15 +458,25 @@ class Service:
         if confirmed_cost is None and str(payment.get("currency")).upper() in {"USD", "USDT"}:
             confirmed_cost = self._canboso_usd_amount(payment.get("amount"))
         status = str(order.get("status") or "").strip().lower()
-        updates: dict[str, Any] = {"upstream_order_code": order["orderCode"], "upstream_status": status, "cost_usd": cost if confirmed_cost is None else confirmed_cost, "request_payload_json": None}
+        updates: dict[str, Any] = {
+            "upstream_order_code": order["orderCode"],
+            "upstream_status": status,
+            "cost_usd": cost if confirmed_cost is None else confirmed_cost,
+        }
         if status in CANBOSO_CANCELLED_STATUSES:
             target, reason = "needs_manual_review", "canboso_purchase_cancelled"
             updates.update(self._canboso_cancellation(status))
         elif sku["product_type"] == "account":
             delivery = self._safe_delivery(result.get("delivery") or {})
-            updates.update({"delivery_json": json.dumps(delivery, ensure_ascii=False), "completed_at": None})
+            updates.update({
+                "delivery_json": json.dumps(delivery, ensure_ascii=False),
+                "completed_at": None,
+                "last_error_code": None,
+                "last_error_message": None,
+            })
             target, reason = "delivered_pending_warranty", "exclusive_delivered"
         else:
+            updates.update({"last_error_code": None, "last_error_message": None})
             target, reason = "waiting_fulfillment", "shared_order_accepted"
         if not self.ledger.transition(code, target, reason, updates, ("purchasing",)):
             logger.error("Canboso accepted purchase but order could not be recorded")
@@ -475,18 +485,47 @@ class Service:
     def replay(
         self, code: str, override: bool = False, note: str = "", merchant_verified_order_no: str = "",
         merchant_verified_recipient_email: str = "",
+        force_new_order: bool = False,
+        new_buyer_email: str = "",
     ) -> tuple[dict[str, Any], Optional[str]]:
         row = self.ledger.get_code(code)
-        if not row or row["status"] != "needs_manual_review" or row.get("upstream_order_code") or not row.get("idempotency_key") or not row.get("request_payload_json"):
+        if not row or row["status"] != "needs_manual_review":
             return (self.admin_detail(row) if row else {}), "RETRY_NOT_AVAILABLE"
+        if force_new_order:
+            if self.ledger.is_disputed_16688_code(code, row.get("last_error_code")):
+                return self.admin_detail(row), "RETRY_NOT_AVAILABLE"
+            if row.get("upstream_order_code"):
+                upstream_state = str(row.get("upstream_status") or "").strip().lower()
+                if upstream_state not in CANBOSO_CANCELLED_STATUSES:
+                    return self.admin_detail(row), "UPSTREAM_ORDER_ACTIVE"
+        else:
+            if row.get("upstream_order_code") or not row.get("idempotency_key") or not row.get("request_payload_json"):
+                return self.admin_detail(row), "RETRY_NOT_AVAILABLE"
         manual_trade_no = merchant_verified_order_no.strip()
         if manual_trade_no and (row["channel"] != "16688" or not CHANNEL16688_TRADE_NO_RE.fullmatch(manual_trade_no)):
             return self.admin_detail(row), "ORDER_NOT_ELIGIBLE"
         sku = self.ledger.get_sku(row["sku_key"])
+        orig_payload: dict[str, Any] = {}
+        if row.get("request_payload_json"):
+            try:
+                loaded = json.loads(row["request_payload_json"])
+                if isinstance(loaded, dict):
+                    orig_payload = loaded
+            except ValueError:
+                orig_payload = {}
+        target_email: Optional[str] = None
+        if sku["product_type"] == "slot":
+            if force_new_order and new_buyer_email.strip():
+                target_email = new_buyer_email.strip().lower()
+                if not is_valid_email(target_email):
+                    return self.admin_detail(row), "INVALID_EMAIL"
+            else:
+                target_email = str(orig_payload.get("customer_email") or row.get("buyer_email") or "").strip().lower() or None
+                if force_new_order and not is_valid_email(target_email or ""):
+                    return self.admin_detail(row), "INVALID_EMAIL"
         if row["channel"] == "16688" and sku["product_type"] == "slot":
             recipient = merchant_verified_recipient_email.strip().lower()
-            payload = json.loads(row["request_payload_json"])
-            if not recipient or recipient != payload.get("customer_email"):
+            if not recipient or recipient != target_email:
                 return self.admin_detail(row), "MERCHANT_RECIPIENT_CONFIRMATION_REQUIRED"
         try:
             ok, reason, cost = self.upstream_preflight(sku, override)
@@ -522,9 +561,11 @@ class Service:
                 self._alert_16688_paused()
                 verified_trade_no = manual_trade_no
                 manually_verified = bool(manual_trade_no)
-                if not manually_verified and not self.ledger.has_16688_purchase_evidence(
-                    code, "16688_openapi_unavailable_code_purchase",
-                ):
+                has_prior_evidence = (
+                    self.ledger.has_16688_purchase_evidence(code, "16688_openapi_unavailable_code_purchase")
+                    or self.ledger.has_16688_purchase_evidence(code, "channel16688_order_verified")
+                )
+                if not manually_verified and not has_prior_evidence:
                     verify_err = "CHANNEL16688_OPENAPI_PAUSED"
             if verify_err:
                 verify_err = "UPSTREAM_ERROR" if verify_err == "CHANNEL16688_VERIFICATION_FAILED" else verify_err
@@ -546,13 +587,44 @@ class Service:
                 return self.admin_detail(row), "ORDER_NOT_ELIGIBLE"
         elif row["channel"] == "16688" and manual_trade_no and manual_trade_no != row["external_order_id"]:
             return self.admin_detail(row), "ORDER_NOT_ELIGIBLE"
-        audit_reason = "admin_retry_16688_merchant_verified" if manually_verified else "admin_retry"
+        if force_new_order:
+            audit_reason = "admin_reorder_16688_merchant_verified" if manually_verified else "admin_reorder"
+            prev_order = str(row.get("upstream_order_code") or "").strip()
+            if prev_order:
+                audit_reason += f"[prev={prev_order}]"
+            old_email = str(row.get("buyer_email") or "").strip().lower()
+            if target_email and old_email and target_email != old_email:
+                audit_reason += f"[email:{old_email}->{target_email}]"
+        else:
+            audit_reason = "admin_retry_16688_merchant_verified" if manually_verified else "admin_retry"
         if note.strip():
             audit_reason += f":{note.strip()[:200]}"
-        claim_error = self.ledger.claim_purchase_retry(
-            code, row["idempotency_key"], audit_reason, verified_trade_no, live_verified=live_verified,
-            verification_revision=verification_revision,
-        )
+        if force_new_order:
+            new_payload: dict[str, Any] = {"product_id": sku["product_id"], "quantity": 1}
+            if sku["product_type"] == "slot" and target_email:
+                new_payload["customer_email"] = target_email
+            new_idem_key = f"redeem:{code}:reorder:{uuid.uuid4().hex[:12]}"
+            resolved_buyer_email = target_email if sku["product_type"] == "slot" else row.get("buyer_email")
+            resolved_buyer_masked = mask_email(resolved_buyer_email) if resolved_buyer_email else row.get("buyer_email_masked")
+            claim_error = self.ledger.claim_purchase_retry(
+                code,
+                row.get("idempotency_key") or "",
+                audit_reason,
+                verified_trade_no,
+                live_verified=live_verified,
+                verification_revision=verification_revision,
+                force_new_order=True,
+                new_idempotency_key=new_idem_key,
+                new_payload_json=json.dumps(new_payload, ensure_ascii=False),
+                new_buyer_email=resolved_buyer_email,
+                new_buyer_email_masked=resolved_buyer_masked,
+                cancelled_statuses=tuple(CANBOSO_CANCELLED_STATUSES),
+            )
+        else:
+            claim_error = self.ledger.claim_purchase_retry(
+                code, row["idempotency_key"], audit_reason, verified_trade_no, live_verified=live_verified,
+                verification_revision=verification_revision,
+            )
         if claim_error:
             return self.admin_detail(self.ledger.get_code(code)), claim_error
         self._purchase(code, self.ledger.get_code(code), sku, cost)
@@ -565,36 +637,155 @@ class Service:
             return self.admin_detail(updated), error
         return self.admin_detail(updated), None
 
-    def poll(self, code: str) -> dict[str, Any]:
+    def poll(self, code: str, *, allow_manual_review: bool = False) -> dict[str, Any]:
         row = self.ledger.get_code(code)
-        if not row or row["status"] != "waiting_fulfillment":
-            return self.public_row(row) if row else {}
-        if row.get("upstream_status") in CANBOSO_CANCELLED_STATUSES:
+        if not row:
+            return {}
+        is_manual_poll = (
+            allow_manual_review
+            and row["status"] == "needs_manual_review"
+            and bool(row.get("upstream_order_code"))
+        )
+        if row["status"] != "waiting_fulfillment" and not is_manual_poll:
+            return self.public_row(row)
+        if row["status"] == "waiting_fulfillment" and row.get("upstream_status") in CANBOSO_CANCELLED_STATUSES:
             return self._record_canboso_cancellation(code, row["upstream_status"])
-        if row.get("submitted_at") and datetime.fromisoformat(row["submitted_at"]) < datetime.now(timezone.utc).astimezone() - timedelta(hours=24):
-            self.ledger.transition(code, "needs_manual_review", "fulfillment_over_24h", {"last_error_code": "FULFILLMENT_TIMEOUT"}, ("waiting_fulfillment",))
-            self.alert(code, "FULFILLMENT_TIMEOUT")
-            return self.public_row(self.ledger.get_code(code))
+        is_over_24h = False
+        if row["status"] == "waiting_fulfillment" and row.get("submitted_at"):
+            try:
+                is_over_24h = datetime.fromisoformat(row["submitted_at"]) < datetime.now(timezone.utc).astimezone() - timedelta(hours=24)
+            except ValueError:
+                is_over_24h = False
+        if not row.get("upstream_order_code"):
+            if is_over_24h:
+                self.ledger.transition(
+                    code,
+                    "needs_manual_review",
+                    "fulfillment_over_24h",
+                    {"last_error_code": "FULFILLMENT_TIMEOUT", "last_error_message": "上游履约超过 24 小时且缺少上游单号，请人工核对"},
+                    ("waiting_fulfillment",),
+                )
+                self.alert(code, "FULFILLMENT_TIMEOUT")
+                return self.public_row(self.ledger.get_code(code))
+            return self.public_row(row)
         try:
             response = self.canboso.get_order(row["upstream_order_code"])
         except (UpstreamTimeout, UpstreamError) as exc:
-            return self._handle_poll_failure(code, self._format_upstream_exception("查询上游订单失败", exc))
+            err_text = self._format_upstream_exception("查询上游订单失败", exc)
+            if is_over_24h:
+                self.ledger.transition(
+                    code,
+                    "needs_manual_review",
+                    "fulfillment_over_24h",
+                    {"last_error_code": "FULFILLMENT_TIMEOUT", "last_error_message": err_text, "last_polled_at": now_iso()},
+                    ("waiting_fulfillment",),
+                )
+                self.alert(code, "FULFILLMENT_TIMEOUT")
+                return self.public_row(self.ledger.get_code(code))
+            if is_manual_poll:
+                logger.warning("manual upstream poll failed code=%s detail=%s", code, err_text)
+                self.ledger.touch_poll(code, {"last_polled_at": now_iso()}, allowed=("needs_manual_review",))
+                return self.public_row(self.ledger.get_code(code))
+            return self._handle_poll_failure(code, err_text)
         except Exception as exc:
-            return self._handle_poll_failure(code, f"查询上游订单异常：{type(exc).__name__}")
+            err_text = f"查询上游订单异常：{type(exc).__name__}"
+            if is_over_24h:
+                self.ledger.transition(
+                    code,
+                    "needs_manual_review",
+                    "fulfillment_over_24h",
+                    {"last_error_code": "FULFILLMENT_TIMEOUT", "last_error_message": err_text, "last_polled_at": now_iso()},
+                    ("waiting_fulfillment",),
+                )
+                self.alert(code, "FULFILLMENT_TIMEOUT")
+                return self.public_row(self.ledger.get_code(code))
+            if is_manual_poll:
+                logger.warning("manual upstream poll failed code=%s detail=%s", code, err_text)
+                self.ledger.touch_poll(code, {"last_polled_at": now_iso()}, allowed=("needs_manual_review",))
+                return self.public_row(self.ledger.get_code(code))
+            return self._handle_poll_failure(code, err_text)
         item = (response.get("orders") or [{}])[0]
         status = str(item.get("status") or "").lower()
-        updates = {"upstream_status": status, "last_polled_at": now_iso()}
+        updates: dict[str, Any] = {"upstream_status": status, "last_polled_at": now_iso()}
         confirmed_cost = self._canboso_usd_amount((item.get("payment") or {}).get("amountUsd"))
         if confirmed_cost is not None:
             updates["cost_usd"] = confirmed_cost
         if status in CANBOSO_CANCELLED_STATUSES:
+            if is_manual_poll:
+                updates.update(self._canboso_cancellation(status))
+                self.ledger.transition(code, "needs_manual_review", "admin_poll_cancelled", updates, ("needs_manual_review",))
+                return self.public_row(self.ledger.get_code(code))
             return self._record_canboso_cancellation(code, status, updates)
         if status in {"completed", "delivered"} or item.get("deliveredAt"):
-            updates.update({"completed_at": now_iso(), "delivery_json": None})
-            self.ledger.transition(code, "completed", "shared_fulfillment_completed", updates, ("waiting_fulfillment",))
+            sku = self.ledger.get_sku(row["sku_key"])
+            if sku and sku["product_type"] == "account":
+                if not row.get("delivery_json"):
+                    delivery = self._safe_delivery(item.get("delivery") or item)
+                    updates["delivery_json"] = json.dumps(delivery, ensure_ascii=False)
+                has_warranty = bool(row.get("warranty_json"))
+                target = "completed" if has_warranty else "delivered_pending_warranty"
+                updates.update({
+                    "completed_at": (row.get("completed_at") or now_iso()) if has_warranty else None,
+                    "last_error_code": None,
+                    "last_error_message": None,
+                })
+                reason = "admin_poll_completed" if is_manual_poll else "exclusive_delivered"
+                self.ledger.transition(code, target, reason, updates, ("waiting_fulfillment", "needs_manual_review"))
+            else:
+                updates.update({
+                    "completed_at": now_iso(),
+                    "delivery_json": None,
+                    "last_error_code": None,
+                    "last_error_message": None,
+                })
+                reason = "admin_poll_completed" if is_manual_poll else "shared_fulfillment_completed"
+                self.ledger.transition(code, "completed", reason, updates, ("waiting_fulfillment", "needs_manual_review"))
+            return self.public_row(self.ledger.get_code(code))
+        if is_over_24h:
+            updates.update({
+                "last_error_code": "FULFILLMENT_TIMEOUT",
+                "last_error_message": "上游履约超过 24 小时仍未完成，请核对上游订单",
+            })
+            self.ledger.transition(code, "needs_manual_review", "fulfillment_over_24h", updates, ("waiting_fulfillment",))
+            self.alert(code, "FULFILLMENT_TIMEOUT")
+            return self.public_row(self.ledger.get_code(code))
+        prev_status = str(row.get("upstream_status") or "").strip().lower()
+        state_changed = (status != prev_status) or (confirmed_cost is not None and confirmed_cost != row.get("cost_usd"))
+        recovered_from_error = bool(row.get("last_error_code"))
+        if is_manual_poll:
+            if state_changed:
+                self.ledger.transition(code, "needs_manual_review", "admin_poll_sync", updates, ("needs_manual_review",))
+            else:
+                self.ledger.touch_poll(code, updates, allowed=("needs_manual_review",))
         else:
-            self.ledger.transition(code, "waiting_fulfillment", "shared_poll", updates, ("waiting_fulfillment",))
+            if recovered_from_error:
+                updates.update({"last_error_code": None, "last_error_message": None})
+            if state_changed or recovered_from_error:
+                self.ledger.transition(code, "waiting_fulfillment", "shared_poll", updates, ("waiting_fulfillment",))
+            else:
+                self.ledger.touch_poll(code, updates, allowed=("waiting_fulfillment",))
         return self.public_row(self.ledger.get_code(code))
+
+    def recover_stuck_purchasing(self) -> list[str]:
+        timeout_s = max(60, int(self.settings.purchasing_stuck_timeout_seconds))
+        cutoff_iso = (datetime.now(timezone.utc).astimezone() - timedelta(seconds=timeout_s)).isoformat(timespec="seconds")
+        stuck_rows = self.ledger.list_stuck_purchasing(cutoff_iso)
+        recovered: list[str] = []
+        for row in stuck_rows:
+            code = row["code"]
+            if self.ledger.transition(
+                code,
+                "needs_manual_review",
+                "purchasing_stuck_recovery",
+                {
+                    "last_error_code": "PURCHASING_STUCK_RECOVERY",
+                    "last_error_message": f"下单超过 {timeout_s} 秒未落账（可能进程重启或上游中断），请先在 Canboso 核对订单后再处理",
+                },
+                ("purchasing",),
+            ):
+                self.alert(code, "PURCHASING_STUCK_RECOVERY")
+                recovered.append(code)
+        return recovered
 
     @staticmethod
     def _canboso_usd_amount(value: Any) -> Optional[float]:
@@ -863,6 +1054,8 @@ class Service:
                     "screenshot_content_type": screenshot_ct_value,
                     "screenshot_size": screenshot_size_value,
                     "completed_at": now_iso(),
+                    "last_error_code": None,
+                    "last_error_message": None,
                 },
                 ("delivered_pending_warranty", "completed"),
             )
@@ -906,15 +1099,43 @@ class Service:
                 return {}, "TG_FORWARD_FAILED", err_msg
             return self.admin_detail(self.ledger.get_code(code)), None, None
 
-    def warranty_ack(self, code: str, note: str) -> dict[str, Any]:
+    def warranty_ack(self, code: str, note: str) -> tuple[dict[str, Any], Optional[str]]:
         with self._warranty_lock(code):
             row = self.ledger.get_code(code)
             if not row:
-                return {}
-            warranty = json.loads(row["warranty_json"] or "{}")
+                return {}, "CODE_NOT_FOUND"
+            if row["sku_key"] != "ultra_exclusive_admin":
+                return {}, "WARRANTY_NOT_APPLICABLE"
+            warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else {}
+            if (
+                row["status"] != "completed"
+                or not isinstance(warranty, dict)
+                or not str(warranty.get("admin_email") or "").strip()
+            ):
+                return {}, "WARRANTY_NOT_ALLOWED"
             warranty.update({"status": "registered_upstream", "registered_at": now_iso(), "note": note or warranty.get("note", "")})
-            self.ledger.transition(code, "completed", "warranty_ack", {"warranty_json": json.dumps(warranty, ensure_ascii=False)}, ("completed",))
-            return self.admin_detail(self.ledger.get_code(code))
+            self.ledger.transition(
+                code,
+                "completed",
+                "warranty_ack",
+                {
+                    "warranty_json": json.dumps(warranty, ensure_ascii=False),
+                    "last_error_code": None,
+                    "last_error_message": None,
+                },
+                ("completed",),
+            )
+            return self.admin_detail(self.ledger.get_code(code)), None
+
+    def record_upstream_refund(self, code: str, refund_usd: float, note: str = "") -> tuple[dict[str, Any], Optional[str]]:
+        row = self.ledger.get_code(code)
+        if not row:
+            return {}, "CODE_NOT_FOUND"
+        if not row.get("upstream_order_code"):
+            return {}, "NO_UPSTREAM_ORDER"
+        if not self.ledger.record_upstream_refund(code, refund_usd, note):
+            return {}, "NO_UPSTREAM_ORDER"
+        return self.admin_detail(self.ledger.get_code(code)), None
 
     def alert(self, code: str, reason: str) -> None:
         if self.ledger.claim_notification(f"alert:{code}:{reason}"):
@@ -1005,6 +1226,15 @@ class Service:
                 (row["code"],),
             ).fetchone() is not None
 
+    @staticmethod
+    def _elapsed_minutes(row: dict[str, Any]) -> Optional[int]:
+        if not row.get("submitted_at"):
+            return None
+        try:
+            return max(0, int((datetime.now(timezone.utc).astimezone() - datetime.fromisoformat(row["submitted_at"])).total_seconds() // 60))
+        except ValueError:
+            return None
+
     def public_row(self, row: Optional[dict[str, Any]]) -> dict[str, Any]:
         if not row:
             return {}
@@ -1035,12 +1265,7 @@ class Service:
             warranty = None
         if sku["product_type"] == "slot":
             delivery = None
-        elapsed = None
-        if row.get("submitted_at"):
-            try:
-                elapsed = max(0, int((datetime.now(timezone.utc).astimezone() - datetime.fromisoformat(row["submitted_at"])).total_seconds() // 60))
-            except ValueError:
-                pass
+        elapsed = self._elapsed_minutes(row)
         notice = "订单正在人工处理，请带兑换码联系客服。" if row["status"] == "needs_manual_review" else None
         display_email = (
             normalize_display_email(row.get("buyer_email"))
@@ -1059,11 +1284,17 @@ class Service:
         elif row["channel"] == "16688" and sku["product_type"] == "slot" and display_email:
             local, domain = display_email.rsplit("@", 1)
             display_email = f"{local[:1]}***@{domain}"
-        return {"code": row["code"], "sku_key": row["sku_key"], "sku_title": sku["title"], "product_type": sku["product_type"], "channel": row["channel"], "status": status, "buyer_email_masked": display_email, "delivery": delivery, "warranty": warranty, "fulfillment": {"eta_text": "一般 3-7 小时内发家庭组邀请，最晚 24 小时" if sku["product_type"] == "slot" else None, "submitted_at": None if delivery_on_hold else row.get("submitted_at"), "completed_at": None if delivery_on_hold else row.get("completed_at"), "last_polled_at": None if delivery_on_hold else row.get("last_polled_at"), "elapsed_minutes": elapsed}, "buyer_notice": notice, "support_hint": "有问题请把订单号和兑换码发给客服。", "created_at": row["created_at"], "updated_at": row["updated_at"]}
+        return {"code": row["code"], "sku_key": row["sku_key"], "sku_title": sku["title"], "product_type": sku["product_type"], "channel": row["channel"], "status": status, "buyer_email_masked": display_email, "delivery": delivery, "warranty": warranty, "fulfillment": {"eta_text": self.settings.shared_sla_eta_text if sku["product_type"] == "slot" else None, "submitted_at": None if delivery_on_hold else row.get("submitted_at"), "completed_at": None if delivery_on_hold else row.get("completed_at"), "last_polled_at": None if delivery_on_hold else row.get("last_polled_at"), "elapsed_minutes": elapsed}, "buyer_notice": notice, "support_hint": self.settings.support_contact_hint, "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
-    def admin_summary(self, row: dict[str, Any]) -> dict[str, Any]:
-        sku = self.ledger.get_sku(row["sku_key"])
-        elapsed = self.public_row(row)["fulfillment"]["elapsed_minutes"]
+    def admin_summary(
+        self,
+        row: dict[str, Any],
+        *,
+        sku_map: Optional[dict[str, dict[str, Any]]] = None,
+        disputed_codes: Optional[set[str]] = None,
+    ) -> dict[str, Any]:
+        sku = (sku_map or {}).get(row["sku_key"]) or self.ledger.get_sku(row["sku_key"])
+        elapsed = self._elapsed_minutes(row)
         warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else None
         delivery = json.loads(row["delivery_json"]) if row.get("delivery_json") else None
         resolved_email = row.get("buyer_email") or (warranty.get("admin_email") if isinstance(warranty, dict) else None) or None
@@ -1076,6 +1307,22 @@ class Service:
             display_status = "pending_warranty_ack"
         else:
             display_status = row["status"]
+        upstream_status_low = str(row.get("upstream_status") or "").strip().lower()
+        last_err = row.get("last_error_code")
+        can_poll_upstream = bool(row.get("upstream_order_code") and row["status"] in {"waiting_fulfillment", "needs_manual_review"})
+        is_disputed = last_err == "CHANNEL16688_RECIPIENT_DISPUTED" or (
+            disputed_codes is not None and row["code"] in disputed_codes
+        )
+        unconfirmed_purchase = not row.get("upstream_order_code") and last_err in {
+            "PURCHASING_STUCK_RECOVERY",
+            "CANBOSO_PURCHASE_UNCONFIRMED",
+        }
+        can_reorder = bool(
+            row["status"] == "needs_manual_review"
+            and not is_disputed
+            and not unconfirmed_purchase
+            and (not row.get("upstream_order_code") or upstream_status_low in CANBOSO_CANCELLED_STATUSES)
+        )
         return {
             "code": row["code"],
             "sku_key": row["sku_key"],
@@ -1094,11 +1341,15 @@ class Service:
             "upstream_order_code": row.get("upstream_order_code"),
             "upstream_status": row.get("upstream_status"),
             "cost_usd": row.get("cost_usd"),
+            "upstream_refund_usd": row.get("upstream_refund_usd"),
+            "upstream_refund_note": row.get("upstream_refund_note"),
             "warranty_status": warranty_status,
             "last_error_code": row.get("last_error_code"),
             "last_error_message": row.get("last_error_message"),
             "is_overdue_24h": bool(elapsed is not None and elapsed > 24 * 60 and row["status"] == "waiting_fulfillment"),
             "elapsed_minutes": elapsed,
+            "can_poll_upstream": can_poll_upstream,
+            "can_reorder": can_reorder,
             "submitted_at": row.get("submitted_at"),
             "completed_at": row.get("completed_at"),
             "created_at": row["created_at"],
@@ -1107,6 +1358,8 @@ class Service:
 
     def admin_detail(self, row: dict[str, Any]) -> dict[str, Any]:
         result = self.admin_summary(row)
+        if result["can_reorder"] and self.ledger.is_disputed_16688_code(row["code"], row.get("last_error_code")):
+            result["can_reorder"] = False
         warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else None
         if warranty:
             if warranty.get("admin_email"):

@@ -7,15 +7,19 @@ from datetime import date, datetime, timezone
 import io
 import json
 import logging
+import math
 from pathlib import Path
 import re
 import time
 from typing import Any, Optional
 
 from fastapi import BackgroundTasks, Depends, FastAPI, Header, HTTPException, Query, Request, UploadFile
+from fastapi.encoders import jsonable_encoder
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import FileResponse, JSONResponse, PlainTextResponse, Response
 from pydantic import ValidationError
 from starlette.datastructures import UploadFile as StarletteUploadFile
+from starlette.routing import Match
 
 from .agiso import (
     AOPIC_AUTO_SEND_SUCCESS,
@@ -42,10 +46,12 @@ from .models import (
     RetryRequest,
     RevokeRequest,
     SkuPatchRequest,
+    UpstreamRefundRequest,
     WarrantyAckRequest,
     WarrantyForm,
 )
 from .service import (
+    CANBOSO_CANCELLED_STATUSES,
     COMPLETED_ADMIN_SQL,
     DISPATCHED_UNUSED_SQL,
     IN_STOCK_SQL,
@@ -107,6 +113,8 @@ def status_for(code: str) -> int:
         "CANNOT_REVOKE_COMPLETED": 409,
         "RETRY_NOT_AVAILABLE": 409,
         "CANBOSO_ORDER_CANCELLED": 409,
+        "UPSTREAM_ORDER_ACTIVE": 409,
+        "NO_UPSTREAM_ORDER": 409,
         "WARRANTY_LOCKED": 409,
         "WARRANTY_NOT_APPLICABLE": 409,
         "WARRANTY_NOT_ALLOWED": 409,
@@ -162,8 +170,14 @@ def create_app(
     service = Service(ledger, settings, canboso, channel, mailer, agiso=agiso, tg_forwarder=tg_forwarder)
 
     async def poller() -> None:
+        await asyncio.sleep(10)
         while True:
-            await asyncio.sleep(max(10, settings.poll_interval_seconds))
+            try:
+                recovered = await asyncio.to_thread(service.recover_stuck_purchasing)
+                if recovered:
+                    logger.warning("recovered stuck purchasing codes=%s", ",".join(recovered))
+            except Exception as exc:
+                logger.warning("stuck purchasing recovery failed error=%s", type(exc).__name__)
             rows, _ = ledger.list_codes("status='waiting_fulfillment'", (), 500, 0)
             for row in rows:
                 try:
@@ -171,6 +185,7 @@ def create_app(
                 except Exception as exc:
                     logger.warning("background poll failed code=%s error=%s", row["code"], type(exc).__name__)
                     service.alert(row["code"], "UPSTREAM_ERROR")
+            await asyncio.sleep(max(10, settings.poll_interval_seconds))
 
     async def agiso_poller() -> None:
         while True:
@@ -250,6 +265,19 @@ def create_app(
         if isinstance(exc.detail, dict) and "error_code" in exc.detail:
             return JSONResponse(status_code=exc.status_code, content=exc.detail)
         return JSONResponse(status_code=exc.status_code, content={"error_code": "HTTP_ERROR", "message": str(exc.detail)})
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(_, exc: RequestValidationError) -> JSONResponse:
+        def _sanitize(obj: Any) -> Any:
+            if isinstance(obj, float) and not math.isfinite(obj):
+                return str(obj)
+            if isinstance(obj, dict):
+                return {key: _sanitize(val) for key, val in obj.items()}
+            if isinstance(obj, (list, tuple)):
+                return [_sanitize(item) for item in obj]
+            return obj
+
+        return JSONResponse(status_code=422, content={"detail": jsonable_encoder(_sanitize(exc.errors()))})
 
     def get_service() -> Service:
         return service
@@ -592,7 +620,23 @@ def create_app(
             )
 
     @app.get("/api/v1/admin/codes", dependencies=[Depends(require_admin)])
-    def list_codes(status: Optional[str] = None, channel: Optional[str] = None, sku_key: Optional[str] = None, q: Optional[str] = None, page: int = Query(1, ge=1), page_size: int = Query(20, ge=1, le=100), svc: Service = Depends(get_service)) -> Any:
+    def list_codes(
+        status: Optional[str] = None,
+        channel: Optional[str] = None,
+        sku_key: Optional[str] = None,
+        q: Optional[str] = None,
+        error_code: Optional[str] = None,
+        start_date: Optional[str] = None,
+        end_date: Optional[str] = None,
+        page: int = Query(1, ge=1),
+        page_size: int = Query(20, ge=1, le=100),
+        svc: Service = Depends(get_service),
+    ) -> Any:
+        try:
+            parsed_start = _parse_iso_date_param(start_date, "start_date")
+            parsed_end = _parse_iso_date_param(end_date, "end_date")
+        except ValueError as exc:
+            return error("INVALID_DATE", str(exc), 400)
         normalized_status = (status or "").strip()
         clauses, params = [], []
         if normalized_status == "in_stock":
@@ -616,6 +660,15 @@ def create_app(
         for field, value in (("channel", channel), ("sku_key", sku_key)):
             if value:
                 clauses.append(field + "=?"); params.append(value)
+        if error_code and error_code.strip():
+            clauses.append("last_error_code=?")
+            params.append(error_code.strip())
+        if parsed_start:
+            clauses.append("substr(COALESCE(NULLIF(submitted_at, ''), created_at), 1, 10) >= ?")
+            params.append(parsed_start)
+        if parsed_end:
+            clauses.append("substr(COALESCE(NULLIF(submitted_at, ''), created_at), 1, 10) <= ?")
+            params.append(parsed_end)
         if q and q.strip():
             pattern = f"%{q.strip()}%"
             clauses.append("(code LIKE ? OR external_order_id LIKE ? OR buyer_email LIKE ? OR upstream_order_code LIKE ? OR remark LIKE ? OR warranty_json LIKE ? OR delivery_json LIKE ?)")
@@ -627,8 +680,11 @@ def create_app(
             (page - 1) * page_size,
             order_by=order_by,
         )
+        sku_map = ledger.get_all_skus()
+        review_codes = [row["code"] for row in rows if row["status"] == "needs_manual_review"]
+        disputed_codes = ledger.list_disputed_16688_codes(review_codes)
         return {
-            "items": [svc.admin_summary(row) for row in rows],
+            "items": [svc.admin_summary(row, sku_map=sku_map, disputed_codes=disputed_codes) for row in rows],
             "total": total, "page": page, "page_size": page_size,
         }
 
@@ -652,19 +708,28 @@ def create_app(
         row = ledger.get_code(code)
         if not row:
             return error("CODE_NOT_FOUND", "没找到这个兑换码", 404)
-        svc.poll(code)
+        svc.poll(code, allow_manual_review=True)
         return svc.admin_detail(ledger.get_code(code))
 
     @app.post("/api/v1/admin/codes/{code}/revoke", dependencies=[Depends(require_admin)])
     def revoke(code: str, body: RevokeRequest, svc: Service = Depends(get_service)) -> Any:
-        row = ledger.get_code(code)
-        if not row:
+        outcome = svc.ledger.revoke_code(
+            code,
+            body.reason,
+            force=body.force,
+            cancelled_statuses=CANBOSO_CANCELLED_STATUSES,
+        )
+        if outcome == "CODE_NOT_FOUND":
             return error("CODE_NOT_FOUND", "没找到这个兑换码", 404)
-        if row["status"] == "completed":
+        if outcome == "CANNOT_REVOKE_COMPLETED":
             return error("CANNOT_REVOKE_COMPLETED", "这笔单已经完成了，不能作废", 409)
-        if not svc.ledger.transition(code, "revoked", body.reason, {"last_error_code": "REVOKED"}, (
-            "unused", "validating", "waiting_fulfillment", "delivered_pending_warranty", "needs_manual_review", "revoked",
-        )):
+        if outcome == "UPSTREAM_ORDER_ACTIVE":
+            return error(
+                "UPSTREAM_ORDER_ACTIVE",
+                "这笔单已在上游下单扣款且未取消，默认禁止直接作废；如已核对上游退款或确认要强制本地作废，请开启强制确认",
+                409,
+            )
+        if outcome != "OK":
             return error("CONCURRENT_IN_PROGRESS", "订单正在处理，请等下单结果落账后再作废", 409)
         svc.ledger.mark_agiso_delivery_revoked(code)
         return svc.admin_detail(ledger.get_code(code))
@@ -679,10 +744,14 @@ def create_app(
         detail, err_code = svc.replay(
             code, body.override_price_limit, body.note, body.merchant_verified_order_no,
             body.merchant_verified_recipient_email,
+            force_new_order=body.force_new_order,
+            new_buyer_email=body.new_buyer_email,
         )
         if err_code:
             messages = {
                 "RETRY_NOT_AVAILABLE": "这笔单已有上游订单、正在处理，或没有可重试的原始请求，请核对详情",
+                "UPSTREAM_ORDER_ACTIVE": "原上游订单尚未取消，禁止重下新单（防止重复扣款）；请先点“同步上游状态”确认已取消",
+                "INVALID_EMAIL": "新的收件邮箱格式不对，请检查后再试",
                 "ORDER_NOT_ELIGIBLE": "16688 单号或订单状态不符合领货条件，已拦截重试",
                 "CHANNEL16688_OPENAPI_PAUSED": "16688 暂停 OpenAPI，请在商家后台核验订单后再试",
                 "MERCHANT_RECIPIENT_CONFIRMATION_REQUIRED": "请和买家核对收邀请邮箱，并确认它与原请求一致。邮箱不一致时请停止续单。",
@@ -697,11 +766,28 @@ def create_app(
             return error(err_code, messages.get(err_code, "重试没成功，点开详情看看原因"), status_for(err_code))
         return detail
 
+    @app.post("/api/v1/admin/codes/{code}/upstream-refund", dependencies=[Depends(require_admin)])
+    def upstream_refund(code: str, body: UpstreamRefundRequest, svc: Service = Depends(get_service)) -> Any:
+        detail, err_code = svc.record_upstream_refund(code, body.upstream_refund_usd, body.note)
+        if err_code:
+            messages = {
+                "CODE_NOT_FOUND": "没找到这个兑换码",
+                "NO_UPSTREAM_ORDER": "这笔单还没有关联上游采购单号，无法登记上游退款金额",
+            }
+            return error(err_code, messages.get(err_code, "登记上游退款失败"), status_for(err_code))
+        return detail
+
     @app.post("/api/v1/admin/codes/{code}/warranty-ack", dependencies=[Depends(require_admin)])
     def warranty_ack(code: str, body: WarrantyAckRequest, svc: Service = Depends(get_service)) -> Any:
-        if not ledger.get_code(code):
-            return error("CODE_NOT_FOUND", "没找到这个兑换码", 404)
-        return svc.warranty_ack(code, body.note)
+        detail, err_code = svc.warranty_ack(code, body.note)
+        if err_code:
+            messages = {
+                "CODE_NOT_FOUND": "没找到这个兑换码",
+                "WARRANTY_NOT_APPLICABLE": "这个商品不用登记保修报备",
+                "WARRANTY_NOT_ALLOWED": "买家还没提交保修邮箱或订单状态不符合，暂时不能确认已报备",
+            }
+            return error(err_code, messages.get(err_code, "确认保修报备失败"), status_for(err_code))
+        return detail
 
     @app.post("/api/v1/admin/codes/{code}/warranty-forward", dependencies=[Depends(require_admin)])
     async def warranty_forward(code: str, svc: Service = Depends(get_service)) -> Any:
@@ -921,6 +1007,7 @@ def create_app(
         end_date: Optional[str] = None,
         channel: Optional[str] = None,
         format: str = "json",
+        exclude_inactive: bool = False,
     ) -> Any:
         try:
             parsed_start = _parse_iso_date_param(start_date, "start_date")
@@ -936,6 +1023,7 @@ def create_app(
             start_date=parsed_start,
             end_date=parsed_end,
             channel=channel,
+            exclude_inactive=exclude_inactive,
         )
         if export_format == "json":
             return {"source": "tg_fatbunny", "count": len(items), "items": items}
@@ -987,13 +1075,33 @@ def create_app(
             headers={"Content-Disposition": 'attachment; filename="plan2-reconciliation.csv"'},
         )
 
-    @app.get("/api/{path:path}")
-    def api_not_found(path: str) -> JSONResponse:
+    async def api_fallback(request: Request, path: str = "") -> Response:
+        allowed_methods: set[str] = set()
+        for route in app.routes:
+            if getattr(route, "endpoint", None) is api_fallback:
+                continue
+            if not str(getattr(route, "path", "")).startswith("/api"):
+                continue
+            match, _ = route.matches(request.scope)
+            if match == Match.PARTIAL:
+                allowed_methods.update(getattr(route, "methods", set()) or set())
+        if allowed_methods:
+            return JSONResponse(
+                status_code=405,
+                content={"error_code": "METHOD_NOT_ALLOWED", "message": "该接口不支持当前请求方法"},
+                headers={"Allow": ", ".join(sorted(allowed_methods))},
+            )
         return error("NOT_FOUND", "没有这个接口", 404)
+
+    _api_fallback_methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "HEAD"]
+    app.add_api_route("/api", api_fallback, methods=_api_fallback_methods, include_in_schema=False)
+    app.add_api_route("/api/{path:path}", api_fallback, methods=_api_fallback_methods, include_in_schema=False)
 
     dist = Path(__file__).resolve().parents[1] / "frontend" / "dist"
     if dist.is_dir():
-        async def spa(path: str = "") -> FileResponse:
+        async def spa(request: Request, path: str = "") -> Response:
+            if path == "api" or path.startswith("api/"):
+                return error("NOT_FOUND", "没有这个接口", 404)
             requested = (dist / path).resolve()
             try:
                 requested.relative_to(dist.resolve())

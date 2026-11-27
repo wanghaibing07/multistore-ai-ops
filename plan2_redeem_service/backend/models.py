@@ -34,6 +34,7 @@ class BatchRequest(BaseModel):
 
 class RevokeRequest(BaseModel):
     reason: str = "商家手动作废"
+    force: bool = False
 
 
 class RetryRequest(BaseModel):
@@ -41,6 +42,13 @@ class RetryRequest(BaseModel):
     note: str = ""
     merchant_verified_order_no: str = Field(default="", max_length=100)
     merchant_verified_recipient_email: str = Field(default="", max_length=254)
+    force_new_order: bool = False
+    new_buyer_email: str = Field(default="", max_length=254)
+
+
+class UpstreamRefundRequest(BaseModel):
+    upstream_refund_usd: float = Field(ge=0, allow_inf_nan=False)
+    note: str = Field(default="", max_length=300)
 
 
 class WarrantyAckRequest(BaseModel):
@@ -48,7 +56,7 @@ class WarrantyAckRequest(BaseModel):
 
 
 class SkuPatchRequest(BaseModel):
-    max_cost_usd: float = Field(gt=0)
+    max_cost_usd: float = Field(gt=0, allow_inf_nan=False)
     goods_no: Optional[str] = None
 
 

@@ -1954,3 +1954,314 @@ def test_admin_reconciliation_export_auth_filters_sanitization_and_csv(component
         assert formula_rows[0]["原币金额"] == "9.5000"
         assert formula_rows[0]["数量"] == "1"
 
+
+def test_admin_poll_manual_review_completes_or_records_cancellation(components):
+    app, _, canboso, _, _ = components
+    with client(app) as c:
+        code_done = issue(c)
+        c.post(
+            f"/api/v1/public/codes/{code_done}/redeem",
+            json={"buyer_email": "done@gmail.com", "buyer_email_confirm": "done@gmail.com", "preflight_confirmed": True},
+        )
+        row_done = app.state.ledger.get_code(code_done)
+        assert app.state.ledger.transition(
+            code_done,
+            "needs_manual_review",
+            "manual_flag",
+            {"last_error_code": "FULFILLMENT_TIMEOUT", "last_error_message": "超过 24 小时"},
+            ("waiting_fulfillment",),
+        )
+        canboso.orders[row_done["upstream_order_code"]]["status"] = "completed"
+        polled = c.post(f"/api/v1/admin/codes/{code_done}/poll", headers=ADMIN)
+        assert polled.status_code == 200
+        body = polled.json()
+        assert body["status"] == "completed"
+        assert body["last_error_code"] is None
+        assert body["last_error_message"] is None
+        assert any(ev["reason"] == "admin_poll_completed" for ev in body["audit_events"])
+
+        code_cancel = issue(c)
+        c.post(
+            f"/api/v1/public/codes/{code_cancel}/redeem",
+            json={"buyer_email": "cancel@gmail.com", "buyer_email_confirm": "cancel@gmail.com", "preflight_confirmed": True},
+        )
+        row_cancel = app.state.ledger.get_code(code_cancel)
+        assert app.state.ledger.transition(
+            code_cancel,
+            "needs_manual_review",
+            "manual_flag",
+            {"last_error_code": "FULFILLMENT_TIMEOUT", "last_error_message": "超过 24 小时"},
+            ("waiting_fulfillment",),
+        )
+        canboso.orders[row_cancel["upstream_order_code"]]["status"] = "cancelled"
+        polled_cancel = c.post(f"/api/v1/admin/codes/{code_cancel}/poll", headers=ADMIN)
+        assert polled_cancel.status_code == 200
+        cancel_body = polled_cancel.json()
+        assert cancel_body["status"] == "needs_manual_review"
+        assert cancel_body["upstream_status"] == "cancelled"
+        assert cancel_body["can_reorder"] is True
+        assert any(ev["reason"] == "admin_poll_cancelled" for ev in cancel_body["audit_events"])
+
+
+def test_force_new_order_reorders_same_or_new_email_and_blocks_active_upstream(components):
+    app, _, canboso, _, _ = components
+    with client(app) as c:
+        code = issue(c)
+        c.post(
+            f"/api/v1/public/codes/{code}/redeem",
+            json={"buyer_email": "old@gmail.com", "buyer_email_confirm": "old@gmail.com", "preflight_confirmed": True},
+        )
+        first_order = app.state.ledger.get_code(code)["upstream_order_code"]
+        assert app.state.ledger.transition(
+            code,
+            "needs_manual_review",
+            "manual_check",
+            {"last_error_code": "FULFILLMENT_TIMEOUT"},
+            ("waiting_fulfillment",),
+        )
+        blocked = c.post(f"/api/v1/admin/codes/{code}/retry", headers=ADMIN, json={"force_new_order": True})
+        assert blocked.status_code == 409
+        assert blocked.json()["error_code"] == "UPSTREAM_ORDER_ACTIVE"
+
+        canboso.orders[first_order]["status"] = "cancelled"
+        c.post(f"/api/v1/admin/codes/{code}/poll", headers=ADMIN)
+
+        bad_email = c.post(
+            f"/api/v1/admin/codes/{code}/retry",
+            headers=ADMIN,
+            json={"force_new_order": True, "new_buyer_email": "not-an-email"},
+        )
+        assert bad_email.status_code == 422
+        assert bad_email.json()["error_code"] == "INVALID_EMAIL"
+
+        reordered = c.post(
+            f"/api/v1/admin/codes/{code}/retry",
+            headers=ADMIN,
+            json={"force_new_order": True, "note": "原邮箱重下"},
+        )
+        assert reordered.status_code == 200
+        re_body = reordered.json()
+        second_order = re_body["upstream_order_code"]
+        assert second_order and second_order != first_order
+        assert re_body["status"] == "waiting_fulfillment"
+        assert re_body["buyer_email"] == "old@gmail.com"
+        assert any(f"[prev={first_order}]" in ev["reason"] for ev in re_body["audit_events"])
+
+        canboso.orders[second_order]["status"] = "cancelled"
+        c.post(f"/api/v1/admin/codes/{code}/poll", headers=ADMIN)
+        reordered_email = c.post(
+            f"/api/v1/admin/codes/{code}/retry",
+            headers=ADMIN,
+            json={"force_new_order": True, "new_buyer_email": "fresh@gmail.com", "note": "买家换新号"},
+        )
+        assert reordered_email.status_code == 200
+        re2 = reordered_email.json()
+        assert re2["upstream_order_code"] != second_order
+        assert re2["buyer_email"] == "fresh@gmail.com"
+        assert any("[email:old@gmail.com->fresh@gmail.com]" in ev["reason"] for ev in re2["audit_events"])
+
+
+def test_poll_over_24h_queries_upstream_before_timing_out(components):
+    app, _, canboso, _, _ = components
+    old_ts = (datetime.now(timezone.utc).astimezone() - timedelta(hours=25)).isoformat(timespec="seconds")
+    with client(app) as c:
+        code_finished = issue(c)
+        c.post(
+            f"/api/v1/public/codes/{code_finished}/redeem",
+            json={"buyer_email": "ok24@gmail.com", "buyer_email_confirm": "ok24@gmail.com", "preflight_confirmed": True},
+        )
+        row1 = app.state.ledger.get_code(code_finished)
+        with app.state.ledger.transaction(immediate=True) as conn:
+            conn.execute("UPDATE codes SET submitted_at=? WHERE code=?", (old_ts, code_finished))
+        canboso.orders[row1["upstream_order_code"]]["status"] = "completed"
+        res1 = app.state.service.poll(code_finished)
+        assert res1["status"] == "completed"
+
+        code_still_pending = issue(c)
+        c.post(
+            f"/api/v1/public/codes/{code_still_pending}/redeem",
+            json={"buyer_email": "slow24@gmail.com", "buyer_email_confirm": "slow24@gmail.com", "preflight_confirmed": True},
+        )
+        with app.state.ledger.transaction(immediate=True) as conn:
+            conn.execute("UPDATE codes SET submitted_at=? WHERE code=?", (old_ts, code_still_pending))
+        res2 = app.state.service.poll(code_still_pending)
+        assert res2["status"] == "needs_manual_review"
+        assert app.state.ledger.get_code(code_still_pending)["last_error_code"] == "FULFILLMENT_TIMEOUT"
+
+
+def test_recover_stuck_purchasing_transitions_only_stale_rows(components):
+    app, _, _, _, mailer = components
+    stale_ts = (datetime.now(timezone.utc).astimezone() - timedelta(minutes=10)).isoformat(timespec="seconds")
+    fresh_ts = now_iso()
+    with client(app) as c:
+        stale_code = issue(c)
+        fresh_code = issue(c)
+        with app.state.ledger.transaction(immediate=True) as conn:
+            conn.execute("UPDATE codes SET status='purchasing', updated_at=? WHERE code=?", (stale_ts, stale_code))
+            conn.execute("UPDATE codes SET status='purchasing', updated_at=? WHERE code=?", (fresh_ts, fresh_code))
+        recovered = app.state.service.recover_stuck_purchasing()
+        assert recovered == [stale_code]
+        stale_row = app.state.ledger.get_code(stale_code)
+        fresh_row = app.state.ledger.get_code(fresh_code)
+        assert stale_row["status"] == "needs_manual_review"
+        assert stale_row["last_error_code"] == "PURCHASING_STUCK_RECOVERY"
+        assert fresh_row["status"] == "purchasing"
+        assert any("PURCHASING_STUCK_RECOVERY" in msg["body"] for msg in mailer.sent)
+
+
+def test_revoke_blocks_active_upstream_unless_forced(components):
+    app, _, canboso, _, _ = components
+    with client(app) as c:
+        code_active = issue(c)
+        c.post(
+            f"/api/v1/public/codes/{code_active}/redeem",
+            json={"buyer_email": "rev1@gmail.com", "buyer_email_confirm": "rev1@gmail.com", "preflight_confirmed": True},
+        )
+        blocked = c.post(f"/api/v1/admin/codes/{code_active}/revoke", headers=ADMIN, json={"reason": "误操作"})
+        assert blocked.status_code == 409
+        assert blocked.json()["error_code"] == "UPSTREAM_ORDER_ACTIVE"
+
+        forced = c.post(
+            f"/api/v1/admin/codes/{code_active}/revoke",
+            headers=ADMIN,
+            json={"reason": "核对后强制取消", "force": True},
+        )
+        assert forced.status_code == 200
+        assert forced.json()["status"] == "revoked"
+        assert any("[force]" in ev["reason"] for ev in forced.json()["audit_events"])
+
+        code_cancelled = issue(c)
+        c.post(
+            f"/api/v1/public/codes/{code_cancelled}/redeem",
+            json={"buyer_email": "rev2@gmail.com", "buyer_email_confirm": "rev2@gmail.com", "preflight_confirmed": True},
+        )
+        up_code = app.state.ledger.get_code(code_cancelled)["upstream_order_code"]
+        canboso.orders[up_code]["status"] = "cancelled"
+        c.post(f"/api/v1/admin/codes/{code_cancelled}/poll", headers=ADMIN)
+        allowed = c.post(f"/api/v1/admin/codes/{code_cancelled}/revoke", headers=ADMIN, json={"reason": "上游已退"})
+        assert allowed.status_code == 200
+        assert allowed.json()["status"] == "revoked"
+
+
+def test_warranty_ack_validates_sku_and_submitted_warranty(components):
+    app, _, _, _, _ = components
+    with client(app) as c:
+        shared_code = issue(c, sku="ultra_shared_slot")
+        resp_shared = c.post(f"/api/v1/admin/codes/{shared_code}/warranty-ack", headers=ADMIN, json={"note": "x"})
+        assert resp_shared.status_code == 409
+        assert resp_shared.json()["error_code"] == "WARRANTY_NOT_APPLICABLE"
+
+        excl_code = issue(c, sku="ultra_exclusive_admin")
+        c.post(f"/api/v1/public/codes/{excl_code}/redeem", json={"preflight_confirmed": True})
+        resp_no_email = c.post(f"/api/v1/admin/codes/{excl_code}/warranty-ack", headers=ADMIN, json={"note": "x"})
+        assert resp_no_email.status_code == 409
+        assert resp_no_email.json()["error_code"] == "WARRANTY_NOT_ALLOWED"
+
+
+def test_steady_poll_uses_touch_poll_without_bloating_audit_events(components):
+    app, _, _, _, _ = components
+    with client(app) as c:
+        code = issue(c)
+        c.post(
+            f"/api/v1/public/codes/{code}/redeem",
+            json={"buyer_email": "steady@gmail.com", "buyer_email_confirm": "steady@gmail.com", "preflight_confirmed": True},
+        )
+        app.state.service.poll(code)
+        count_after_first = len(app.state.ledger.audit(code))
+        for _ in range(5):
+            app.state.service.poll(code)
+        assert len(app.state.ledger.audit(code)) == count_after_first
+        assert app.state.ledger.get_code(code)["last_polled_at"] is not None
+
+
+def test_upstream_refund_and_reconciliation_exclude_inactive_and_list_filters(components):
+    app, _, canboso, _, _ = components
+    with client(app) as c:
+        unused_code = issue(c)
+        no_up = c.post(
+            f"/api/v1/admin/codes/{unused_code}/upstream-refund",
+            headers=ADMIN,
+            json={"upstream_refund_usd": 10.0, "note": "无上游单"},
+        )
+        assert no_up.status_code == 409
+        assert no_up.json()["error_code"] == "NO_UPSTREAM_ORDER"
+
+        active_code = issue(c)
+        c.post(
+            f"/api/v1/public/codes/{active_code}/redeem",
+            json={"buyer_email": "act@gmail.com", "buyer_email_confirm": "act@gmail.com", "preflight_confirmed": True},
+        )
+        active_up = app.state.ledger.get_code(active_code)["upstream_order_code"]
+        canboso.orders[active_up]["status"] = "completed"
+        c.post(f"/api/v1/admin/codes/{active_code}/poll", headers=ADMIN)
+
+        cancelled_code = issue(c)
+        c.post(
+            f"/api/v1/public/codes/{cancelled_code}/redeem",
+            json={"buyer_email": "can@gmail.com", "buyer_email_confirm": "can@gmail.com", "preflight_confirmed": True},
+        )
+        cancel_up = app.state.ledger.get_code(cancelled_code)["upstream_order_code"]
+        canboso.orders[cancel_up]["status"] = "cancelled"
+        c.post(f"/api/v1/admin/codes/{cancelled_code}/poll", headers=ADMIN)
+        ref_resp = c.post(
+            f"/api/v1/admin/codes/{cancelled_code}/upstream-refund",
+            headers=ADMIN,
+            json={"upstream_refund_usd": 11.2, "note": "越南源头实退扣1.3刀"},
+        )
+        assert ref_resp.status_code == 200
+        assert ref_resp.json()["upstream_refund_usd"] == 11.2
+        assert ref_resp.json()["upstream_refund_note"] == "越南源头实退扣1.3刀"
+
+        inf_resp = c.post(
+            f"/api/v1/admin/codes/{cancelled_code}/upstream-refund",
+            headers={**ADMIN, "Content-Type": "application/json"},
+            content=b'{"upstream_refund_usd": Infinity, "note": "bad"}',
+        )
+        assert inf_resp.status_code == 422
+
+        all_export = c.get("/api/v1/admin/reconciliation-export", headers=ADMIN).json()
+        assert all_export["count"] == 2
+        by_code = {item["code"]: item for item in all_export["items"]}
+        assert by_code[cancelled_code]["upstream_refund_usd"] == 11.2
+        assert "upstream_refund_usd" not in by_code[active_code]
+
+        active_only = c.get("/api/v1/admin/reconciliation-export", headers=ADMIN, params={"exclude_inactive": "true"}).json()
+        assert active_only["count"] == 1
+        assert active_only["items"][0]["code"] == active_code
+
+        filtered_err = c.get(
+            "/api/v1/admin/codes",
+            headers=ADMIN,
+            params={"error_code": "CANBOSO_ORDER_CANCELLED"},
+        ).json()
+        assert [item["code"] for item in filtered_err["items"]] == [cancelled_code]
+
+        bad_date = c.get("/api/v1/admin/codes", headers=ADMIN, params={"start_date": "2026/11/01"})
+        assert bad_date.status_code == 400
+        assert bad_date.json()["error_code"] == "INVALID_DATE"
+
+        today = now_iso()[:10]
+        by_date = c.get("/api/v1/admin/codes", headers=ADMIN, params={"start_date": today, "end_date": today}).json()
+        assert by_date["total"] >= 2
+
+
+def test_api_wrong_method_returns_405_with_allow_header(components):
+    app, _, _, _, _ = components
+    with client(app) as c:
+        resp_405 = c.get("/api/v1/public/codes/U20S-TEST-CODE/refresh")
+        assert resp_405.status_code == 405
+        assert resp_405.json()["error_code"] == "METHOD_NOT_ALLOWED"
+        assert "POST" in (resp_405.headers.get("allow") or "")
+
+        resp_404 = c.get("/api/v1/nonexistent-endpoint")
+        assert resp_404.status_code == 404
+        assert resp_404.json()["error_code"] == "NOT_FOUND"
+
+        post_404 = c.post("/api/v1/nonexistent-endpoint", json={})
+        assert post_404.status_code == 404
+        assert post_404.json()["error_code"] == "NOT_FOUND"
+
+        delete_404 = c.delete("/api/v1/nonexistent-endpoint")
+        assert delete_404.status_code == 404
+        assert delete_404.json()["error_code"] == "NOT_FOUND"
+

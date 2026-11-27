@@ -549,11 +549,12 @@ def test_sanitize_tg_error_and_forwarder_entity_warmup_and_verify():
     assert res2["message_id"] == 4242
 
     # Verify min_interval_seconds pacing on consecutive sends
+    fwd.send_text("hello pacing anchor")
     t0 = time.monotonic()
     res3 = fwd.send_text("hello paced")
     elapsed = time.monotonic() - t0
     assert res3["message_id"] == 4242
-    assert elapsed >= 0.04
+    assert elapsed >= 0.045
 
     # Unauthorized session raises TelegramForwardError and still disconnects
     unauth_client = FakeTelethonClient(authorized=False)

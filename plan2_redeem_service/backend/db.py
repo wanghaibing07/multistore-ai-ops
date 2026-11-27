@@ -140,6 +140,10 @@ class Ledger:
             columns = {r["name"] for r in c.execute("PRAGMA table_info(codes)")}
             if "goods_no" not in columns:
                 c.execute("ALTER TABLE codes ADD COLUMN goods_no TEXT")
+            if "upstream_refund_usd" not in columns:
+                c.execute("ALTER TABLE codes ADD COLUMN upstream_refund_usd REAL")
+            if "upstream_refund_note" not in columns:
+                c.execute("ALTER TABLE codes ADD COLUMN upstream_refund_note TEXT")
             delivery_columns = {r["name"] for r in c.execute("PRAGMA table_info(agiso_deliveries)")}
             if "result_created" not in delivery_columns:
                 c.execute("ALTER TABLE agiso_deliveries ADD COLUMN result_created INTEGER NOT NULL DEFAULT 0")
@@ -158,6 +162,11 @@ class Ledger:
         with self.connect() as c:
             row = c.execute("SELECT * FROM sku_settings WHERE sku_key=?", (sku_key,)).fetchone()
             return dict(row) if row else None
+
+    def get_all_skus(self) -> dict[str, dict[str, Any]]:
+        with closing(self.connect()) as c:
+            rows = c.execute("SELECT * FROM sku_settings").fetchall()
+            return {r["sku_key"]: dict(r) for r in rows}
 
     def get_code(self, code: str) -> Optional[dict[str, Any]]:
         with self.connect() as c:
@@ -223,6 +232,73 @@ class Ledger:
             (code,),
         ).fetchone() is not None
 
+    @staticmethod
+    def _is_disputed_16688(c: sqlite3.Connection, code: str, last_error: Optional[str]) -> bool:
+        return last_error == "CHANNEL16688_RECIPIENT_DISPUTED" or c.execute(
+            """SELECT 1 FROM audit_events WHERE code=? AND reason IN (
+               '16688_recipient_disputed','16688_platform_resold_redeemed_code',
+               '16688_consumed_unsold_stock') LIMIT 1""",
+            (code,),
+        ).fetchone() is not None
+
+    def is_disputed_16688_code(self, code: str, last_error: Optional[str] = None) -> bool:
+        with closing(self.connect()) as c:
+            return self._is_disputed_16688(c, code, last_error)
+
+    def list_disputed_16688_codes(self, codes: list[str]) -> set[str]:
+        if not codes:
+            return set()
+        marks = ",".join("?" for _ in codes)
+        with closing(self.connect()) as c:
+            rows = c.execute(
+                f"""SELECT DISTINCT code FROM audit_events
+                    WHERE code IN ({marks}) AND reason IN (
+                        '16688_recipient_disputed','16688_platform_resold_redeemed_code',
+                        '16688_consumed_unsold_stock'
+                    )""",
+                tuple(codes),
+            ).fetchall()
+            return {r["code"] for r in rows}
+
+    def revoke_code(
+        self,
+        code: str,
+        reason: str,
+        *,
+        force: bool = False,
+        cancelled_statuses: tuple[str, ...] = ("cancelled", "canceled", "refunded"),
+    ) -> str:
+        allowed = ("unused", "validating", "waiting_fulfillment", "delivered_pending_warranty", "needs_manual_review", "revoked")
+        with self.transaction(immediate=True) as c:
+            row = c.execute(
+                "SELECT status, upstream_order_code, upstream_status FROM codes WHERE code=?",
+                (code,),
+            ).fetchone()
+            if not row:
+                return "CODE_NOT_FOUND"
+            old = row["status"]
+            if old == "completed":
+                return "CANNOT_REVOKE_COMPLETED"
+            if old not in allowed:
+                return "CONCURRENT_IN_PROGRESS"
+            has_active_upstream = (
+                bool(row["upstream_order_code"])
+                and str(row["upstream_status"] or "").strip().lower() not in cancelled_statuses
+            )
+            if has_active_upstream and not force:
+                return "UPSTREAM_ORDER_ACTIVE"
+            revoke_reason = f"{reason} [force]" if (has_active_upstream and force) else reason
+            t = now_iso()
+            c.execute(
+                "UPDATE codes SET status='revoked', last_error_code='REVOKED', updated_at=? WHERE code=?",
+                (t, code),
+            )
+            c.execute(
+                "INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)",
+                (code, old, "revoked", revoke_reason, t),
+            )
+            return "OK"
+
     def transition(self, code: str, to_status: str, reason: str, updates: Optional[dict[str, Any]] = None, allowed: Optional[tuple[str, ...]] = None) -> bool:
         updates = updates or {}
         with self.transaction(immediate=True) as c:
@@ -236,6 +312,44 @@ class Ledger:
             c.execute("INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)", (code, old, to_status, reason, values["updated_at"]))
             return True
 
+    def touch_poll(self, code: str, updates: dict[str, Any], allowed: tuple[str, ...] = ("waiting_fulfillment",)) -> bool:
+        with self.transaction(immediate=True) as c:
+            row = c.execute("SELECT status FROM codes WHERE code=?", (code,)).fetchone()
+            if not row or (allowed and row["status"] not in allowed):
+                return False
+            values = {"updated_at": now_iso(), **updates}
+            set_sql = ",".join(f"{k}=?" for k in values)
+            c.execute(f"UPDATE codes SET {set_sql} WHERE code=?", tuple(values.values()) + (code,))
+            return True
+
+    def list_stuck_purchasing(self, cutoff_iso: str) -> list[dict[str, Any]]:
+        with closing(self.connect()) as c:
+            rows = c.execute(
+                "SELECT * FROM codes WHERE status='purchasing' AND julianday(updated_at) < julianday(?) ORDER BY updated_at ASC",
+                (cutoff_iso,),
+            ).fetchall()
+            return [dict(r) for r in rows]
+
+    def record_upstream_refund(self, code: str, refund_usd: float, note: str = "") -> bool:
+        with self.transaction(immediate=True) as c:
+            row = c.execute("SELECT status, upstream_order_code FROM codes WHERE code=?", (code,)).fetchone()
+            if not row or not row["upstream_order_code"]:
+                return False
+            t = now_iso()
+            clean_note = note.strip()[:300]
+            c.execute(
+                "UPDATE codes SET upstream_refund_usd=?, upstream_refund_note=?, updated_at=? WHERE code=?",
+                (refund_usd, clean_note or None, t, code),
+            )
+            reason = f"upstream_refund_recorded:{refund_usd:.4f}"
+            if clean_note:
+                reason += f":{clean_note[:160]}"
+            c.execute(
+                "INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)",
+                (code, row["status"], row["status"], reason, t),
+            )
+            return True
+
     def audit(self, code: str) -> list[dict[str, Any]]:
         with self.connect() as c:
             return [dict(r) for r in c.execute("SELECT * FROM audit_events WHERE code=? ORDER BY event_id", (code,))]
@@ -243,18 +357,36 @@ class Ledger:
     def claim_purchase_retry(
         self, code: str, idempotency_key: str, reason: str, trade_no: str = "", *, live_verified: bool = False,
         verification_revision: int = 0,
+        force_new_order: bool = False,
+        new_idempotency_key: Optional[str] = None,
+        new_payload_json: Optional[str] = None,
+        new_buyer_email: Optional[str] = None,
+        new_buyer_email_masked: Optional[str] = None,
+        cancelled_statuses: tuple[str, ...] = ("cancelled", "canceled", "refunded"),
     ) -> str:
         with self.transaction(immediate=True) as c:
             row = c.execute(
-                """SELECT status, channel, upstream_order_code, idempotency_key, request_payload_json,
+                """SELECT status, channel, upstream_order_code, upstream_status, idempotency_key, request_payload_json,
                    external_order_id, last_error_code FROM codes WHERE code=?""",
                 (code,),
             ).fetchone()
-            if (not row or row["status"] != "needs_manual_review" or row["upstream_order_code"]
-                    or row["idempotency_key"] != idempotency_key or not row["request_payload_json"]):
+            if not row or row["status"] != "needs_manual_review":
                 return "RETRY_NOT_AVAILABLE"
-            if self._was_consumed(c, code, row["last_error_code"]):
-                return "RETRY_NOT_AVAILABLE"
+            if force_new_order:
+                if self._is_disputed_16688(c, code, row["last_error_code"]):
+                    return "RETRY_NOT_AVAILABLE"
+                if row["upstream_order_code"]:
+                    upstream_state = str(row["upstream_status"] or "").strip().lower()
+                    if upstream_state not in cancelled_statuses:
+                        return "UPSTREAM_ORDER_ACTIVE"
+                if not new_idempotency_key or not new_payload_json:
+                    return "RETRY_NOT_AVAILABLE"
+            else:
+                if (row["upstream_order_code"] or row["idempotency_key"] != idempotency_key
+                        or not row["request_payload_json"]):
+                    return "RETRY_NOT_AVAILABLE"
+                if self._was_consumed(c, code, row["last_error_code"]):
+                    return "RETRY_NOT_AVAILABLE"
             existing = (row["external_order_id"] or "").strip()
             if trade_no and existing and existing != trade_no:
                 return "ORDER_NOT_ELIGIBLE"
@@ -263,11 +395,32 @@ class Ledger:
             ):
                 return "ORDER_NOT_ELIGIBLE"
             t = now_iso()
-            c.execute(
-                """UPDATE codes SET status='purchasing', external_order_id=?, last_error_code=NULL,
-                   last_error_message=NULL, updated_at=? WHERE code=?""",
-                (trade_no or row["external_order_id"], t, code),
-            )
+            if force_new_order:
+                c.execute(
+                    """UPDATE codes SET status='purchasing', external_order_id=?,
+                       idempotency_key=?, request_payload_json=?,
+                       buyer_email=?, buyer_email_masked=?,
+                       upstream_order_code=NULL, upstream_status=NULL, cost_usd=NULL,
+                       delivery_json=NULL, upstream_refund_usd=NULL, upstream_refund_note=NULL,
+                       last_error_code=NULL, last_error_message=NULL,
+                       submitted_at=?, updated_at=? WHERE code=?""",
+                    (
+                        trade_no or row["external_order_id"],
+                        new_idempotency_key,
+                        new_payload_json,
+                        new_buyer_email,
+                        new_buyer_email_masked,
+                        t,
+                        t,
+                        code,
+                    ),
+                )
+            else:
+                c.execute(
+                    """UPDATE codes SET status='purchasing', external_order_id=?, last_error_code=NULL,
+                       last_error_message=NULL, updated_at=? WHERE code=?""",
+                    (trade_no or row["external_order_id"], t, code),
+                )
             c.execute(
                 "INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)",
                 (code, "needs_manual_review", "purchasing", reason, t),
@@ -775,9 +928,13 @@ class Ledger:
         start_date: str | None = None,
         end_date: str | None = None,
         channel: str | None = None,
+        exclude_inactive: bool = False,
     ) -> list[dict[str, Any]]:
         clauses = ["COALESCE(c.upstream_order_code, '') <> ''"]
         params: list[Any] = []
+        if exclude_inactive:
+            clauses.append("c.status <> 'revoked'")
+            clauses.append("lower(COALESCE(c.upstream_status, '')) NOT IN ('cancelled', 'canceled', 'refunded')")
         channel_val = (channel or "").strip()
         if channel_val:
             channel_low = channel_val.lower()
@@ -810,6 +967,7 @@ class Ledger:
             "c.upstream_status, "
             "c.status, "
             "c.cost_usd, "
+            "c.upstream_refund_usd, "
             "c.submitted_at, "
             "c.completed_at, "
             "c.created_at, "
@@ -826,29 +984,30 @@ class Ledger:
         for row in rows:
             sku_title = (row["sku_title"] or "").strip() or row["sku_key"]
             external_order_id = (row["external_order_id"] or "").strip() or (row["agiso_tid"] or "").strip()
-            items.append(
-                {
-                    "code": row["code"],
-                    "sku_key": row["sku_key"],
-                    "sku_title": sku_title,
-                    "product_type": row["product_type"] or "",
-                    "channel": row["channel"],
-                    "external_order_id": external_order_id,
-                    "agiso_tid": (row["agiso_tid"] or "").strip(),
-                    "agiso_oid": (row["agiso_oid"] or "").strip(),
-                    "goods_no": (row["goods_no"] or "").strip(),
-                    "upstream_order_code": row["upstream_order_code"],
-                    "upstream_status": (row["upstream_status"] or "").strip(),
-                    "status": row["status"],
-                    "cost_usd": row["cost_usd"],
-                    "quantity": 1,
-                    "source": "tg_fatbunny",
-                    "seller": "FatBunny Hub (方案二)",
-                    "submitted_at": (row["submitted_at"] or "").strip(),
-                    "completed_at": (row["completed_at"] or "").strip(),
-                    "created_at": (row["created_at"] or "").strip(),
-                    "updated_at": (row["updated_at"] or "").strip(),
-                }
-            )
+            entry: dict[str, Any] = {
+                "code": row["code"],
+                "sku_key": row["sku_key"],
+                "sku_title": sku_title,
+                "product_type": row["product_type"] or "",
+                "channel": row["channel"],
+                "external_order_id": external_order_id,
+                "agiso_tid": (row["agiso_tid"] or "").strip(),
+                "agiso_oid": (row["agiso_oid"] or "").strip(),
+                "goods_no": (row["goods_no"] or "").strip(),
+                "upstream_order_code": row["upstream_order_code"],
+                "upstream_status": (row["upstream_status"] or "").strip(),
+                "status": row["status"],
+                "cost_usd": row["cost_usd"],
+                "quantity": 1,
+                "source": "tg_fatbunny",
+                "seller": "FatBunny Hub (方案二)",
+                "submitted_at": (row["submitted_at"] or "").strip(),
+                "completed_at": (row["completed_at"] or "").strip(),
+                "created_at": (row["created_at"] or "").strip(),
+                "updated_at": (row["updated_at"] or "").strip(),
+            }
+            if row["upstream_refund_usd"] is not None:
+                entry["upstream_refund_usd"] = row["upstream_refund_usd"]
+            items.append(entry)
         return items
 
