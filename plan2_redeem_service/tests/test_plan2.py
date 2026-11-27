@@ -1052,7 +1052,7 @@ def test_issue_wangwang_message_contains_link_and_code_for_both_skus(components)
             "3. 这个 Gmail 最近 12 个月里没加过、没退过、也没被重拉过任何 Google 家庭组（Google 规定每 12 个月只能换 1 次家庭组，哪怕只进出过 1 次也会被限制加不进新组）。\n"
             "\n"
             "【提交后等多久】\n"
-            "提交 Gmail 后就会马上给你占好名额并开始排队，一般 2-6 小时内发家庭组邀请，最晚 24 小时，没超过 24 小时不用催；随时点提货链接都能看进度，收到 Google 邮件点“接受邀请”就开通了。\n"
+            "提交 Gmail 后就会马上给你占好名额并开始排队，一般 3-7 小时内发家庭组邀请，最晚 24 小时，没超过 24 小时不用催；随时点提货链接都能看进度，收到 Google 邮件点“接受邀请”就开通了。\n"
             "\n"
             "【质保和退换说明】\n"
             "1. 质保 30 天会员，不保你的 Google 账号本身；自己违规使用或反代导致封号没法保修。\n"
@@ -1061,7 +1061,7 @@ def test_issue_wangwang_message_contains_link_and_code_for_both_skus(components)
         )
         assert "Gmail" in slot_resp["wangwang_message"]
         slot_public = c.get(f"/api/v1/public/codes/{slot_resp['code']}").json()
-        assert slot_public["fulfillment"]["eta_text"] == "一般 2-6 小时内发家庭组邀请，最晚 24 小时"
+        assert slot_public["fulfillment"]["eta_text"] == "一般 3-7 小时内发家庭组邀请，最晚 24 小时"
 
         excl_resp = c.post("/api/v1/admin/codes/issue", headers=ADMIN, json={"sku_key": "ultra_exclusive_admin", "channel": "taobao"}).json()
         assert excl_resp["code"] in excl_resp["wangwang_message"]
@@ -1084,7 +1084,7 @@ def test_issue_wangwang_message_contains_link_and_code_for_both_skus(components)
             "【3 步开通（很简单）】\n"
             "1. 点上面的提货链接，立刻领到我们给的会员邮箱。\n"
             "2. 用你自己的常用 Gmail 建一个 Google 家庭组，把这个会员邮箱拉进去；对方同意后你就开通 Ultra 会员了，自己还能再拉 4 个人一起用。\n"
-            "3. 发完邀请后，记得回到这个提货页填写你当组长的常用邮箱，系统会自动为你登记 30 天质保（免传截图；如果遇延迟一般 2-6 小时内处理，最晚 24 小时）。\n"
+            "3. 发完邀请后，记得回到这个提货页填写你当组长的常用邮箱，系统会自动为你登记 30 天质保（免传截图；如果遇延迟一般 3-7 小时内处理，最晚 24 小时）。\n"
             "\n"
             "【质保和退换说明】\n"
             "1. 千万别踢掉我们给的会员邮箱！踢掉就会立刻掉会员，而且没法保修。\n"
@@ -1114,7 +1114,8 @@ def test_issue_wangwang_message_contains_link_and_code_for_both_skus(components)
         assert "49.9 元手续费" in merged_msg
         assert "79.9 元手续费" in merged_msg
         assert "千万别踢掉我们给的会员邮箱" in merged_msg
-        assert "2-6 小时" in merged_msg
+        assert "3-7 小时" in merged_msg
+        assert "2-6" not in merged_msg
         assert "1~6" not in merged_msg
         assert "独享账号" not in merged_msg
         assert "VEO3" not in merged_msg

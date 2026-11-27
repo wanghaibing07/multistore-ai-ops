@@ -26,7 +26,7 @@ const MINI_BUTTERFLY_ASSET = "/assets/waiting/mini-butterfly-glow.png";
 
 const TEA_REASSURANCE_TIPS = [
   "邮箱已提交，正在排队拉进家庭组，不用重复操作",
-  "一般 2-6 小时发邀请，最晚 24 小时；关掉页面也会继续排",
+  "一般 3-7 小时发邀请，最晚 24 小时；关掉页面也会继续排",
   "发出邀请后页面会自动变绿，记得看收件箱和垃圾箱",
 ] as const;
 

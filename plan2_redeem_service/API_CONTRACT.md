@@ -29,7 +29,7 @@
 - `unused`：未使用，等待买家提交核销
 - `validating`：枚举保留态（`backend/db.py` 已定义，当前运行期由 `claim_for_purchase()` 通过 CAS 从 `unused` 直接原子跃迁至 `purchasing`）
 - `purchasing`：正在调用 Canboso 下单（`Idempotency-Key` 已落库，防双花）
-- `waiting_fulfillment`：共享车位上游已受理（`paid` / `waiting_seller`），排队拉人中（2-6h，最晚 24h）
+- `waiting_fulfillment`：共享车位上游已受理（`paid` / `waiting_seller`），排队拉人中（3-7h，最晚 24h）
 - `delivered_pending_warranty`：独享整组已秒发商店套餐邮箱，待买家建家庭组邀请并回填保修信息
 - `completed`：履约完成（共享车位上游状态已变为 `completed`/`delivered`；独享整组买家已提交保修登记）
 - `needs_manual_review`：触发异常需商家人工介入（价格熔断、余额不足、上游断货/报错、24h 超时等；对买家隐藏内部敏感原因）
@@ -78,7 +78,7 @@
   "delivery": null,
   "warranty": null,
   "fulfillment": {
-    "eta_text": "一般 2-6 小时内发家庭组邀请，最晚 24 小时",
+    "eta_text": "一般 3-7 小时内发家庭组邀请，最晚 24 小时",
     "submitted_at": null,
     "completed_at": null,
     "last_polled_at": null,
@@ -243,7 +243,7 @@
 {
   "code": "U20S-8K3M-9P2Q",
   "redeem_url": "https://redeem.example.com/r/U20S-8K3M-9P2Q",
-  "wangwang_message": "感谢下单 Google Ultra x20 共享车位！\n点链接自助填 Gmail 提货（不用在旺旺发邮箱）：https://redeem.example.com/r/U20S-8K3M-9P2Q\n兑换码：U20S-8K3M-9P2Q\n\n【先看这里】\n淘宝显示已发货，就是兑换码和提货链接已经发给你了，直接点上面的链接去填 Gmail 就行。\n\n【填邮箱前先查这 3 件事（都要满足）】\n1. 先关掉 Google 付款资料：https://payments.google.com/gp/w/home/settings\n2. 先退出原来的 Google 家庭组：https://g.co/yourfamily\n3. 这个 Gmail 最近 12 个月里没加过、没退过、也没被重拉过任何 Google 家庭组（Google 规定每 12 个月只能换 1 次家庭组，哪怕只进出过 1 次也会被限制加不进新组）。\n\n【提交后等多久】\n提交 Gmail 后就会马上给你占好名额并开始排队，一般 2-6 小时内发家庭组邀请，最晚 24 小时，没超过 24 小时不用催；随时点提货链接都能看进度，收到 Google 邮件点“接受邀请”就开通了。\n\n【质保和退换说明】\n1. 质保 30 天会员，不保你的 Google 账号本身；自己违规使用或反代导致封号没法保修。\n2. 本款是 0 积分/点数车位，请不要使用积分或点数，用了会被系统自动踢出家庭组且不退款。\n3. 提交邮箱后就占用了名额，如果不是商品本身问题（比如 12 个月内换过组加不进、没退旧家庭组、没关付款资料、填错邮箱等），不支持全额退款；可以补 49.9 元手续费换新 Gmail 重新拉人，或扣除 49.9 元名额成本后退还余款。",
+  "wangwang_message": "感谢下单 Google Ultra x20 共享车位！\n点链接自助填 Gmail 提货（不用在旺旺发邮箱）：https://redeem.example.com/r/U20S-8K3M-9P2Q\n兑换码：U20S-8K3M-9P2Q\n\n【先看这里】\n淘宝显示已发货，就是兑换码和提货链接已经发给你了，直接点上面的链接去填 Gmail 就行。\n\n【填邮箱前先查这 3 件事（都要满足）】\n1. 先关掉 Google 付款资料：https://payments.google.com/gp/w/home/settings\n2. 先退出原来的 Google 家庭组：https://g.co/yourfamily\n3. 这个 Gmail 最近 12 个月里没加过、没退过、也没被重拉过任何 Google 家庭组（Google 规定每 12 个月只能换 1 次家庭组，哪怕只进出过 1 次也会被限制加不进新组）。\n\n【提交后等多久】\n提交 Gmail 后就会马上给你占好名额并开始排队，一般 3-7 小时内发家庭组邀请，最晚 24 小时，没超过 24 小时不用催；随时点提货链接都能看进度，收到 Google 邮件点“接受邀请”就开通了。\n\n【质保和退换说明】\n1. 质保 30 天会员，不保你的 Google 账号本身；自己违规使用或反代导致封号没法保修。\n2. 本款是 0 积分/点数车位，请不要使用积分或点数，用了会被系统自动踢出家庭组且不退款。\n3. 提交邮箱后就占用了名额，如果不是商品本身问题（比如 12 个月内换过组加不进、没退旧家庭组、没关付款资料、填错邮箱等），不支持全额退款；可以补 49.9 元手续费换新 Gmail 重新拉人，或扣除 49.9 元名额成本后退还余款。",
   "item": { "...AdminCodeSummary..." }
 }
 ```

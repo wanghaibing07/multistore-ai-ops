@@ -55,7 +55,7 @@ export function AdminOverviewPage({
       key: "waiting",
       label: "排队拉人中",
       value: counts.waiting_fulfillment,
-      meta: "每 20 分钟自动查进度，通常 2-6 小时完成",
+      meta: "每 20 分钟自动查进度，通常 3-7 小时完成（最晚 24 小时）",
       status: "waiting_fulfillment",
       highlight: counts.waiting_fulfillment > 0 ? "amber" : "idle",
     },

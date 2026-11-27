@@ -636,7 +636,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                 <div>
                   <h2 className="card-title">填开通会员的邮箱</h2>
                   <p className="card-subtitle">
-                    先勾选下面 3 项再填邮箱。提交后一般 2-6 小时发邀请，最晚 24 小时，未超时不用催。
+                    先勾选下面 3 项再填邮箱。提交后一般 3-7 小时发邀请，最晚 24 小时，未超时不用催。
                   </p>
                 </div>
 
@@ -686,7 +686,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                       onChange={(event) => setCheckSlotRule(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>已知晓排队时间和退换规则</strong>：提交就占名额（2-6 小时发邀请，最晚 24 小时）；非商品问题不支持全额退款，换邮箱需补{" "}
+                      <strong>已知晓排队时间和退换规则</strong>：提交就占名额（3-7 小时发邀请，最晚 24 小时，履约时间内不退）；非商品问题不支持全额退款，换邮箱需补{" "}
                       <strong>49.9 元</strong>，或扣 <strong>49.9 元</strong>退余款。
                     </div>
                   </label>
@@ -776,7 +776,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                   <div>
                     <strong>已排队，等邮件就行</strong>
                     <div style={{ marginTop: 4 }}>
-                      一般 2-6 小时发邀请，最晚 24 小时，未超时不用催。收藏本页会自动更新进度。
+                      一般 3-7 小时发邀请，最晚 24 小时，未超时不用催。收藏本页会自动更新进度。
                     </div>
                   </div>
                 </div>
@@ -907,7 +907,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                     </li>
                     <li>
                       发完邀请回来填<strong>你的常用主邮箱</strong>登记 30 天质保（免截图，自动报备；人工一般{" "}
-                      <strong>2-6 小时，最晚 24 小时</strong>）。
+                      <strong>3-7 小时，最晚 24 小时</strong>）。
                     </li>
                   </ol>
                 </div>
@@ -1067,7 +1067,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                       </li>
                       <li>
                         发完邀请在下面填<strong>你的常用主邮箱</strong>登记 30 天质保（免截图，自动报备；人工{" "}
-                        <strong>2-6 小时，最晚 24 小时</strong>）。
+                        <strong>3-7 小时，最晚 24 小时</strong>）。
                       </li>
                     </ol>
                   </div>
@@ -1106,7 +1106,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                               <>
                                 已登记主邮箱{" "}
                                 <span className="mono">{record.warranty?.admin_email_masked || "-"}</span>
-                                ，正在报备质保（2-6 小时内完成，最晚 24 小时）。
+                                ，正在报备质保（3-7 小时内完成，最晚 24 小时）。
                               </>
                             )}
                           </div>
