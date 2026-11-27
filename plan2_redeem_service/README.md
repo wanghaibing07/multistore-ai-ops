@@ -93,5 +93,5 @@ npm --prefix plan2_redeem_service/frontend run build
 .\plan2_redeem_service\.venv\Scripts\python.exe -X utf8 -m pytest plan2_redeem_service\tests -q
 ```
 
-77 项后端测试全部使用 Mock 网关与 `dry_run`，不会发起真实扣款、真实 16688 收费、真实 Telegram 发送或真实邮件发送。
+98 项后端测试全部使用 Mock 网关与 `dry_run`，不会发起真实扣款、真实 16688 收费、真实 Telegram 发送或真实邮件发送。
 

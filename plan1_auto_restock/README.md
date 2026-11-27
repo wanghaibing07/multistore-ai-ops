@@ -79,7 +79,7 @@
 
 ## 本地测试验证
 
-在仓库根目录执行全部 17 项单元测试（纯 Mock 与隔离临时目录，不触发真实扣款）：
+在仓库根目录执行全部 18 项单元测试（纯 Mock 与隔离临时目录，不触发真实扣款）：
 
 ```powershell
 uv run --no-project --with-editable ./plan1_auto_restock --with pytest pytest plan1_auto_restock/tests -q

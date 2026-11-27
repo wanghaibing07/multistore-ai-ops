@@ -21,9 +21,9 @@
 | `app/accounting.py`、`app/card_reconciliation.py`、`app/payment_basis_review.py`、`app/refund_review.py` | 利润核算、采购匹配确认、金额口径核对与历史退款完整性校验 |
 | `app/agent.py`、`app/card_query_ai.py`、`app/qianniu_chats.py` | 受限 AI 问账、卡网查询辅助与千牛聊天知识库 |
 | `app/static/`（`index.html`、`style.css`、`app.js`） | 根目录原生前端工作台（5 个视图） |
-| `migrations/versions/`、`tests/` | 根目录 11 份 Alembic 迁移与 84 项业务/API/隔离测试 |
-| `plan1_auto_restock/` | 方案 1 自动补库守护进程（`cli.py`、`engine.py`、`storage.py`、`pricing.py`、`exporter.py` 等 13 个模块 + 17 项测试） |
-| `plan2_redeem_service/backend/` | 方案 2 后端（`app.py`、`service.py`、`db.py`、`agiso.py`、`gateways.py`、`telegram_forwarder.py` 等 + 77 项测试） |
+| `migrations/versions/`、`tests/` | 根目录 12 份 Alembic 迁移与 96 项业务/API/隔离测试 |
+| `plan1_auto_restock/` | 方案 1 自动补库守护进程（`cli.py`、`engine.py`、`storage.py`、`pricing.py`、`exporter.py` 等 13 个模块 + 18 项测试） |
+| `plan2_redeem_service/backend/` | 方案 2 后端（`app.py`、`service.py`、`db.py`、`agiso.py`、`gateways.py`、`telegram_forwarder.py` 等 + 98 项测试） |
 | `plan2_redeem_service/frontend/` | 方案 2 前端 React 19 + TypeScript 5.8 + Vite 6.3（构建产物 `frontend/dist/` 随源码同步提交） |
 | `scripts/start-desktop.ps1` | 根目录账本 Windows 本机桌面启动脚本 |
 | `scripts/evaluate_agent.py` | 根目录受限 AI 30 场景离线评测脚本 |

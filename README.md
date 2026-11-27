@@ -3,7 +3,7 @@
 [![CI](https://github.com/wanghaibing07/multistore-ai-ops/actions/workflows/ci.yml/badge.svg)](https://github.com/wanghaibing07/multistore-ai-ops/actions/workflows/ci.yml)
 ![Python 3.12+](https://img.shields.io/badge/Python-3.12%2B-3776AB?logo=python&logoColor=white)
 ![FastAPI & React 19](https://img.shields.io/badge/Stack-FastAPI%20%7C%20React%2019-009688)
-![Tests 178 passed](https://img.shields.io/badge/Tests-178%20passed%20%7C%205%20CI%20jobs-2ea44f)
+![Tests 212 passed](https://img.shields.io/badge/Tests-212%20passed%20%7C%205%20CI%20jobs-2ea44f)
 
 面向多渠道虚拟商品商家运营的三模块工程仓库，涵盖**账本核算与受限 AI 查账**、**自营卡密低水位自动补库**与**线上自助提货及售后履约服务**。三个模块物理隔离、独立部署，围绕资金防误扣、并发防双花、凭证隔离和可审计核算构建工程护栏。
 
@@ -65,7 +65,7 @@ flowchart LR
 
 | 模块 | 位置与入口 | 核心技术与存储 | 边界与职责 | 模块文档 |
 | --- | --- | --- | --- | --- |
-| **店铺账本与受限 AI 工作台** | 根目录 `app/main.py`、`app/static/` | Python 3.12 (`uv`)、FastAPI、SQLAlchemy 2.0、Alembic（11 份迁移）、SQLite（`BEGIN IMMEDIATE` 串行写）、原生前端（5 视图）、Docker + Caddy | 汇总千牛订单、退款、货款账单、卡网采购与聊天记录；执行利润/口径/退款人工核对；提供防幻觉的受限 AI 问账 | [架构与数据流](docs/architecture.md)<br>[维护手册](docs/maintenance.md) |
+| **店铺账本与受限 AI 工作台** | 根目录 `app/main.py`、`app/static/` | Python 3.12 (`uv`)、FastAPI、SQLAlchemy 2.0、Alembic（12 份迁移）、SQLite（`BEGIN IMMEDIATE` 串行写）、原生前端（5 视图）、Docker + Caddy | 汇总千牛订单、退款、货款账单、卡网采购与聊天记录；执行利润/口径/退款人工核对；提供防幻觉的受限 AI 问账 | [架构与数据流](docs/architecture.md)<br>[维护手册](docs/maintenance.md) |
 | **方案 1：16688 自动补库守护进程** | `plan1_auto_restock/`（CLI `plan1-restock`） | Python 3.11+、`httpx`、PyYAML、双 SQLite WAL（`ledger.db` + `secrets_vault.db`） | 仅承接 Canboso `account` 成品号补库到 16688 自营卡密；硬拦截非 `account` 商品；支持保险库断电恢复与对账 CSV 导出 | [方案 1 文档](plan1_auto_restock/README.md) |
 | **方案 2：自助提货与售后履约服务** | `plan2_redeem_service/`（`backend/` + `frontend/`） | Python 3.12、FastAPI、Uvicorn、SQLite WAL、Telethon / Playwright；React 19 + TypeScript 5.8 + Vite 6.3（同源托管 `frontend/dist/`） | 承接共享车位与独享整组兑换码履约；接入淘宝阿奇索 Webhook/退款联动与 16688 核销补货；支持独享免截图保修与 Telegram 自动报备；云端 `systemd + Caddy` 部署 | [方案 2 文档](plan2_redeem_service/README.md)<br>[接口契约](plan2_redeem_service/API_CONTRACT.md) |
 
@@ -74,9 +74,9 @@ flowchart LR
 | 工程问题 | 设计与实现机制 | 核心代码 | 验证依据 |
 | --- | --- | --- | --- |
 | **AI 查账幻觉与隐私泄露** | 先用 `canonical_intent()` 固定业务意图，不向模型转发原始提问；模型仅能调用 3 个无参白名单工具（`TOOLS`）并接收匿名化统计（`safe_data()`）；最终数字由服务端根据 `calculate()` 渲染（`verified_answer()`），偏差写入 `AgentRun` 的 `model_numeric_mismatch` | [`app/agent.py`](app/agent.py)<br>[`scripts/evaluate_agent.py`](scripts/evaluate_agent.py) | [`tests/test_api_agent.py`](tests/test_api_agent.py) 与 30 场景离线评测集 |
-| **多源账本重复导入、并发写覆盖与利润口径失真** | 导入预览按 `PARSER_VERSION="3"` 去重并生成 `changes_token` 乐观锁；写路径用 `serialize_sqlite_writes()`（`BEGIN IMMEDIATE`）串行化；未知成本不按零计入利润，订单字段变更自动使旧人工核对失效；支持按租户边界批量删单及级联清理 | [`app/importer.py`](app/importer.py)<br>[`app/accounting.py`](app/accounting.py)<br>[`app/card_reconciliation.py`](app/card_reconciliation.py) | 根目录 `84 passed`（含去重、口径、核对失效与租户隔离测试） |
-| **自动补库误扣资金、超时双花与卡密明文泄露** | 默认 `dry_run: true`，实盘需同时传入 `--live --i-confirm-real-spend` 双锁；`DualDatabaseStore` 将普通账本 `ledger.db` 与明文卡密 `secrets_vault.db` 物理分离；先落 `PENDING` 意图和 `Idempotency-Key`，下单后先写保险库再传 16688，异常通过 `recover` 补传不重买；内置涨价超 35% 自动下架与日预算/余额熔断 | [`plan1_auto_restock/plan1_auto_restock/engine.py`](plan1_auto_restock/plan1_auto_restock/engine.py)<br>[`plan1_auto_restock/plan1_auto_restock/storage.py`](plan1_auto_restock/plan1_auto_restock/storage.py)<br>[`plan1_auto_restock/plan1_auto_restock/pricing.py`](plan1_auto_restock/plan1_auto_restock/pricing.py) | 方案 1 `17 passed`（含超时重放、双库隔离、涨价熔断与 CSV 零明文导出） |
-| **兑换码并发抢单双花与异常状态不可控** | `claim_for_purchase()` 在 `BEGIN IMMEDIATE` 事务内执行原子 CAS 抢占，阻断同一兑换码并发下单；`transition()` 严格约束状态流转，上游价格超上限、余额不足或 24h 超时自动转入 `needs_manual_review` 并向买家屏蔽内部错误详情 | [`plan2_redeem_service/backend/db.py`](plan2_redeem_service/backend/db.py)<br>[`plan2_redeem_service/backend/service.py`](plan2_redeem_service/backend/service.py) | 方案 2 后端 `77 passed`（含并发防双花、价格熔断与重试测试） |
+| **多源账本重复导入、并发写覆盖与利润口径失真** | 导入预览按 `PARSER_VERSION="3"` 去重并生成 `changes_token` 乐观锁；写路径用 `serialize_sqlite_writes()`（`BEGIN IMMEDIATE`）串行化；未知成本不按零计入利润，订单字段变更自动使旧人工核对失效；支持按租户边界批量删单及级联清理 | [`app/importer.py`](app/importer.py)<br>[`app/accounting.py`](app/accounting.py)<br>[`app/card_reconciliation.py`](app/card_reconciliation.py) | 根目录 `96 passed`（含去重、口径、核对失效与租户隔离测试） |
+| **自动补库误扣资金、超时双花与卡密明文泄露** | 默认 `dry_run: true`，实盘需同时传入 `--live --i-confirm-real-spend` 双锁；`DualDatabaseStore` 将普通账本 `ledger.db` 与明文卡密 `secrets_vault.db` 物理分离；先落 `PENDING` 意图和 `Idempotency-Key`，下单后先写保险库再传 16688，异常通过 `recover` 补传不重买；内置涨价超 35% 自动下架与日预算/余额熔断 | [`plan1_auto_restock/plan1_auto_restock/engine.py`](plan1_auto_restock/plan1_auto_restock/engine.py)<br>[`plan1_auto_restock/plan1_auto_restock/storage.py`](plan1_auto_restock/plan1_auto_restock/storage.py)<br>[`plan1_auto_restock/plan1_auto_restock/pricing.py`](plan1_auto_restock/plan1_auto_restock/pricing.py) | 方案 1 `18 passed`（含超时重放、双库隔离、涨价熔断与 CSV 零明文导出） |
+| **兑换码并发抢单双花与异常状态不可控** | `claim_for_purchase()` 在 `BEGIN IMMEDIATE` 事务内执行原子 CAS 抢占，阻断同一兑换码并发下单；`transition()` 严格约束状态流转，上游价格超上限、余额不足或 24h 超时自动转入 `needs_manual_review` 并向买家屏蔽内部错误详情 | [`plan2_redeem_service/backend/db.py`](plan2_redeem_service/backend/db.py)<br>[`plan2_redeem_service/backend/service.py`](plan2_redeem_service/backend/service.py) | 方案 2 后端 `98 passed`（含并发防双花、价格熔断与重试测试） |
 | **淘宝阿奇索回调重放、重复发码与退款未作废** | 校验 MD5 签名（`hmac.compare_digest`）与 600 秒重放窗口；`agiso_deliveries` 以 `delivery_key` / `code` 唯一索引兜底去重；退款自动作废未核销兑换码，退款关闭满足 6 项条件自动恢复；定时巡检阿奇索与 16688 低水位自动补码 | [`plan2_redeem_service/backend/agiso.py`](plan2_redeem_service/backend/agiso.py)<br>[`plan2_redeem_service/backend/service.py`](plan2_redeem_service/backend/service.py) | 方案 2 阿奇索 Webhook、退款联动与低水位补货单测 |
 | **独享整组售后报备人工耗时与通道故障** | 买家免截图提交保修组长邮箱后，支持 `telethon`（MTProto）与 `PlaywrightTelegramWebForwarder`（Web K 持久化会话 + 纯数字 `peerId` 校验 + 文件锁）双通道自动向管理员报备；失败降级为邮件告警并在商家后台支持一键重试 | [`plan2_redeem_service/backend/telegram_forwarder.py`](plan2_redeem_service/backend/telegram_forwarder.py)<br>[`plan2_redeem_service/backend/service.py`](plan2_redeem_service/backend/service.py) | 方案 2 Telegram 双通道转发、脱敏报错与失败兜底单测 |
 
@@ -124,9 +124,9 @@ docker compose up -d --build
 
 | CI Job | 覆盖范围 | 本地复现命令 |
 | --- | --- | --- |
-| `Root Ledger & AI Ops` | 根目录 84 项 pytest + Alembic 迁移一致性 | `uv run pytest -q && uv run alembic upgrade head && uv run alembic check` |
-| `Plan 1 Auto-Restock` | 方案 1 共 17 项 pytest（双库、幂等、熔断、导出） | `uv run --no-project --with-editable ./plan1_auto_restock --with pytest pytest plan1_auto_restock/tests -q` |
-| `Plan 2 Redeem Backend` | 方案 2 后端 77 项 pytest（CAS、阿奇索、TG 报备） | `.\plan2_redeem_service\.venv\Scripts\python.exe -X utf8 -m pytest plan2_redeem_service\tests -q` |
+| `Root Ledger & AI Ops` | 根目录 96 项 pytest + Alembic 迁移一致性 | `uv run pytest -q && uv run alembic upgrade head && uv run alembic check` |
+| `Plan 1 Auto-Restock` | 方案 1 共 18 项 pytest（双库、幂等、熔断、导出） | `uv run --no-project --with-editable ./plan1_auto_restock --with pytest pytest plan1_auto_restock/tests -q` |
+| `Plan 2 Redeem Backend` | 方案 2 后端 98 项 pytest（CAS、阿奇索、TG 报备） | `.\plan2_redeem_service\.venv\Scripts\python.exe -X utf8 -m pytest plan2_redeem_service\tests -q` |
 | `Plan 2 Redeem Frontend` | React + TS 类型检查、构建与 `frontend/dist/` 同步校验 | `npm --prefix plan2_redeem_service/frontend run typecheck && npm --prefix plan2_redeem_service/frontend run build` |
 | `Repo Hygiene & Secret Guard` | `.githooks` 语法/行为验证与敏感路径追踪拦截 | `sh -n .githooks/pre-commit .githooks/commit-msg` |
 
