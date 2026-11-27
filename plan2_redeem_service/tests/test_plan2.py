@@ -533,15 +533,17 @@ def test_16688_confirmed_replacement_is_not_checked_as_platform_stock(components
     assert canboso.charge_count == 1
 
 
-def test_live_admin_stock_list_masks_only_undistributed_16688_codes(components):
+def test_live_admin_stock_list_shows_full_16688_codes_and_opens_detail(components):
     app, settings, _, _, _ = components
     with client(app) as c:
         code, = issue_16688_batch(c)
         settings.execution_mode = "live"
         inventory = c.get("/api/v1/admin/codes?status=in_stock", headers=ADMIN).json()
-        assert inventory["items"][0]["stock_code_hidden"]
-        assert inventory["items"][0]["code"].endswith(code[-4:])
-        assert code not in json.dumps(inventory)
+        assert inventory["items"][0]["code"] == code
+        assert "stock_code_hidden" not in inventory["items"][0]
+        detail = c.get(f"/api/v1/admin/codes/{code}", headers=ADMIN)
+        assert detail.status_code == 200
+        assert detail.json()["code"] == code
         app.state.ledger.bind_code_external_order(code, "TEST-SOLD", reason="channel16688_sold_sync")
         dispatched = c.get("/api/v1/admin/codes?status=dispatched_unused", headers=ADMIN).json()
         assert dispatched["items"][0]["code"] == code

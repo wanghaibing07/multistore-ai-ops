@@ -1052,7 +1052,7 @@ class Service:
             display_email = f"{local[:1]}***@{domain}"
         return {"code": row["code"], "sku_key": row["sku_key"], "sku_title": sku["title"], "product_type": sku["product_type"], "channel": row["channel"], "status": status, "buyer_email_masked": display_email, "delivery": delivery, "warranty": warranty, "fulfillment": {"eta_text": "一般 3-7 小时内发家庭组邀请，最晚 24 小时" if sku["product_type"] == "slot" else None, "submitted_at": None if delivery_on_hold else row.get("submitted_at"), "completed_at": None if delivery_on_hold else row.get("completed_at"), "last_polled_at": None if delivery_on_hold else row.get("last_polled_at"), "elapsed_minutes": elapsed}, "buyer_notice": notice, "support_hint": "有问题请把订单号和兑换码发给客服。", "created_at": row["created_at"], "updated_at": row["updated_at"]}
 
-    def admin_summary(self, row: dict[str, Any], *, hide_platform_stock: bool = False) -> dict[str, Any]:
+    def admin_summary(self, row: dict[str, Any]) -> dict[str, Any]:
         sku = self.ledger.get_sku(row["sku_key"])
         elapsed = self.public_row(row)["fulfillment"]["elapsed_minutes"]
         warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else None
@@ -1061,10 +1061,6 @@ class Service:
         store_email = (delivery.get("account_text") if isinstance(delivery, dict) else None) or None
         warranty_status = warranty.get("status") if isinstance(warranty, dict) else None
         is_dispatched = bool((row.get("external_order_id") or "").strip())
-        stock_code_hidden = (
-            hide_platform_stock and self.settings.execution_mode == "live"
-            and row["channel"] == "16688" and row["status"] == "unused" and not is_dispatched
-        )
         if row["status"] == "unused":
             display_status = "dispatched_unused" if is_dispatched else "in_stock"
         elif row["status"] == "completed" and row["sku_key"] == "ultra_exclusive_admin" and warranty_status == "submitted":
@@ -1072,8 +1068,7 @@ class Service:
         else:
             display_status = row["status"]
         return {
-            "code": f"{row['code'][:4]}-••••-{row['code'][-4:]}" if stock_code_hidden else row["code"],
-            "stock_code_hidden": stock_code_hidden,
+            "code": row["code"],
             "sku_key": row["sku_key"],
             "sku_title": sku["title"],
             "product_type": sku["product_type"],

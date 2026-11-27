@@ -154,7 +154,6 @@ export interface AdminOverviewResponse {
 
 export interface AdminCodeSummary {
   code: string;
-  stock_code_hidden?: boolean;
   sku_key: SkuKey;
   sku_title: string;
   product_type: ProductType;

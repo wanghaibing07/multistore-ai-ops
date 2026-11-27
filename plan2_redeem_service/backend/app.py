@@ -628,7 +628,7 @@ def create_app(
             order_by=order_by,
         )
         return {
-            "items": [svc.admin_summary(row, hide_platform_stock=True) for row in rows],
+            "items": [svc.admin_summary(row) for row in rows],
             "total": total, "page": page, "page_size": page_size,
         }
 
