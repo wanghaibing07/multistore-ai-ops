@@ -369,3 +369,71 @@ def test_quick_login_flow(client):
     assert r_partner.status_code == 200
     assert r_partner.json()['username'] == 'partner'
     assert c.get('/api/me').json()['username'] == 'partner'
+
+
+def test_quick_login_rejects_non_loopback_and_forwarded_requests(client, monkeypatch):
+    c, _ = client
+    monkeypatch.delenv('MULTISTORE_PUBLIC_MODE', raising=False)
+    monkeypatch.delenv('MULTISTORE_ALLOW_QUICK_LOGIN', raising=False)
+
+    for headers in (
+        {'X-Forwarded-For': '203.0.113.10'},
+        {'X-Forwarded-For': '203.0.113.10, 127.0.0.1'},
+        {'Forwarded': 'for=203.0.113.10;proto=https'},
+    ):
+        cfg = c.get('/api/config', headers=headers)
+        assert cfg.status_code == 200
+        assert cfg.json()['public_mode'] is False
+        assert cfg.json()['quick_login_enabled'] is False
+        assert c.post('/api/quick-login', json={}, headers=headers).status_code == 403
+        assert c.post('/api/auth/quick-login', json={}, headers=headers).status_code == 403
+        assert c.get('/api/auth/users', headers=headers).status_code == 403
+
+    assert c.post(
+        '/api/login',
+        json={'username': 'owner', 'password': 'correct-password'},
+        headers={'X-Forwarded-For': '203.0.113.10'},
+    ).status_code == 200
+
+    with TestClient(app, client=('198.51.100.25', 50000)) as remote:
+        cfg = remote.get('/api/config')
+        assert cfg.status_code == 200
+        assert cfg.json()['quick_login_enabled'] is False
+        assert remote.post('/api/quick-login', json={}).status_code == 403
+        assert remote.post('/api/auth/quick-login', json={}).status_code == 403
+        assert remote.get('/api/auth/users').status_code == 403
+
+    loopback_cfg = c.get('/api/config', headers={'X-Forwarded-For': '127.0.0.1'})
+    assert loopback_cfg.status_code == 200
+    assert loopback_cfg.json()['quick_login_enabled'] is True
+    assert c.get('/api/auth/users', headers={'X-Forwarded-For': '127.0.0.1'}).status_code == 200
+    assert c.post('/api/quick-login', json={}, headers={'X-Forwarded-For': 'testclient'}).status_code == 403
+
+
+def test_quick_login_allow_env_and_public_mode_precedence(client, monkeypatch):
+    c, _ = client
+    monkeypatch.delenv('MULTISTORE_PUBLIC_MODE', raising=False)
+    monkeypatch.setenv('MULTISTORE_ALLOW_QUICK_LOGIN', '1')
+
+    proxy_headers = {'X-Forwarded-For': '203.0.113.10'}
+    cfg = c.get('/api/config', headers=proxy_headers)
+    assert cfg.status_code == 200
+    assert cfg.json()['public_mode'] is False
+    assert cfg.json()['quick_login_enabled'] is True
+    assert c.post('/api/quick-login', json={}, headers=proxy_headers).status_code == 200
+    assert c.post('/api/auth/quick-login', json={}, headers=proxy_headers).status_code == 200
+    assert c.get('/api/auth/users', headers=proxy_headers).status_code == 200
+
+    with TestClient(app, client=('198.51.100.25', 50000)) as remote:
+        assert remote.get('/api/config').json()['quick_login_enabled'] is True
+        assert remote.post('/api/quick-login', json={}).status_code == 200
+
+    monkeypatch.setenv('MULTISTORE_PUBLIC_MODE', '1')
+    for headers in ({}, proxy_headers):
+        pub_cfg = c.get('/api/config', headers=headers)
+        assert pub_cfg.status_code == 200
+        assert pub_cfg.json()['public_mode'] is True
+        assert pub_cfg.json()['quick_login_enabled'] is False
+        assert c.post('/api/quick-login', json={}, headers=headers).status_code == 404
+        assert c.post('/api/auth/quick-login', json={}, headers=headers).status_code == 404
+        assert c.get('/api/auth/users', headers=headers).status_code == 404

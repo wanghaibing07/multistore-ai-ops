@@ -358,6 +358,8 @@ def _normalize_upstream_status(raw_status: Any, *, badge_text: str = "") -> str:
         return "已取消"
     if any(k in low for k in ("refund", "已退款", "退款", "hoàn tiền")):
         return "已退款"
+    if any(k in low for k in ("revoked", "revoke", "invalidated", "已作废", "作废")):
+        return "已作废"
     if any(k in low for k in ("failed", "fail", "error", "失败", "已失败", "thất bại")):
         return "已失败"
     if any(k in low for k in ("completed", "delivered", "fulfilled", "done", "success", "issued", "发表", "已完成", "hoàn thành")):
@@ -582,7 +584,14 @@ def _normalize_plan2_item(raw: dict, *, source_hint: str = "") -> dict:
     title = str(raw.get("sku_title") or raw.get("product") or raw.get("sku_key") or "").strip()
     cost_usd = raw.get("cost_usd")
     paid_at = raw.get("submitted_at") or raw.get("completed_at") or raw.get("created_at") or raw.get("updated_at") or ""
-    status = _normalize_upstream_status(raw.get("upstream_status") or raw.get("status") or "")
+    upstream_status = _normalize_upstream_status(raw.get("upstream_status") or "")
+    local_status = _normalize_upstream_status(raw.get("status") or "")
+    if upstream_status in ("已取消", "已退款"):
+        status = upstream_status
+    elif local_status == "已作废" and upstream_status != "已完成":
+        status = "已作废"
+    else:
+        status = upstream_status or local_status
     linked_order_id = str(raw.get("external_order_id") or raw.get("agiso_tid") or "").strip()
     linked_item_id = str(raw.get("agiso_oid") or "").strip()
     linked_channel = str(raw.get("channel") or "").strip()
@@ -642,7 +651,7 @@ def _normalize_thatim_item(raw: dict, *, top_vnd_per_usd: Any = None) -> dict:
         "quantity": raw.get("quantity") or 1,
         "amount": amount_val,
         "_amount_currency": currency,
-        "_allow_zero_amount": status in ("已取消", "已退款", "已失败"),
+        "_allow_zero_amount": status in ("已取消", "已退款", "已失败", "已作废"),
         "paid_at": raw.get("createdAt") or raw.get("paid_at") or "",
         "status": status,
         "_source": "thatim",
@@ -708,7 +717,7 @@ def _normalize_canboso_item(raw: dict, *, source_hint: str = "") -> dict:
         "amount": amount_val,
         "refund": refund_val,
         "_amount_currency": currency,
-        "_allow_zero_amount": status in ("已取消", "已退款", "已失败"),
+        "_allow_zero_amount": status in ("已取消", "已退款", "已失败", "已作废"),
         "paid_at": paid_at,
         "status": status,
         "_source": src,
@@ -1159,7 +1168,7 @@ def _parse_thatim_text(text: str, *, force: bool = False) -> list[dict]:
             "quantity": 1,
             "amount": amount_val,
             "_amount_currency": currency,
-            "_allow_zero_amount": status in ("已取消", "已退款", "已失败"),
+            "_allow_zero_amount": status in ("已取消", "已退款", "已失败", "已作废"),
             "paid_at": paid_at,
             "status": status or "已完成",
             "_source": "thatim",
@@ -1263,7 +1272,7 @@ def parse_purchases(
             linked_redeem_code = str(_first(merged, CARD_HEADERS["linked_redeem_code"], "") or "").strip()[:64]
             raw_status = _first(merged, CARD_HEADERS["status"], "")
             status_str = _normalize_upstream_status(raw_status) if (resolved_source.startswith("tg_") or resolved_source == "thatim") else str(raw_status)[:40]
-            allow_zero_amount = bool(merged.get("_allow_zero_amount")) or bool(linked_order_id or linked_redeem_code) or status_str in ("已取消", "已退款", "已失败")
+            allow_zero_amount = bool(merged.get("_allow_zero_amount")) or bool(linked_order_id or linked_redeem_code) or status_str in ("已取消", "已退款", "已失败", "已作废")
 
             amount_val, amount_key = _first_with_key(merged, CARD_HEADERS["amount"])
             if amount_val in (None, ""):
@@ -1405,11 +1414,15 @@ def _resolve_merged_status(existing_status: str, incoming_status: str, merged_re
         return "已退款"
     if inc_s in _TERMINAL_NEGATIVE_STATUSES:
         return inc_s
-    if prev_s in _TERMINAL_NEGATIVE_STATUSES and inc_s in _WEAK_STATUSES:
+    if prev_s in _TERMINAL_NEGATIVE_STATUSES and inc_s in (*_WEAK_STATUSES, "已作废"):
+        return prev_s
+    if prev_s == "已作废" and inc_s in _WEAK_STATUSES:
         return prev_s
     if not inc_s and prev_s:
         return prev_s
-    if prev_s in ("已完成", "已付款") and inc_s in _WEAK_STATUSES:
+    if prev_s == "已完成" and inc_s in (*_WEAK_STATUSES, "已作废"):
+        return prev_s
+    if prev_s == "已付款" and inc_s in _WEAK_STATUSES:
         return prev_s
     if prev_s == "已完成" and inc_s == "已付款":
         return prev_s
@@ -1757,7 +1770,7 @@ def classify_product(sku: str, title: str, *, amount_fen: int | None = None, is_
 def _is_inactive_purchase(purchase: CardPurchase) -> bool:
     status = str(purchase.status or "")
     low = status.lower()
-    if any(bad in low for bad in ("退款", "关闭", "待付", "待支", "取消", "失败", "撤销", "cancel", "failed", "refund", "hủy", "thất bại", "unpaid", "void", "closed")):
+    if any(bad in low for bad in ("退款", "关闭", "待付", "待支", "取消", "失败", "撤销", "作废", "cancel", "failed", "refund", "revoked", "invalidated", "hủy", "thất bại", "unpaid", "void", "closed")):
         return True
     return (purchase.amount_fen - purchase.refund_fen) <= 0
 

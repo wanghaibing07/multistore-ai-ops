@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
 import re
@@ -161,12 +162,99 @@ class ChatQueryIn(BaseModel):
 def index(): return FileResponse(STATIC/"index.html",headers={"Cache-Control":"no-store"})
 @app.get("/health")
 def health(): return {"status":"ok"}
+
+_LOOPBACK_PROXY_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+_LOOPBACK_CLIENT_HOSTS = _LOOPBACK_PROXY_HOSTS | frozenset({"testclient"})
+
+
+def _is_loopback_host(host: str | None, *, allow_testclient: bool = False) -> bool:
+    if not host:
+        return False
+    val = host.strip().strip('"').strip("'").strip().lower()
+    if not val:
+        return False
+    if val.startswith("["):
+        end = val.find("]")
+        if end == -1:
+            return False
+        rest = val[end + 1:]
+        if rest and not (rest.startswith(":") and rest[1:].isdigit()):
+            return False
+        val = val[1:end]
+    elif val.count(":") == 1:
+        host_part, port_part = val.split(":", 1)
+        if port_part.isdigit():
+            val = host_part
+    allowed_names = _LOOPBACK_CLIENT_HOSTS if allow_testclient else _LOOPBACK_PROXY_HOSTS
+    if val in allowed_names:
+        return True
+    try:
+        ip = ipaddress.ip_address(val)
+    except ValueError:
+        return False
+    if ip.is_loopback:
+        return True
+    return isinstance(ip, ipaddress.IPv6Address) and ip.ipv4_mapped is not None and ip.ipv4_mapped.is_loopback
+
+
+def _is_loopback_request(request: Request) -> bool:
+    client_host = request.client.host if request.client else None
+    if not _is_loopback_host(client_host, allow_testclient=True):
+        return False
+    for header_val in request.headers.getlist("x-forwarded-for"):
+        text = header_val.strip()
+        if not text:
+            continue
+        hops = [part.strip() for part in text.split(",")]
+        if any(not hop or not _is_loopback_host(hop) for hop in hops):
+            return False
+    for header_val in request.headers.getlist("forwarded"):
+        text = header_val.strip()
+        if not text:
+            continue
+        elements = [elem.strip() for elem in text.split(",")]
+        for elem in elements:
+            if not elem:
+                return False
+            for_values = []
+            for param in elem.split(";"):
+                key, sep, val = param.partition("=")
+                if sep and key.strip().lower() == "for":
+                    for_values.append(val.strip())
+            if not for_values or any(not _is_loopback_host(val) for val in for_values):
+                return False
+    for header_val in request.headers.getlist("x-real-ip"):
+        text = header_val.strip()
+        if text and not _is_loopback_host(text):
+            return False
+    return True
+
+
+def _is_public_mode() -> bool:
+    return os.environ.get("MULTISTORE_PUBLIC_MODE") == "1"
+
+
+def _quick_login_allowed(request: Request) -> bool:
+    if _is_public_mode():
+        return False
+    if os.environ.get("MULTISTORE_ALLOW_QUICK_LOGIN") == "1":
+        return True
+    return _is_loopback_request(request)
+
+
+def _require_quick_login(request: Request, *, public_detail: str) -> None:
+    if _is_public_mode():
+        raise HTTPException(404, public_detail)
+    if not _quick_login_allowed(request):
+        raise HTTPException(403, "仅本机回环访问或显式开启 MULTISTORE_ALLOW_QUICK_LOGIN=1 时允许免密进入")
+
+
 @app.get("/api/config")
-def config():
-    public_mode = os.environ.get("MULTISTORE_PUBLIC_MODE") == "1"
+def config(request: Request):
+    public_mode = _is_public_mode()
     return {
         "public_mode": public_mode,
-        "quick_login_enabled": not public_mode,
+        "quick_login_enabled": _quick_login_allowed(request),
         "qianniu_url": (os.environ.get("MULTISTORE_QIANNIU_URL") or "https://myseller.taobao.com/home.htm/trade-platform/tp/sold").strip(),
         "card_site_url": os.environ.get("MULTISTORE_CARD_SITE_URL", "https://www.16688.com.cn/"),
         "card_sites": {
@@ -187,14 +275,12 @@ def api_login(body:LoginIn,request:Request,response:Response,db:Session=Depends(
     return login(db,body.username,body.password,response,request.client.host if request.client else "unknown")
 @app.post("/api/quick-login")
 @app.post("/api/auth/quick-login")
-def api_quick_login(response:Response,body:QuickLoginIn|None=None,db:Session=Depends(get_db)):
-    if os.environ.get("MULTISTORE_PUBLIC_MODE") == "1":
-        raise HTTPException(404, "远程模式已关闭免密进入，请使用账号密码登录")
+def api_quick_login(request:Request,response:Response,body:QuickLoginIn|None=None,db:Session=Depends(get_db)):
+    _require_quick_login(request, public_detail="远程模式已关闭免密进入，请使用账号密码登录")
     return quick_login(db,response,username=body.username if body else None)
 @app.get("/api/auth/users")
-def api_auth_users(db:Session=Depends(get_db)):
-    if os.environ.get("MULTISTORE_PUBLIC_MODE") == "1":
-        raise HTTPException(404, "远程模式不提供用户列表")
+def api_auth_users(request:Request,db:Session=Depends(get_db)):
+    _require_quick_login(request, public_detail="远程模式不提供用户列表")
     return list_quick_users(db)
 @app.get("/api/me")
 def me(current:LoginSession=Depends(current_session),db:Session=Depends(get_db)):

@@ -1085,3 +1085,139 @@ def test_stage0_multi_child_parent_order_without_agiso_oid_requires_manual_revie
     finally:
         db.close()
         engine.dispose()
+
+
+def test_revoked_status_normalization_plan2_and_inactive_exclusion(tmp_path):
+    for raw in ("revoked", "REVOKED", "invalidated", "作废", "已作废"):
+        assert card_reconciliation._normalize_upstream_status(raw) == "已作废"
+
+    assert card_reconciliation._normalize_plan2_item(
+        {"upstream_order_code": "UP-REV-1", "status": "revoked", "upstream_status": "pending"}
+    )["status"] == "已作废"
+    assert card_reconciliation._normalize_plan2_item(
+        {"upstream_order_code": "UP-REV-2", "status": "revoked", "upstream_status": "processing"}
+    )["status"] == "已作废"
+    assert card_reconciliation._normalize_plan2_item(
+        {"upstream_order_code": "UP-REV-3", "status": "revoked", "upstream_status": ""}
+    )["status"] == "已作废"
+    assert card_reconciliation._normalize_plan2_item(
+        {"upstream_order_code": "UP-REV-4", "status": "revoked"}
+    )["status"] == "已作废"
+    assert card_reconciliation._normalize_plan2_item(
+        {"upstream_order_code": "UP-REV-5", "status": "revoked", "upstream_status": "cancelled"}
+    )["status"] == "已取消"
+    assert card_reconciliation._normalize_plan2_item(
+        {"upstream_order_code": "UP-REV-6", "status": "revoked", "upstream_status": "refunded"}
+    )["status"] == "已退款"
+    assert card_reconciliation._normalize_plan2_item(
+        {"upstream_order_code": "UP-REV-7", "status": "revoked", "upstream_status": "DELIVERED"}
+    )["status"] == "已完成"
+    assert card_reconciliation._normalize_plan2_item(
+        {"upstream_order_code": "UP-REV-8", "status": "revoked", "upstream_status": "completed"}
+    )["status"] == "已完成"
+    assert card_reconciliation._normalize_plan2_item(
+        {"upstream_order_code": "UP-CAN-1", "status": "completed", "upstream_status": "cancelled"}
+    )["status"] == "已取消"
+
+    assert card_reconciliation._is_inactive_purchase(
+        CardPurchase(store_id=1, purchase_external_id="P-REV-1", status="已作废", amount_fen=7000, refund_fen=0)
+    ) is True
+    assert card_reconciliation._is_inactive_purchase(
+        CardPurchase(store_id=1, purchase_external_id="P-REV-2", status="revoked", amount_fen=7000, refund_fen=0)
+    ) is True
+    assert card_reconciliation._is_inactive_purchase(
+        CardPurchase(store_id=1, purchase_external_id="P-REV-3", status="作废", amount_fen=7000, refund_fen=0)
+    ) is True
+    assert card_reconciliation._is_inactive_purchase(
+        CardPurchase(store_id=1, purchase_external_id="P-ACT-1", status="已完成", amount_fen=7000, refund_fen=0)
+    ) is False
+
+    engine, db = _setup_db(tmp_path)
+    try:
+        db.add(StoreSetting(store_id=1, contact_email="", usd_cny_rate="7.00", vnd_cny_rate="0.00028", updated_at=""))
+        db.commit()
+
+        pending_payload = {
+            "source": "tg_fatbunny",
+            "items": [
+                {
+                    "code": "CODE-REV-FLOW",
+                    "sku_title": "Gemini Pro",
+                    "upstream_order_code": "UP-REV-FLOW-1",
+                    "upstream_status": "pending",
+                    "status": "waiting_fulfillment",
+                    "cost_usd": "10.00",
+                    "submitted_at": "2026-11-22 10:00:00",
+                }
+            ],
+        }
+        card_reconciliation.import_purchases(db, 1, "p1.json", json.dumps(pending_payload).encode("utf-8"))
+        row = db.scalar(select(CardPurchase).where(CardPurchase.purchase_external_id == "UP-REV-FLOW-1"))
+        assert row is not None
+        assert row.status == "处理中"
+        assert card_reconciliation._is_inactive_purchase(row) is False
+
+        revoked_payload = {
+            "source": "tg_fatbunny",
+            "items": [
+                {
+                    "code": "CODE-REV-FLOW",
+                    "sku_title": "Gemini Pro",
+                    "upstream_order_code": "UP-REV-FLOW-1",
+                    "upstream_status": "pending",
+                    "status": "revoked",
+                    "cost_usd": "10.00",
+                    "submitted_at": "2026-11-22 10:00:00",
+                }
+            ],
+        }
+        card_reconciliation.import_purchases(db, 1, "p2.json", json.dumps(revoked_payload).encode("utf-8"))
+        row = db.scalar(select(CardPurchase).where(CardPurchase.purchase_external_id == "UP-REV-FLOW-1"))
+        assert row is not None
+        assert row.status == "已作废"
+        assert card_reconciliation._is_inactive_purchase(row) is True
+
+        # Stale pending payload must not downgrade 已作废
+        card_reconciliation.import_purchases(db, 1, "p3.json", json.dumps(pending_payload).encode("utf-8"))
+        row = db.scalar(select(CardPurchase).where(CardPurchase.purchase_external_id == "UP-REV-FLOW-1"))
+        assert row is not None
+        assert row.status == "已作废"
+
+        # Delivered upstream purchase must not be masked by stale local revoked
+        delivered_payload = {
+            "source": "tg_fatbunny",
+            "items": [
+                {
+                    "code": "CODE-DELIV-1",
+                    "sku_title": "Gemini Pro",
+                    "upstream_order_code": "UP-DELIV-REV-1",
+                    "upstream_status": "DELIVERED",
+                    "status": "completed",
+                    "cost_usd": "10.00",
+                    "submitted_at": "2026-11-22 10:05:00",
+                }
+            ],
+        }
+        card_reconciliation.import_purchases(db, 1, "d1.json", json.dumps(delivered_payload).encode("utf-8"))
+        stale_revoked = {
+            "source": "tg_fatbunny",
+            "items": [
+                {
+                    "code": "CODE-DELIV-1",
+                    "sku_title": "Gemini Pro",
+                    "upstream_order_code": "UP-DELIV-REV-1",
+                    "upstream_status": "pending",
+                    "status": "revoked",
+                    "cost_usd": "10.00",
+                    "submitted_at": "2026-11-22 10:05:00",
+                }
+            ],
+        }
+        card_reconciliation.import_purchases(db, 1, "d2.json", json.dumps(stale_revoked).encode("utf-8"))
+        delivered_row = db.scalar(select(CardPurchase).where(CardPurchase.purchase_external_id == "UP-DELIV-REV-1"))
+        assert delivered_row is not None
+        assert delivered_row.status == "已完成"
+        assert card_reconciliation._is_inactive_purchase(delivered_row) is False
+    finally:
+        db.close()
+        engine.dispose()
