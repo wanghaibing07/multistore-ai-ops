@@ -1400,3 +1400,196 @@
     transition: none;
   }
 }
+
+/* =========================================================================
+   M3 Extensions: Orders Filters, Refund Card & Automation Console
+   ========================================================================= */
+.admin-inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--ink-2);
+  cursor: pointer;
+  user-select: none;
+}
+
+.admin-inline-check input[type="checkbox"] {
+  width: 15px;
+  height: 15px;
+  accent-color: var(--accent, #7c5cff);
+}
+
+.filter-pill-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 20px;
+  height: 19px;
+  padding: 0 6px;
+  margin-left: 6px;
+  border-radius: 999px;
+  font-size: 11.5px;
+  font-weight: 700;
+  background: rgba(124, 92, 255, 0.14);
+  color: var(--ink-1);
+}
+
+.filter-pill-count.is-danger {
+  background: rgba(220, 53, 69, 0.16);
+  color: #b42336;
+}
+
+.filter-pill-count.is-warning {
+  background: rgba(217, 119, 6, 0.16);
+  color: #a15206;
+}
+
+.filter-pill.is-active .filter-pill-count {
+  background: rgba(255, 255, 255, 0.28);
+  color: inherit;
+}
+
+.admin-filter-secondary {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.4fr) auto;
+  gap: 10px;
+  align-items: center;
+}
+
+.admin-date-range {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.admin-date-range .input {
+  width: 150px;
+}
+
+.admin-date-sep {
+  font-size: 12.5px;
+  color: var(--ink-3);
+}
+
+.admin-refund-tag {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 6px;
+  font-size: 11.5px;
+  background: rgba(16, 185, 129, 0.12);
+  color: #0f766e;
+}
+
+.admin-refund-metrics {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.admin-refund-form-row {
+  display: grid;
+  grid-template-columns: minmax(120px, 0.7fr) minmax(180px, 1.4fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.automation-chip-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.automation-flag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 10px;
+  border-radius: 999px;
+  font-size: 12.5px;
+  border: 1px solid rgba(130, 110, 170, 0.22);
+  background: rgba(255, 255, 255, 0.56);
+  color: var(--ink-2);
+}
+
+.automation-flag-chip.is-on {
+  border-color: rgba(16, 185, 129, 0.35);
+  background: rgba(16, 185, 129, 0.10);
+  color: #0f766e;
+}
+
+.automation-flag-chip.is-off {
+  opacity: 0.72;
+}
+
+.automation-flag-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.automation-table-wrap {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: 12px;
+  border: 1px solid rgba(154, 134, 194, 0.22);
+  background: rgba(255, 255, 255, 0.58);
+}
+
+.automation-inline-form {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.automation-inline-form .input {
+  flex: 1 1 240px;
+}
+
+.automation-form-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.automation-two-col {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.automation-events-filter {
+  display: grid;
+  grid-template-columns: minmax(180px, 1.4fr) minmax(110px, 0.7fr) minmax(130px, 0.9fr) auto;
+  gap: 8px;
+  align-items: center;
+}
+
+@media (max-width: 960px) {
+  .admin-filter-secondary,
+  .automation-two-col,
+  .automation-events-filter {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .automation-form-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 600px) {
+  .admin-refund-metrics,
+  .admin-refund-form-row,
+  .automation-form-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .admin-date-range .input {
+    flex: 1 1 130px;
+    width: auto;
+  }
+}

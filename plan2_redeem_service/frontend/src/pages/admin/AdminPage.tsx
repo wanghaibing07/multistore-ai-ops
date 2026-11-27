@@ -7,8 +7,9 @@ import {
 } from "../../api/client";
 import { CastoriceIcon, type CastoriceIconName } from "../../components/CastoriceIcon";
 import { useToast } from "../../components/ToastProvider";
-import type { AdminOrderStatusFilter, AdminOverviewResponse } from "../../types/api";
+import type { AdminOverviewResponse } from "../../types/api";
 import "../../styles/admin-glass.css";
+import { AdminAutomationPage } from "./AdminAutomationPage";
 import { AdminIssuePage } from "./AdminIssuePage";
 import { AdminLoginPage } from "./AdminLoginPage";
 import { AdminOrderDrawer } from "./AdminOrderDrawer";
@@ -19,12 +20,13 @@ import { AdminWallpaperBackdrop } from "./AdminWallpaperBackdrop";
 
 const ADMIN_TOKEN_STORAGE_KEY = "plan2_admin_token";
 
-type AdminTab = "overview" | "issue" | "orders" | "settings";
+type AdminTab = "overview" | "issue" | "orders" | "automation" | "settings";
 
 const TAB_PATHS: Record<AdminTab, string> = {
   overview: "/admin",
   issue: "/admin/issue",
   orders: "/admin/orders",
+  automation: "/admin/automation",
   settings: "/admin/settings",
 };
 
@@ -40,6 +42,9 @@ function resolveTabFromPath(pathname: string): AdminTab {
     normalized.startsWith("/admin/codes/")
   ) {
     return "orders";
+  }
+  if (normalized === "/admin/automation" || normalized.startsWith("/admin/automation/")) {
+    return "automation";
   }
   if (normalized === "/admin/settings" || normalized.startsWith("/admin/settings/")) {
     return "settings";
@@ -63,7 +68,6 @@ export function AdminPage() {
   const [activeTab, setActiveTab] = useState<AdminTab>(() =>
     resolveTabFromPath(location.pathname)
   );
-  const [orderStatusFilter, setOrderStatusFilter] = useState<AdminOrderStatusFilter | "">("");
   const [selectedCode, setSelectedCode] = useState<string | null>(null);
   const [ordersRefreshKey, setOrdersRefreshKey] = useState(0);
 
@@ -231,6 +235,7 @@ export function AdminPage() {
       icon: "admin-ledger",
       count: manualAttentionCount,
     },
+    { id: "automation", label: "渠道自动化", icon: "admin-wallet" },
     { id: "settings", label: "价格与设置", icon: "admin-settings" },
   ];
 
@@ -318,8 +323,10 @@ export function AdminPage() {
             overview={overview}
             onRefreshUpstream={handleRefreshUpstream}
             onJumpToOrders={(status) => {
-              setOrderStatusFilter(status ?? "");
-              switchTab("orders");
+              setActiveTab("orders");
+              navigate(
+                status ? `/admin/orders?status=${encodeURIComponent(status)}` : "/admin/orders"
+              );
             }}
             onJumpToSettings={() => switchTab("settings")}
           />
@@ -338,9 +345,18 @@ export function AdminPage() {
         {activeTab === "orders" && (
           <AdminOrdersPage
             token={token}
-            initialStatus={orderStatusFilter}
+            counts={overview.counts}
             refreshKey={ordersRefreshKey}
             onUnauthorized={handleUnauthorized}
+            onSelectCode={(targetCode) => setSelectedCode(targetCode)}
+          />
+        )}
+
+        {activeTab === "automation" && (
+          <AdminAutomationPage
+            token={token}
+            onUnauthorized={handleUnauthorized}
+            onMutated={handleDataMutated}
             onSelectCode={(targetCode) => setSelectedCode(targetCode)}
           />
         )}

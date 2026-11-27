@@ -6,6 +6,7 @@ import {
   forwardAdminWarranty,
   getAdminCodeDetail,
   pollAdminCode,
+  recordAdminUpstreamRefund,
   retryAdminCode,
   revokeAdminCode,
 } from "../../api/client";
@@ -22,9 +23,78 @@ import {
   formatOrderErrorMessage,
   formatUsd,
   getChannelLabel,
+  getOrderDisplayStatusMeta,
   getSkuShortLabel,
   getUpstreamStatusLabel,
 } from "../../utils/format";
+import { validateGmailInput } from "../../utils/validation";
+
+function buildDisputeEvidenceSummary(detail: AdminCodeDetail): string {
+  const isExclusive = detail.sku_key === "ultra_exclusive_admin";
+  const statusLabel = getOrderDisplayStatusMeta({
+    sku_key: detail.sku_key,
+    status: detail.status,
+    warranty_status: detail.warranty_status,
+    external_order_id: detail.external_order_id,
+    is_dispatched: detail.is_dispatched,
+  }).label;
+  const buyerEmail =
+    (isExclusive ? detail.warranty?.admin_email : null) ||
+    detail.buyer_email ||
+    detail.buyer_email_masked ||
+    "未填写";
+  const storeEmail = detail.store_email || detail.delivery?.account_text?.trim() || "";
+  const lines: string[] = [
+    "【售后核验举证摘要】",
+    `兑换码：${detail.code}`,
+    `销售渠道：${getChannelLabel(detail.channel)}${detail.goods_no ? `（商品编号 ${detail.goods_no}）` : ""}`,
+    `外部订单号：${detail.external_order_id || "未绑定"}`,
+    `商品规格：${detail.sku_title || getSkuShortLabel(detail.sku_key)}`,
+    `当前状态：${statusLabel}`,
+    `买家邮箱：${buyerEmail}`,
+  ];
+  if (isExclusive && storeEmail) {
+    lines.push(`商店套餐邮箱：${storeEmail}`);
+  }
+  lines.push(
+    `上游单号：${detail.upstream_order_code || "未下单"}（上游状态：${getUpstreamStatusLabel(detail.upstream_status)}）`
+  );
+  lines.push(
+    `采购成本：${formatUsd(detail.cost_usd)}${
+      detail.upstream_refund_usd !== null && detail.upstream_refund_usd !== undefined
+        ? ` ｜ 上游实退：${formatUsd(detail.upstream_refund_usd)}`
+        : ""
+    }`
+  );
+  lines.push(`制码时间：${formatDateTime(detail.created_at)}`);
+  lines.push(`提货提交时间：${detail.submitted_at ? formatDateTime(detail.submitted_at) : "尚未使用"}`);
+  if (detail.completed_at) {
+    lines.push(`完成时间：${formatDateTime(detail.completed_at)}`);
+  }
+  if (detail.warranty) {
+    lines.push(
+      `质保登记：${detail.warranty.status}${
+        detail.warranty.registered_at ? `（报备于 ${formatDateTime(detail.warranty.registered_at)}）` : ""
+      }`
+    );
+  }
+  if (detail.last_error_code || detail.last_error_message) {
+    lines.push(
+      `异常记录：${detail.last_error_code || "UNKNOWN"} - ${formatOrderErrorMessage(
+        detail.last_error_code,
+        detail.last_error_message
+      )}`
+    );
+  }
+  if (detail.audit_events.length > 0) {
+    lines.push("关键节点：");
+    for (const item of detail.audit_events.slice(-6)) {
+      const ev = formatAuditEvent(item);
+      lines.push(`- ${formatDateTime(item.created_at)} ${ev.title}${ev.detail && ev.detail !== ev.title ? `（${ev.detail}）` : ""}`);
+    }
+  }
+  return lines.join("\n");
+}
 
 interface AdminOrderDrawerProps {
   token: string;
@@ -61,6 +131,8 @@ export function AdminOrderDrawer({
   const [forwarding, setForwarding] = useState(false);
 
   const [overridePriceLimit, setOverridePriceLimit] = useState(false);
+  const [forceNewOrder, setForceNewOrder] = useState(false);
+  const [newBuyerEmail, setNewBuyerEmail] = useState("");
   const [retryNote, setRetryNote] = useState("");
   const [merchantVerifiedOrderNo, setMerchantVerifiedOrderNo] = useState("");
   const [merchantVerifiedRecipientEmail, setMerchantVerifiedRecipientEmail] = useState("");
@@ -70,6 +142,13 @@ export function AdminOrderDrawer({
   const [revokeReason, setRevokeReason] = useState("买家退款或手动作废");
   const [revokeConfirmOpen, setRevokeConfirmOpen] = useState(false);
   const [revoking, setRevoking] = useState(false);
+  const [revokeForceRequired, setRevokeForceRequired] = useState(false);
+  const [revokeForceConfirmed, setRevokeForceConfirmed] = useState(false);
+  const [revokeForceMessage, setRevokeForceMessage] = useState<string | null>(null);
+
+  const [refundAmountInput, setRefundAmountInput] = useState("");
+  const [refundNoteInput, setRefundNoteInput] = useState("");
+  const [savingRefund, setSavingRefund] = useState(false);
 
   const loadDetail = useCallback(async () => {
     if (!code) return;
@@ -94,16 +173,34 @@ export function AdminOrderDrawer({
     setError(null);
     setScreenshotZoomOpen(false);
     setOverridePriceLimit(false);
+    setForceNewOrder(false);
+    setNewBuyerEmail("");
     setRetryNote("");
     setMerchantVerifiedOrderNo("");
     setMerchantVerifiedRecipientEmail("");
     setRetryConfirmOpen(false);
     setAckNote("");
     setRevokeReason("买家退款或手动作废");
+    setRevokeConfirmOpen(false);
+    setRevokeForceRequired(false);
+    setRevokeForceConfirmed(false);
+    setRevokeForceMessage(null);
+    setRefundAmountInput("");
+    setRefundNoteInput("");
     if (code) {
       void loadDetail();
     }
   }, [code, loadDetail]);
+
+  useEffect(() => {
+    if (!detail) return;
+    setRefundAmountInput(
+      detail.upstream_refund_usd !== null && detail.upstream_refund_usd !== undefined
+        ? String(detail.upstream_refund_usd)
+        : ""
+    );
+    setRefundNoteInput(detail.upstream_refund_note ?? "");
+  }, [detail?.code, detail?.upstream_refund_usd, detail?.upstream_refund_note]);
 
   useEffect(() => {
     if (!code || !detail?.warranty?.has_screenshot) {
@@ -257,10 +354,17 @@ export function AdminOrderDrawer({
         note: retryNote.trim() || undefined,
         merchant_verified_order_no: merchantVerifiedOrderNo.trim() || undefined,
         merchant_verified_recipient_email: needsRecipientConfirmation ? verifiedRecipient : undefined,
+        force_new_order: effectiveForceNewOrder || undefined,
+        new_buyer_email:
+          canEditNewBuyerEmail && newBuyerEmailValidation?.valid
+            ? newBuyerEmailValidation.normalized
+            : undefined,
       });
       setDetail(updated);
       setRetryConfirmOpen(false);
       setOverridePriceLimit(false);
+      setForceNewOrder(false);
+      setNewBuyerEmail("");
       setRetryNote("");
       setMerchantVerifiedOrderNo("");
       setMerchantVerifiedRecipientEmail("");
@@ -285,16 +389,27 @@ export function AdminOrderDrawer({
     }
   };
 
+  const closeRevokeDialog = () => {
+    setRevokeConfirmOpen(false);
+    setRevokeForceRequired(false);
+    setRevokeForceConfirmed(false);
+    setRevokeForceMessage(null);
+  };
+
   const handleRevokeConfirm = async () => {
+    if (revokeForceRequired && !revokeForceConfirmed) {
+      return;
+    }
     setRevoking(true);
     try {
       const updated = await revokeAdminCode(
         token,
         code,
-        revokeReason.trim() || "商家手动作废"
+        revokeReason.trim() || "商家手动作废",
+        revokeForceRequired && revokeForceConfirmed
       );
       setDetail(updated);
-      setRevokeConfirmOpen(false);
+      closeRevokeDialog();
       onMutated();
       pushToast(`兑换码 ${code} 已作废`, "success");
     } catch (caught) {
@@ -302,9 +417,47 @@ export function AdminOrderDrawer({
         onUnauthorized();
         return;
       }
+      if (caught instanceof ApiError && caught.status === 409 && caught.errorCode === "UPSTREAM_ORDER_ACTIVE") {
+        setRevokeForceRequired(true);
+        setRevokeForceConfirmed(false);
+        setRevokeForceMessage(caught.message);
+        pushToast("上游订单仍活跃，如需强制本地作废请勾选二次确认", "error");
+        return;
+      }
       pushToast(caught instanceof ApiError ? caught.message : "作废操作失败", "error");
     } finally {
       setRevoking(false);
+    }
+  };
+
+  const handleSaveUpstreamRefund = async () => {
+    const rawText = refundAmountInput.trim();
+    if (!rawText) {
+      pushToast("请填写上游实退金额（USD），无退款可填 0", "error");
+      return;
+    }
+    const parsedAmount = Number(rawText);
+    if (!Number.isFinite(parsedAmount) || parsedAmount < 0) {
+      pushToast("实退金额必须是大于等于 0 的有效数字", "error");
+      return;
+    }
+    setSavingRefund(true);
+    try {
+      const updated = await recordAdminUpstreamRefund(token, code, {
+        upstream_refund_usd: parsedAmount,
+        note: refundNoteInput.trim(),
+      });
+      setDetail(updated);
+      onMutated();
+      pushToast(`已登记上游实退 ${formatUsd(parsedAmount)}`, "success");
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      pushToast(caught instanceof ApiError ? caught.message : "保存上游实退登记失败", "error");
+    } finally {
+      setSavingRefund(false);
     }
   };
 
@@ -317,16 +470,47 @@ export function AdminOrderDrawer({
   const sharedBuyerCopyText = detail?.buyer_email || null;
 
   const canPoll = Boolean(
-    detail && detail.status === "waiting_fulfillment" && detail.upstream_order_code
+    detail &&
+      (detail.can_poll_upstream ??
+        ((detail.status === "waiting_fulfillment" || detail.status === "needs_manual_review") &&
+          Boolean(detail.upstream_order_code)))
   );
-  const canRetry = Boolean(detail && detail.status === "needs_manual_review" && detail.idempotency_key && !detail.upstream_order_code);
+  const canIdempotentRetry = Boolean(
+    detail &&
+      detail.status === "needs_manual_review" &&
+      detail.idempotency_key &&
+      !detail.upstream_order_code
+  );
+  const canReorder = Boolean(detail?.can_reorder);
+  const canRetry = canIdempotentRetry || canReorder;
+  const forceNewOrderRequired = canReorder && !canIdempotentRetry;
+  const effectiveForceNewOrder = forceNewOrderRequired || (canReorder && forceNewOrder);
+  const canEditNewBuyerEmail = Boolean(
+    detail && effectiveForceNewOrder && detail.product_type === "slot"
+  );
+  const trimmedNewBuyerEmail = newBuyerEmail.trim();
+  const newBuyerEmailValidation =
+    canEditNewBuyerEmail && trimmedNewBuyerEmail ? validateGmailInput(trimmedNewBuyerEmail) : null;
+  const newBuyerEmailReady = !newBuyerEmailValidation || newBuyerEmailValidation.valid;
   const needsRecipientConfirmation = detail?.channel === "16688" && detail.product_type === "slot";
   const verifiedRecipient = merchantVerifiedRecipientEmail.trim();
-  const retryRecipientReady = !needsRecipientConfirmation || Boolean(verifiedRecipient);
+  const retryRecipientReady =
+    newBuyerEmailReady && (!needsRecipientConfirmation || Boolean(verifiedRecipient));
+  const showActiveUpstreamGuard = Boolean(
+    detail &&
+      detail.status === "needs_manual_review" &&
+      detail.upstream_order_code &&
+      !canReorder
+  );
   const canRevoke = Boolean(
     detail && detail.status !== "completed" && detail.status !== "revoked" && detail.status !== "purchasing"
   );
-  const hasActions = canPoll || canRetry || canRevoke;
+  const canRecordRefund = Boolean(detail && detail.upstream_order_code);
+  const netLossUsd =
+    detail && detail.cost_usd !== null && detail.cost_usd !== undefined
+      ? Math.max(0, detail.cost_usd - (detail.upstream_refund_usd ?? 0))
+      : null;
+  const hasActions = canPoll || canRetry || canRevoke || showActiveUpstreamGuard;
 
   return (
     <>
@@ -409,9 +593,17 @@ export function AdminOrderDrawer({
                 )}
 
                 <section className="stack-sm" aria-label="订单基础信息">
-                  <div className="row-between">
+                  <div className="row-between" style={{ flexWrap: "wrap", gap: 8 }}>
                     <strong style={{ fontSize: 14 }}>基础信息</strong>
-                    <CopyButton text={detail.redeem_url} label="复制提货链接" variant="secondary" />
+                    <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
+                      <CopyButton
+                        text={buildDisputeEvidenceSummary(detail)}
+                        label="复制举证摘要"
+                        toastMessage="已复制售后举证摘要，可直接发给淘宝或 16688 客服"
+                        variant="secondary"
+                      />
+                      <CopyButton text={detail.redeem_url} label="复制提货链接" variant="secondary" />
+                    </div>
                   </div>
                   <div className="kv-grid">
                     <div className="kv-item">
@@ -858,12 +1050,27 @@ export function AdminOrderDrawer({
                           <button
                             type="button"
                             className="btn btn-danger"
-                            onClick={() => setRevokeConfirmOpen(true)}
+                            onClick={() => {
+                              setRevokeForceRequired(false);
+                              setRevokeForceConfirmed(false);
+                              setRevokeForceMessage(null);
+                              setRevokeConfirmOpen(true);
+                            }}
                           >
                             <CastoriceIcon name="admin-alert" size={19} />
                             <span>作废这个兑换码</span>
                           </button>
                         )}
+                      </div>
+                    )}
+
+                    {showActiveUpstreamGuard && (
+                      <div className="callout callout-warning" role="note">
+                        <CastoriceIcon name="alert" size={20} className="callout-icon" />
+                        <div>
+                          <strong>防重复扣款保护：</strong>
+                          原上游订单 <span className="mono">{detail.upstream_order_code}</span> 尚未确认取消/退款，暂不允许重下新单。请先点上方「立即查一次上游进度」同步终态。
+                        </div>
                       </div>
                     )}
 
@@ -875,7 +1082,68 @@ export function AdminOrderDrawer({
                           if (retryRecipientReady) setRetryConfirmOpen(true);
                         }}
                       >
-                        <strong style={{ fontSize: 13.5 }}>重新向上游下单</strong>
+                        <strong style={{ fontSize: 13.5 }}>
+                          {effectiveForceNewOrder ? "重下新单（启用新幂等键）" : "重新向上游下单"}
+                        </strong>
+                        {forceNewOrderRequired ? (
+                          <div className="callout callout-info" role="note">
+                            <CastoriceIcon name="alert" size={18} className="callout-icon" />
+                            <div>
+                              原上游订单已取消/退款，本次将以新幂等键重新向 Canboso 下单（会按现价重新扣款）。
+                            </div>
+                          </div>
+                        ) : canReorder ? (
+                          <label className={`check-card ${forceNewOrder ? "is-checked" : ""}`}>
+                            <input
+                              type="checkbox"
+                              checked={forceNewOrder}
+                              onChange={(event) => setForceNewOrder(event.target.checked)}
+                            />
+                            <span className="check-card-body">
+                              <strong>启用新幂等键重下新单</strong>
+                              <span>
+                                仅当确认原请求无法沿用或需要更换买家收件邮箱时再勾选。
+                              </span>
+                            </span>
+                          </label>
+                        ) : null}
+                        {canEditNewBuyerEmail && (
+                          <div className="field-group">
+                            <label className="field-label" htmlFor={`${titleId}-new-buyer-email`}>
+                              改发新买家邮箱（可选，留空沿用原邮箱）
+                            </label>
+                            <input
+                              id={`${titleId}-new-buyer-email`}
+                              name="new_buyer_email"
+                              type="email"
+                              className="input mono"
+                              autoComplete="off"
+                              autoCapitalize="none"
+                              spellCheck={false}
+                              maxLength={254}
+                              placeholder={detail.buyer_email || "name@gmail.com"}
+                              value={newBuyerEmail}
+                              onChange={(event) => setNewBuyerEmail(event.target.value)}
+                            />
+                            {newBuyerEmailValidation && !newBuyerEmailValidation.valid && (
+                              <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                                <span className="field-error">{newBuyerEmailValidation.error}</span>
+                                {newBuyerEmailValidation.suggestion && (
+                                  <button
+                                    type="button"
+                                    className="btn btn-ghost btn-sm"
+                                    onClick={() => setNewBuyerEmail(newBuyerEmailValidation.suggestion || "")}
+                                  >
+                                    改为 {newBuyerEmailValidation.suggestion}
+                                  </button>
+                                )}
+                              </div>
+                            )}
+                            <small className="field-hint">
+                              原单已取消/退款且买家需换邮箱重发时填写；留空则沿用原邮箱 <span className="mono">{detail.buyer_email || "-"}</span>。
+                            </small>
+                          </div>
+                        )}
                         {detail.channel === "16688" && (
                           <label className="stack-sm">
                             <span>人工核验的 16688 订单号（OpenAPI 暂停时使用）</span>
@@ -909,7 +1177,9 @@ export function AdminOrderDrawer({
                               onChange={(event) => setMerchantVerifiedRecipientEmail(event.target.value)}
                             />
                             <small id={`${titleId}-retry-recipient-hint`} className="field-hint">
-                              请先向买家核对实际收邀请的完整邮箱，再手动填入。系统只用它匹配原提货请求，不能在这里改邮箱或重复扣费。
+                              {canEditNewBuyerEmail && trimmedNewBuyerEmail
+                                ? "请填入与上方「新买家邮箱」完全一致的收邀请邮箱完成人工二次核对。"
+                                : "请先向买家核对实际收邀请的完整邮箱，再手动填入，须与本次目标收件邮箱一致。"}
                             </small>
                           </div>
                         )}
@@ -940,11 +1210,88 @@ export function AdminOrderDrawer({
                         >
                           <CastoriceIcon name="retry" size={17} />
                           <span>
-                            {overridePriceLimit ? "按当前进价放行并重下" : "重新向上游下单"}
+                            {effectiveForceNewOrder
+                              ? overridePriceLimit
+                                ? "按当前进价放行并重下新单"
+                                : "启用新单号重新下单"
+                              : overridePriceLimit
+                                ? "按当前进价放行并重下"
+                                : "重新向上游下单"}
                           </span>
                         </button>
                       </form>
                     )}
+                  </section>
+                )}
+
+                {canRecordRefund && (
+                  <section className="inset-panel stack-sm" aria-label="上游实退登记">
+                    <div className="row-between" style={{ gap: 8, flexWrap: "wrap" }}>
+                      <strong style={{ fontSize: 13.5 }}>上游实退登记（USD）</strong>
+                      <span className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>
+                        上游单号 {detail.upstream_order_code}
+                      </span>
+                    </div>
+                    <div className="admin-refund-metrics">
+                      <div className="kv-item">
+                        <span className="kv-label">采购成本</span>
+                        <span className="kv-value mono">{formatUsd(detail.cost_usd)}</span>
+                      </div>
+                      <div className="kv-item">
+                        <span className="kv-label">已登记实退</span>
+                        <span className="kv-value mono">
+                          {detail.upstream_refund_usd !== null && detail.upstream_refund_usd !== undefined
+                            ? formatUsd(detail.upstream_refund_usd)
+                            : "未登记"}
+                        </span>
+                      </div>
+                      <div className="kv-item">
+                        <span className="kv-label">净成本 / 损耗</span>
+                        <span className="kv-value mono">
+                          {netLossUsd !== null ? formatUsd(netLossUsd) : "-"}
+                        </span>
+                      </div>
+                    </div>
+                    <form
+                      className="stack-sm"
+                      onSubmit={(event) => {
+                        event.preventDefault();
+                        void handleSaveUpstreamRefund();
+                      }}
+                    >
+                      <div className="admin-refund-form-row">
+                        <input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          inputMode="decimal"
+                          className="input mono"
+                          aria-label="上游实退金额（USD）"
+                          placeholder="实退金额，如 12.50"
+                          value={refundAmountInput}
+                          onChange={(event) => setRefundAmountInput(event.target.value)}
+                          disabled={savingRefund}
+                        />
+                        <input
+                          type="text"
+                          className="input"
+                          maxLength={300}
+                          aria-label="实退备注"
+                          placeholder="退款备注（可选，如：Canboso 钱包已原路退回）"
+                          value={refundNoteInput}
+                          onChange={(event) => setRefundNoteInput(event.target.value)}
+                          disabled={savingRefund}
+                        />
+                        <button
+                          type="submit"
+                          className={`btn btn-secondary ${savingRefund ? "is-loading" : ""}`}
+                          disabled={savingRefund}
+                          aria-busy={savingRefund}
+                        >
+                          <span>{savingRefund ? "保存中..." : "保存实退"}</span>
+                        </button>
+                      </div>
+                    </form>
                   </section>
                 )}
 
@@ -1029,38 +1376,77 @@ export function AdminOrderDrawer({
 
       <ConfirmDialog
         open={retryConfirmOpen && canRetry && detail?.code === code}
-        title="确认重新向上游下单"
-        confirmLabel={overridePriceLimit ? "确认放行并重下" : "确认重新下单"}
+        title={effectiveForceNewOrder ? "确认启用新单号重新下单" : "确认重新向上游下单"}
+        confirmLabel={
+          effectiveForceNewOrder
+            ? overridePriceLimit
+              ? "确认放行并重下新单"
+              : "确认重下新单"
+            : overridePriceLimit
+              ? "确认放行并重下"
+              : "确认重新下单"
+        }
         busy={retrying}
         onConfirm={() => void handleRetryConfirm()}
         onClose={() => setRetryConfirmOpen(false)}
       >
         <p>
           即将为兑换码 <strong className="mono">{code}</strong> 重新向上游发起下单。
+          {effectiveForceNewOrder
+            ? "本次会使用新幂等键向 Canboso 创建新订单。"
+            : "系统会沿用原幂等键防止重复扣款。"}
           {overridePriceLimit
             ? "你已勾选按当前进价放行，生产模式下会直接按上游现价下单。"
-            : "系统会自动防止重复扣款，并继续检查单笔最高进价限制。"}
+            : "系统会继续检查单笔最高进价限制。"}
         </p>
+        {canEditNewBuyerEmail && newBuyerEmailValidation?.valid && (
+          <p>
+            目标收件邮箱将更新为 <strong className="mono">{newBuyerEmailValidation.normalized}</strong>。
+          </p>
+        )}
         {merchantVerifiedOrderNo.trim() && (
           <p>确认你已在 16688 商家后台核验订单 <strong className="mono">{merchantVerifiedOrderNo.trim()}</strong>。</p>
         )}
         {needsRecipientConfirmation && (
-          <p>确认你已向买家核对收邀请邮箱 <strong className="mono">{verifiedRecipient}</strong>。系统会用它匹配原提货请求。</p>
+          <p>确认你已向买家核对收邀请邮箱 <strong className="mono">{verifiedRecipient}</strong>。</p>
         )}
       </ConfirmDialog>
 
       <ConfirmDialog
         open={revokeConfirmOpen}
-        title="确认作废这个兑换码"
-        confirmLabel="确认作废"
+        title={revokeForceRequired ? "上游订单仍活跃 · 确认强制本地作废" : "确认作废这个兑换码"}
+        confirmLabel={revokeForceRequired ? "确认强制本地作废" : "确认作废"}
         confirmVariant="danger"
         busy={revoking}
+        confirmDisabled={revokeForceRequired && !revokeForceConfirmed}
         onConfirm={() => void handleRevokeConfirm()}
-        onClose={() => setRevokeConfirmOpen(false)}
+        onClose={closeRevokeDialog}
       >
         <p>
           作废后买家就无法再用 <strong className="mono">{code}</strong> 提货，适合买家退款或取消订单后防止重复领取。
         </p>
+        {revokeForceRequired && (
+          <div className="stack-sm">
+            <div className="callout callout-danger" role="alert">
+              <CastoriceIcon name="admin-alert" size={20} className="callout-icon" />
+              <div>
+                <strong>上游订单仍处于活跃状态：</strong>
+                {revokeForceMessage || "该兑换码已在上游扣款下单且未确认取消，强制本地作废不会自动退回上游款项。"}
+              </div>
+            </div>
+            <label className={`check-card ${revokeForceConfirmed ? "is-checked" : ""}`}>
+              <input
+                type="checkbox"
+                checked={revokeForceConfirmed}
+                onChange={(event) => setRevokeForceConfirmed(event.target.checked)}
+              />
+              <span className="check-card-body">
+                <strong>我已核对上游退款或已知晓扣款风险，强制本地作废</strong>
+                <span>勾选后将携带 force=true 强制将此兑换码置为已作废。</span>
+              </span>
+            </label>
+          </div>
+        )}
         <div className="field-group">
           <label className="field-label" htmlFor="revoke-reason-input">
             <span>作废原因</span>

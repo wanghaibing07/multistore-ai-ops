@@ -1,10 +1,18 @@
 import { useCallback, useEffect, useState, type FormEvent, type KeyboardEvent } from "react";
-import { ApiError, listAdminCodes } from "../../api/client";
+import { useSearchParams } from "react-router-dom";
+import { ApiError, exportAdminReconciliationCsv, listAdminCodes } from "../../api/client";
 import { CastoriceIcon } from "../../components/CastoriceIcon";
 import { OrderDisplayStatusBadge } from "../../components/StatusBadge";
-import type { AdminCodeListResponse, AdminCodeSummary, AdminOrderStatusFilter } from "../../types/api";
+import { useToast } from "../../components/ToastProvider";
+import type {
+  AdminCodeListResponse,
+  AdminCodeSummary,
+  AdminOrderStatusFilter,
+  AdminOverviewCounts,
+} from "../../types/api";
 import {
   formatDateTime,
+  formatOrderErrorMessage,
   formatUsd,
   getChannelLabel,
   getSkuShortLabel,
@@ -13,23 +21,86 @@ import { isImeComposing } from "../../utils/ime";
 
 interface AdminOrdersPageProps {
   token: string;
-  initialStatus: AdminOrderStatusFilter | "";
+  counts?: AdminOverviewCounts;
   refreshKey: number;
   onUnauthorized: () => void;
   onSelectCode: (code: string) => void;
 }
 
-const STATUS_TABS: Array<{ value: AdminOrderStatusFilter | ""; label: string }> = [
+const STATUS_TABS: Array<{
+  value: AdminOrderStatusFilter | "";
+  label: string;
+  countKey?: keyof AdminOverviewCounts;
+  alertTone?: "danger" | "warning";
+}> = [
+  {
+    value: "manual_attention",
+    label: "需人工处理",
+    countKey: "manual_attention",
+    alertTone: "danger",
+  },
+  {
+    value: "pending_warranty_ack",
+    label: "待质保登记",
+    countKey: "pending_warranty_ack",
+    alertTone: "warning",
+  },
+  {
+    value: "waiting_fulfillment",
+    label: "排队拉人中",
+    countKey: "waiting_fulfillment",
+  },
+  {
+    value: "dispatched_unused",
+    label: "已发出待提货",
+    countKey: "dispatched_unused",
+  },
+  { value: "in_stock", label: "在库存", countKey: "in_stock" },
+  { value: "completed", label: "已完成", countKey: "completed" },
+  { value: "revoked", label: "已作废", countKey: "revoked" },
   { value: "", label: "全部" },
-  { value: "in_stock", label: "在库存" },
-  { value: "dispatched_unused", label: "已发出待提货" },
-  { value: "waiting_fulfillment", label: "排队拉人中" },
-  { value: "completed", label: "已完成" },
-  { value: "manual_attention", label: "需人工处理" },
-  { value: "revoked", label: "已作废" },
 ];
 
+const ALLOWED_STATUS_VALUES = new Set<string>(
+  STATUS_TABS.map((item) => item.value).filter(Boolean)
+);
+
+const COMMON_ERROR_CODES: Array<{ code: string; label: string }> = [
+  { code: "PRICE_LIMIT_EXCEEDED", label: "进价超上限" },
+  { code: "LOW_BALANCE", label: "上游余额不足" },
+  { code: "UPSTREAM_OUT_OF_STOCK", label: "上游暂时没货" },
+  { code: "UPSTREAM_TIMEOUT", label: "上游响应超时" },
+  { code: "UPSTREAM_ERROR", label: "上游接口报错" },
+  { code: "CANBOSO_ORDER_CANCELLED", label: "上游订单已取消/退款" },
+  { code: "CANBOSO_PURCHASE_UNCONFIRMED", label: "上游下单未确认" },
+  { code: "PURCHASING_STUCK_RECOVERY", label: "下单卡死自动恢复" },
+  { code: "FULFILLMENT_TIMEOUT", label: "排队超 24 小时" },
+  { code: "CHANNEL16688_OPENAPI_PAUSED", label: "16688 OpenAPI 暂停" },
+  { code: "CHANNEL16688_RECIPIENT_DISPUTED", label: "16688 收件邮箱争议" },
+  { code: "ORDER_NOT_ELIGIBLE", label: "16688 订单不符合条件" },
+];
+
+const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
 const PAGE_SIZE = 20;
+
+function parseStatusParam(raw: string | null): AdminOrderStatusFilter | "" {
+  const trimmed = (raw || "").trim();
+  if (trimmed && ALLOWED_STATUS_VALUES.has(trimmed)) {
+    return trimmed as AdminOrderStatusFilter;
+  }
+  return "";
+}
+
+function parseDateParam(raw: string | null): string {
+  const trimmed = (raw || "").trim();
+  return ISO_DATE_RE.test(trimmed) ? trimmed : "";
+}
+
+function parsePageParam(raw: string | null): number {
+  const num = Number.parseInt(raw || "1", 10);
+  return Number.isFinite(num) && num >= 1 ? num : 1;
+}
 
 function renderSkuTag(skuKey: AdminCodeSummary["sku_key"]) {
   const isExclusive = skuKey === "ultra_exclusive_admin";
@@ -163,28 +234,70 @@ function formatMobileOrderTime(
 
 export function AdminOrdersPage({
   token,
-  initialStatus,
+  counts,
   refreshKey,
   onUnauthorized,
   onSelectCode,
 }: AdminOrdersPageProps) {
-  const [statusFilter, setStatusFilter] = useState<AdminOrderStatusFilter | "">(initialStatus);
-  const [channelFilter, setChannelFilter] = useState("");
-  const [skuFilter, setSkuFilter] = useState("");
-  const [searchDraft, setSearchDraft] = useState("");
-  const [searchQuery, setSearchQuery] = useState("");
-  const [page, setPage] = useState(1);
+  const { pushToast } = useToast();
+  const [searchParams, setSearchParams] = useSearchParams();
+
+  const statusFilter = parseStatusParam(searchParams.get("status"));
+  const channelFilter = (searchParams.get("channel") || "").trim();
+  const skuFilter = (searchParams.get("sku_key") || "").trim();
+  const errorCodeFilter = (searchParams.get("error_code") || "").trim();
+  const startDateFilter = parseDateParam(searchParams.get("start_date"));
+  const endDateFilter = parseDateParam(searchParams.get("end_date"));
+  const searchQuery = (searchParams.get("q") || "").trim();
+  const page = parsePageParam(searchParams.get("page"));
+
+  const [searchDraft, setSearchDraft] = useState(searchQuery);
+  const [errorCodeDraft, setErrorCodeDraft] = useState(errorCodeFilter);
+  const [excludeInactiveExport, setExcludeInactiveExport] = useState(false);
+  const [exportingCsv, setExportingCsv] = useState(false);
 
   const [data, setData] = useState<AdminCodeListResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    setStatusFilter(initialStatus);
-    setPage(1);
-  }, [initialStatus]);
+    setSearchDraft(searchQuery);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    setErrorCodeDraft(errorCodeFilter);
+  }, [errorCodeFilter]);
+
+  const dateRangeInvalid = Boolean(
+    startDateFilter && endDateFilter && startDateFilter > endDateFilter
+  );
+
+  const updateParams = useCallback(
+    (patch: Record<string, string | number | null | undefined>, resetPage = true) => {
+      const next = new URLSearchParams(searchParams);
+      for (const [key, value] of Object.entries(patch)) {
+        if (value === null || value === undefined || value === "") {
+          next.delete(key);
+        } else {
+          next.set(key, String(value));
+        }
+      }
+      if (resetPage && !("page" in patch)) {
+        next.delete("page");
+      } else if (next.get("page") === "1") {
+        next.delete("page");
+      }
+      setSearchParams(next, { replace: true });
+    },
+    [searchParams, setSearchParams]
+  );
 
   const fetchList = useCallback(async () => {
+    if (dateRangeInvalid) {
+      setLoading(false);
+      setError("开始日期不能晚于结束日期，请调整后再查。");
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
@@ -192,6 +305,9 @@ export function AdminOrdersPage({
         status: statusFilter || undefined,
         channel: channelFilter || undefined,
         sku_key: skuFilter || undefined,
+        error_code: errorCodeFilter || undefined,
+        start_date: startDateFilter || undefined,
+        end_date: endDateFilter || undefined,
         q: searchQuery || undefined,
         page,
         page_size: PAGE_SIZE,
@@ -206,7 +322,19 @@ export function AdminOrdersPage({
     } finally {
       setLoading(false);
     }
-  }, [token, statusFilter, channelFilter, skuFilter, searchQuery, page, onUnauthorized]);
+  }, [
+    token,
+    statusFilter,
+    channelFilter,
+    skuFilter,
+    errorCodeFilter,
+    startDateFilter,
+    endDateFilter,
+    searchQuery,
+    page,
+    dateRangeInvalid,
+    onUnauthorized,
+  ]);
 
   useEffect(() => {
     void fetchList();
@@ -214,14 +342,57 @@ export function AdminOrdersPage({
 
   const handleSearchSubmit = (event: FormEvent) => {
     event.preventDefault();
-    setPage(1);
-    setSearchQuery(searchDraft.trim());
+    updateParams({
+      q: searchDraft.trim(),
+      error_code: errorCodeDraft.trim(),
+    });
   };
 
   const handleSearchKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
     if (event.key === "Enter" && isImeComposing(event)) {
       event.preventDefault();
     }
+  };
+
+  const handleExportCsv = async () => {
+    if (dateRangeInvalid) {
+      pushToast("开始日期不能晚于结束日期，请先调整日期范围", "error");
+      return;
+    }
+    setExportingCsv(true);
+    try {
+      const filename = await exportAdminReconciliationCsv(token, {
+        start_date: startDateFilter || undefined,
+        end_date: endDateFilter || undefined,
+        channel: channelFilter || undefined,
+        exclude_inactive: excludeInactiveExport,
+      });
+      pushToast(`已导出对账表 ${filename}`, "success");
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      pushToast(caught instanceof ApiError ? caught.message : "导出对账 CSV 失败", "error");
+    } finally {
+      setExportingCsv(false);
+    }
+  };
+
+  const hasActiveFilters = Boolean(
+    statusFilter ||
+      channelFilter ||
+      skuFilter ||
+      errorCodeFilter ||
+      startDateFilter ||
+      endDateFilter ||
+      searchQuery
+  );
+
+  const handleResetFilters = () => {
+    setSearchDraft("");
+    setErrorCodeDraft("");
+    setSearchParams(new URLSearchParams(), { replace: true });
   };
 
   const total = data?.total ?? 0;
@@ -237,8 +408,29 @@ export function AdminOrdersPage({
             点开任意订单可查看买家与商店邮箱、保修主邮箱、TG 自动报备状态与越南语话术，以及查进度、重下或作废。
           </p>
         </div>
-        <div className="row">
+        <div className="row" style={{ flexWrap: "wrap", justifyContent: "flex-end" }}>
           <span className="badge badge-neutral">共 {total} 条</span>
+          <label
+            className="admin-inline-check"
+            title="排除已作废以及上游状态为 cancelled/refunded 的订单"
+          >
+            <input
+              type="checkbox"
+              checked={excludeInactiveExport}
+              onChange={(event) => setExcludeInactiveExport(event.target.checked)}
+            />
+            <span>仅导出有效单</span>
+          </label>
+          <button
+            type="button"
+            className={`btn btn-secondary btn-sm ${exportingCsv ? "is-loading" : ""}`}
+            disabled={exportingCsv || dateRangeInvalid}
+            aria-busy={exportingCsv}
+            onClick={() => void handleExportCsv()}
+          >
+            <CastoriceIcon name={exportingCsv ? "refresh" : "download"} size={16} spin={exportingCsv} />
+            <span>{exportingCsv ? "导出中..." : "导出对账 CSV"}</span>
+          </button>
           <button
             type="button"
             className={`btn btn-secondary btn-sm ${loading ? "is-loading" : ""}`}
@@ -254,69 +446,130 @@ export function AdminOrdersPage({
 
       <section className="admin-toolbar-glass stack-sm" aria-label="订单筛选工具栏">
         <div className="pill-scroller" role="tablist" aria-label="按订单状态筛选">
-          {STATUS_TABS.map((tab) => (
-            <button
-              key={tab.value || "all"}
-              type="button"
-              role="tab"
-              aria-selected={statusFilter === tab.value}
-              className={`filter-pill ${statusFilter === tab.value ? "is-active" : ""}`}
-              onClick={() => {
-                setStatusFilter(tab.value);
-                setPage(1);
-              }}
-            >
-              {tab.label}
-            </button>
-          ))}
+          {STATUS_TABS.map((tab) => {
+            const tabCount = tab.countKey && counts ? counts[tab.countKey] : undefined;
+            return (
+              <button
+                key={tab.value || "all"}
+                type="button"
+                role="tab"
+                aria-selected={statusFilter === tab.value}
+                className={`filter-pill ${statusFilter === tab.value ? "is-active" : ""}`}
+                onClick={() => updateParams({ status: tab.value })}
+              >
+                <span>{tab.label}</span>
+                {tabCount !== undefined && tabCount > 0 && (
+                  <span
+                    className={`filter-pill-count ${
+                      tab.alertTone === "danger"
+                        ? "is-danger"
+                        : tab.alertTone === "warning"
+                          ? "is-warning"
+                          : ""
+                    }`}
+                  >
+                    {tabCount}
+                  </span>
+                )}
+              </button>
+            );
+          })}
         </div>
 
-        <form className="filter-bar" onSubmit={handleSearchSubmit}>
-          <div className="input-wrap">
-            <input
-              type="search"
-              className="input"
-              placeholder="搜兑换码 / 淘宝单号 / 上游单号 / 买家或商店邮箱 / 备注"
-              aria-label="搜索订单关键词"
-              enterKeyHint="search"
-              value={searchDraft}
-              onChange={(event) => setSearchDraft(event.target.value)}
-              onKeyDown={handleSearchKeyDown}
-            />
+        <form className="stack-sm" onSubmit={handleSearchSubmit}>
+          <div className="filter-bar">
+            <div className="input-wrap">
+              <input
+                type="search"
+                className="input"
+                placeholder="搜兑换码 / 淘宝单号 / 上游单号 / 买家或商店邮箱 / 备注"
+                aria-label="搜索订单关键词"
+                enterKeyHint="search"
+                value={searchDraft}
+                onChange={(event) => setSearchDraft(event.target.value)}
+                onKeyDown={handleSearchKeyDown}
+              />
+            </div>
+
+            <select
+              className="select"
+              aria-label="按销售渠道筛选"
+              value={channelFilter}
+              onChange={(event) => updateParams({ channel: event.target.value })}
+            >
+              <option value="">全部渠道</option>
+              <option value="taobao">淘宝</option>
+              <option value="16688">16688</option>
+            </select>
+
+            <select
+              className="select"
+              aria-label="按商品规格筛选"
+              value={skuFilter}
+              onChange={(event) => updateParams({ sku_key: event.target.value })}
+            >
+              <option value="">全部规格</option>
+              <option value="ultra_shared_slot">共享车位</option>
+              <option value="ultra_exclusive_admin">独享整组</option>
+            </select>
+
+            <button type="submit" className="btn btn-primary">
+              <CastoriceIcon name="admin-ledger" size={19} />
+              <span>筛选</span>
+            </button>
           </div>
 
-          <select
-            className="select"
-            aria-label="按销售渠道筛选"
-            value={channelFilter}
-            onChange={(event) => {
-              setChannelFilter(event.target.value);
-              setPage(1);
-            }}
-          >
-            <option value="">全部渠道</option>
-            <option value="taobao">淘宝</option>
-            <option value="16688">16688</option>
-          </select>
+          <div className="admin-filter-secondary">
+            <div className="input-wrap">
+              <input
+                type="text"
+                list="admin-error-code-options"
+                className="input mono"
+                placeholder="按错误码筛选（如 LOW_BALANCE / CANBOSO_ORDER_CANCELLED）"
+                aria-label="按错误码筛选"
+                value={errorCodeDraft}
+                onChange={(event) => setErrorCodeDraft(event.target.value)}
+                onKeyDown={handleSearchKeyDown}
+              />
+              <datalist id="admin-error-code-options">
+                {COMMON_ERROR_CODES.map((entry) => (
+                  <option key={entry.code} value={entry.code}>
+                    {entry.label}
+                  </option>
+                ))}
+              </datalist>
+            </div>
 
-          <select
-            className="select"
-            aria-label="按商品规格筛选"
-            value={skuFilter}
-            onChange={(event) => {
-              setSkuFilter(event.target.value);
-              setPage(1);
-            }}
-          >
-            <option value="">全部规格</option>
-            <option value="ultra_shared_slot">共享车位</option>
-            <option value="ultra_exclusive_admin">独享整组</option>
-          </select>
+            <div className="admin-date-range">
+              <input
+                type="date"
+                className="input mono"
+                aria-label="开始日期"
+                value={startDateFilter}
+                onChange={(event) => updateParams({ start_date: event.target.value })}
+              />
+              <span className="admin-date-sep" aria-hidden="true">
+                至
+              </span>
+              <input
+                type="date"
+                className="input mono"
+                aria-label="结束日期"
+                value={endDateFilter}
+                onChange={(event) => updateParams({ end_date: event.target.value })}
+              />
+            </div>
 
-          <button type="submit" className="btn btn-primary">
-            <CastoriceIcon name="admin-ledger" size={19} />
-            <span>筛选</span>
-          </button>
+            {hasActiveFilters && (
+              <button
+                type="button"
+                className="btn btn-ghost btn-sm"
+                onClick={handleResetFilters}
+              >
+                清空条件
+              </button>
+            )}
+          </div>
         </form>
       </section>
 
@@ -345,18 +598,11 @@ export function AdminOrdersPage({
               ? "「全部」不包含在库存码；可清空搜索词或切到「在库存」查看库存码。"
               : "可尝试清空搜索词或切换上方状态标签页查看其他记录。"}
           </p>
-          {(statusFilter || channelFilter || skuFilter || searchQuery) && (
+          {hasActiveFilters && (
             <button
               type="button"
               className="btn btn-secondary btn-sm"
-              onClick={() => {
-                setStatusFilter("");
-                setChannelFilter("");
-                setSkuFilter("");
-                setSearchDraft("");
-                setSearchQuery("");
-                setPage(1);
-              }}
+              onClick={handleResetFilters}
             >
               重置筛选条件
             </button>
@@ -426,6 +672,18 @@ export function AdminOrdersPage({
                             <span>超 24 小时</span>
                           </span>
                         )}
+                        {item.last_error_code && (
+                          <span
+                            className="badge badge-danger mono"
+                            style={{ fontSize: 11 }}
+                            title={formatOrderErrorMessage(
+                              item.last_error_code,
+                              item.last_error_message
+                            )}
+                          >
+                            {item.last_error_code}
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td>{renderOrderEmails(item)}</td>
@@ -437,6 +695,12 @@ export function AdminOrdersPage({
                         <span className="mono" style={{ fontSize: 12, color: "var(--ink-3)" }}>
                           {formatUsd(item.cost_usd)}
                         </span>
+                        {item.upstream_refund_usd !== null &&
+                          item.upstream_refund_usd !== undefined && (
+                            <span className="mono admin-refund-tag">
+                              实退 {formatUsd(item.upstream_refund_usd)}
+                            </span>
+                          )}
                       </div>
                     </td>
                     <td>{renderOrderTimeCell(item, statusFilter)}</td>
@@ -472,7 +736,12 @@ export function AdminOrdersPage({
                     {renderSkuTag(item.sku_key)}
                     <span>{getChannelLabel(item.channel)}</span>
                   </span>
-                  <span className="mono">{formatUsd(item.cost_usd)}</span>
+                  <span className="mono">
+                    {formatUsd(item.cost_usd)}
+                    {item.upstream_refund_usd !== null && item.upstream_refund_usd !== undefined
+                      ? ` · 实退 ${formatUsd(item.upstream_refund_usd)}`
+                      : ""}
+                  </span>
                 </div>
 
                 <div style={{ fontSize: 12.5, color: "var(--ink-2)", textAlign: "left" }}>
@@ -486,8 +755,13 @@ export function AdminOrdersPage({
                 )}
 
                 <div className="row-between" style={{ fontSize: 12, color: "var(--ink-3)" }}>
-                  <div className="row" style={{ gap: 6 }}>
+                  <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
                     {item.is_overdue_24h && <span className="badge badge-danger">超 24 小时</span>}
+                    {item.last_error_code && (
+                      <span className="badge badge-danger mono" style={{ fontSize: 11 }}>
+                        {item.last_error_code}
+                      </span>
+                    )}
                   </div>
                   <span className="mono">{formatMobileOrderTime(item, statusFilter)}</span>
                 </div>
@@ -505,7 +779,7 @@ export function AdminOrdersPage({
                   type="button"
                   className="btn btn-secondary btn-sm"
                   disabled={page <= 1 || loading}
-                  onClick={() => setPage((prev) => Math.max(1, prev - 1))}
+                  onClick={() => updateParams({ page: Math.max(1, page - 1) }, false)}
                 >
                   <CastoriceIcon name="arrow-left" size={16} />
                   <span>上一页</span>
@@ -514,7 +788,7 @@ export function AdminOrdersPage({
                   type="button"
                   className="btn btn-secondary btn-sm"
                   disabled={page >= totalPages || loading}
-                  onClick={() => setPage((prev) => Math.min(totalPages, prev + 1))}
+                  onClick={() => updateParams({ page: Math.min(totalPages, page + 1) }, false)}
                 >
                   <span>下一页</span>
                   <CastoriceIcon name="arrow-right" size={16} />

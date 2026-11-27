@@ -170,11 +170,15 @@ export interface AdminCodeSummary {
   upstream_order_code: string | null;
   upstream_status: string | null;
   cost_usd: number | null;
+  upstream_refund_usd: number | null;
+  upstream_refund_note: string | null;
   warranty_status: WarrantyStatus | null;
   last_error_code: string | null;
   last_error_message: string | null;
   is_overdue_24h: boolean;
   elapsed_minutes: number | null;
+  can_poll_upstream?: boolean;
+  can_reorder?: boolean;
   submitted_at: string | null;
   completed_at: string | null;
   created_at: string;
@@ -262,4 +266,257 @@ export interface AdminUpdateSkuRequest {
 export interface AdminTestEmailResponse {
   ok: boolean;
   message: string;
+}
+
+export interface AdminUpstreamRefundRequest {
+  upstream_refund_usd: number;
+  note?: string;
+}
+
+export interface AdminAgisoStatus {
+  configured: boolean;
+  webhook_ready: boolean;
+  api_ready: boolean;
+  app_id: string;
+  has_app_secret: boolean;
+  has_access_token: boolean;
+  webhook_url: string;
+  api_base_url: string;
+  execution_mode: string;
+  auto_create_result: boolean;
+  auto_dummy_send: boolean;
+  auto_send_tb_card: boolean;
+  auto_send_ww_msg: boolean;
+  auto_revoke_on_refund: boolean;
+  auto_restore_on_refund_close: boolean;
+  poll_enabled: boolean;
+  poll_interval_seconds: number;
+  restock_enabled: boolean;
+  restock_interval_seconds: number;
+  restock_rules_count: number;
+  sku_mappings_count: number;
+  deliveries_summary: Record<string, number>;
+  events_total: number;
+}
+
+export interface AdminAgisoSkuMapping {
+  mapping_id?: number;
+  sku_key: SkuKey;
+  num_iid: string;
+  sku_id: string;
+  outer_iid: string;
+  outer_sku_id: string;
+  sku_props_contains: string;
+  enabled: boolean;
+  note: string;
+  source: "db" | "env";
+  created_at?: string;
+  updated_at?: string;
+}
+
+export interface AdminAgisoSkuMappingsResponse {
+  items: AdminAgisoSkuMapping[];
+  env_rules: AdminAgisoSkuMapping[];
+}
+
+export interface AdminCreateAgisoSkuMappingRequest {
+  sku_key: SkuKey;
+  num_iid?: string;
+  sku_id?: string;
+  outer_iid?: string;
+  outer_sku_id?: string;
+  sku_props_contains?: string;
+  enabled?: boolean;
+  note?: string;
+}
+
+export interface AdminAgisoDelivery {
+  delivery_key: string;
+  tid: string;
+  oid: string;
+  seq: number;
+  num_iid: string;
+  sku_id: string;
+  sku_key: SkuKey | string;
+  code: string;
+  buyer_nick: string;
+  delivery_status: string;
+  result_created: number | boolean;
+  card_sent: number | boolean;
+  ww_sent: number | boolean;
+  dummy_sent: number | boolean;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AdminAgisoEvent {
+  event_id: number;
+  event_key: string | null;
+  source: string;
+  from_platform: string;
+  aopic: number | null;
+  tid: string;
+  oid: string;
+  status: string;
+  detail: string;
+  payload_summary: string;
+  created_at: string;
+}
+
+export interface AdminAgisoEventsResponse {
+  items: AdminAgisoEvent[];
+  total: number;
+  page: number;
+  page_size: number;
+  deliveries?: AdminAgisoDelivery[];
+}
+
+export interface AdminAgisoSyncOrdersRequest {
+  lookback_minutes?: number;
+  page_size?: number;
+  max_pages?: number;
+}
+
+export interface AdminAgisoSyncOrdersResponse {
+  modify_time_start: string;
+  fetched: number;
+  fulfilled: number;
+  skipped: number;
+  failed: number;
+  items: Array<{
+    tid?: string;
+    status?: string;
+    codes?: string[];
+  }>;
+}
+
+export interface AdminAgisoRetryOrderResponse {
+  status: string;
+  tid?: string;
+  trade_status?: string;
+  codes?: string[];
+  deliveries?: AdminAgisoDelivery[];
+  [key: string]: unknown;
+}
+
+export interface AdminAgisoRemoteSkuItem {
+  NumIid?: string | number;
+  SkuId?: string | number;
+  PropertiesName?: string;
+  Properties?: string;
+  OuterId?: string;
+  Quantity?: number;
+  Price?: string | number;
+  [key: string]: unknown;
+}
+
+export interface AdminAgisoRemoteSkusResponse {
+  items: AdminAgisoRemoteSkuItem[];
+}
+
+export interface AdminAgisoPushCardsRequest {
+  sku_key: SkuKey;
+  cpc_id: number;
+  count: number;
+  batch_label?: string;
+  is_use_first?: boolean;
+  allow_replace?: boolean;
+}
+
+export interface AdminAgisoPushCardsResponse {
+  batch_id: string;
+  sku_key: SkuKey;
+  cpc_id: number;
+  count: number;
+  codes: string[];
+  partial_failure?: boolean;
+  add_success_count?: number;
+  add_fail_count?: number;
+  agiso_result?: Record<string, unknown>;
+}
+
+export interface AdminAgisoStockItem {
+  sku_key: SkuKey;
+  sku_title: string;
+  cpc_id: number;
+  enabled: boolean;
+  min_stock: number;
+  target_stock: number;
+  max_push: number;
+  current_qty: number | null;
+  storage_found: boolean;
+  needs_restock: boolean;
+  planned_push: number;
+  local_unused_taobao: number;
+  local_in_stock_taobao: number;
+  local_dispatched_unused_taobao: number;
+}
+
+export interface AdminAgisoStockResponse {
+  restock_enabled: boolean;
+  items: AdminAgisoStockItem[];
+}
+
+export interface AdminRestockResultItem {
+  sku_key: string;
+  cpc_id?: number;
+  goods_no?: string;
+  current_qty: number | null;
+  after_qty?: number;
+  min_stock: number;
+  target_stock: number;
+  action: string;
+  planned_push?: number;
+  pushed_count: number;
+  batch_id?: string;
+  error?: string;
+}
+
+export interface AdminAgisoRestockResponse {
+  trigger: string;
+  dry_check: boolean;
+  checked: number;
+  restocked: number;
+  total_pushed: number;
+  errors: string[];
+  items: AdminRestockResultItem[];
+}
+
+export interface AdminChannel16688StockItem {
+  sku_key: SkuKey;
+  sku_title: string;
+  goods_no: string;
+  enabled: boolean;
+  min_stock: number;
+  target_stock: number;
+  max_push: number;
+  current_qty: number | null;
+  locked_qty: number | null;
+  sold_qty: number | null;
+  stock_found: boolean;
+  needs_restock: boolean;
+  planned_push: number;
+  error: string | null;
+  local_unused_16688: number;
+  local_in_stock_16688: number;
+  local_dispatched_unused_16688: number;
+}
+
+export interface AdminChannel16688StockResponse {
+  restock_enabled: boolean;
+  restock_interval_seconds: number;
+  items: AdminChannel16688StockItem[];
+}
+
+export interface AdminChannel16688RestockResponse {
+  trigger: string;
+  dry_check: boolean;
+  checked: number;
+  restocked: number;
+  total_pushed: number;
+  sync_sold?: Record<string, unknown>;
+  stock_conflicts?: number;
+  errors: string[];
+  items: AdminRestockResultItem[];
 }

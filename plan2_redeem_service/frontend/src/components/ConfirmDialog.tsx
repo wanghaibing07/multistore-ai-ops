@@ -8,6 +8,7 @@ interface ConfirmDialogProps {
   cancelLabel?: string;
   confirmVariant?: "primary" | "danger";
   busy?: boolean;
+  confirmDisabled?: boolean;
   onConfirm: () => void;
   onClose: () => void;
   children: ReactNode;
@@ -20,6 +21,7 @@ export function ConfirmDialog({
   cancelLabel = "取消",
   confirmVariant = "primary",
   busy = false,
+  confirmDisabled = false,
   onConfirm,
   onClose,
   children,
@@ -126,7 +128,7 @@ export function ConfirmDialog({
             className={`btn ${confirmVariant === "danger" ? "btn-danger-solid" : "btn-primary"} ${
               busy ? "is-loading" : ""
             }`}
-            disabled={busy}
+            disabled={busy || confirmDisabled}
             aria-busy={busy}
             onClick={onConfirm}
           >
