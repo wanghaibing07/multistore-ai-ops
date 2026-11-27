@@ -19,7 +19,7 @@
   - Systemd 服务：`plan2-redeem.service`（监听 `127.0.0.1:8000`，由 `caddy.service` 反向代理对外提供 HTTPS）
 - **默认操作路由**：
   - 凡涉及 `plan2_redeem_service` 的线上报错（如 HTTP 500、批量制码、提货、16688、阿奇索 webhook/履约异常）、服务状态、日志、真实订单/兑换码数据库排查、重启或发布验证，**默认直接通过 `plan2-prod` 在云端排查和操作**，不要误查本地 `127.0.0.1` 或本地 `data/redeem.sqlite3`（仅在用户明确要求本地 `dry_run` 调试时使用本地实例）。
-  - **本地与云端职责分工**：本地工作区负责改代码、跑 `pytest` / 前端 `typecheck` & `build`、Git 提交与推送；改动验证通过后，统一使用 `.\scripts\plan2-cloud.ps1` 在云端检查状态、查看日志或部署重启（`-Action status | health | logs | deploy`）。
+  - **本地与云端职责分工**：本地工作区负责改代码、跑 `pytest` / 前端 `typecheck` & `build`、Git 提交与推送；改动验证通过后，统一使用 `.\scripts\plan2-cloud.ps1` 在云端运维（`-Action status | health | logs | backup | deploy | rollback`，支持 `-KeepBackups`、`-DrainWaitSeconds`、`-BackupName`、`-Force`；`deploy`/`rollback` 会先做 `purchasing` 排空检查，回滚仅恢复代码与 `frontend/dist` 而不覆盖生产库）。日常库存补卡、阿奇索/16688 渠道排障与 16688 OpenAPI 降级待补验人工核验统一从管理后台「渠道自动化」（`/admin/automation`）与订单抽屉处理，详见 `docs/maintenance.md`。
   - 严禁在本地另起连接真实上游的 `live` 实例，避免与云端后台轮询和 webhook 冲突。
 
 ## 严格 Git 工程流（强制执行）

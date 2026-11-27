@@ -117,9 +117,27 @@ pwsh -File .\scripts\plan2-cloud.ps1 -Action status
 pwsh -File .\scripts\plan2-cloud.ps1 -Action health
 # 查看最近 80 行 systemd 日志
 pwsh -File .\scripts\plan2-cloud.ps1 -Action logs -Lines 80
-# 同步最新代码与前端 dist 到云端并重启验证
+# 仅执行云端 SQLite 在线备份 + 应用/前端快照归档（默认保留 10 份）
+pwsh -File .\scripts\plan2-cloud.ps1 -Action backup -KeepBackups 10
+# 同步最新代码与前端 dist 到云端（自动排空 purchasing 在途单、先备份再部署并校验健康）
 pwsh -File .\scripts\plan2-cloud.ps1 -Action deploy
+# 如遇发布异常，快速回滚到最新快照（或用 -BackupName 指定某次快照）
+pwsh -File .\scripts\plan2-cloud.ps1 -Action rollback
 ```
+
+- **安全部署与回滚参数**：
+  - `-KeepBackups <1..50>`（默认 `10`）：控制 `/opt/plan2_redeem_service/backups/` 下保留的 `YYYYMMDDTHHMMSSZ` 快照份数，每次备份用 SQLite Online Backup 生成库副本并执行 `PRAGMA quick_check`。
+  - `-DrainWaitSeconds <0..120>`（默认 `20`）：`deploy` / `rollback` 前以只读模式等待在途 `purchasing` 订单排空；超时仍存在在途单时会中止，确认无风险后可显式加 `-Force` 跳过等待。
+  - `-BackupName <名称>`：`rollback` 指定要回滚的备份目录；未传时自动选择最新的有效时间戳快照。回滚仅恢复后端代码与 `frontend/dist`，**不会自动覆盖生产 `redeem.sqlite3`**，避免丢失回滚前新产生的订单（若确实需要恢复数据库，须人工比对并处理对应快照里的 `redeem.sqlite3`）。
+
+### 管理后台异常处置与渠道自动化运维
+
+- **订单与异常优先排查**：管理后台「订单和保修」默认聚合待人工复核、待履约和售后异常单，支持按错误码与起止日期筛选、勾选「仅导出有效单」导出对账 CSV；订单抽屉内可直接轮询上游、登记上游实退（USD）核算净损耗、复制淘宝/16688 售后核验举证摘要；对存在活跃上游单的兑换码作废会触发 `409` 二次确认护栏，强重下与改收件邮箱（含 16688 `slot` 场景）须先核实原单不会重复扣款。
+- **渠道自动化入口（`/admin/automation`）**：管理后台侧栏「渠道自动化」统一收敛阿奇索运行状态、Webhook 与 8 项业务开关，下分三个子页签：
+  - **库存与自动补卡**：同时展示阿奇索与 16688 水位，支持先「试跑预览」再确认补卡。
+  - **SKU 映射与手工推卡**：维护映射关系、查询远端 SKU 一键带入以及手工推卡。
+  - **事件流与补发**：支持一键拉单补发、按外部 `tid` 重试、分页查事件流并从发货明细直达订单抽屉。
+- **16688 OpenAPI 暂停或降级放行待补验的人工核验**：当 16688 OpenAPI 暂不可用、超时或返回 `503`/`504` 时，自动补卡视图会降级展示接口提示与单行 `error` 详情而不中断其它运维动作；对于因 16688 接口降级而放行待补验或处于争议态的订单，须在订单抽屉人工核对买家收件邮箱（必要时填写新邮箱后再操作）与上游实单状态，涉及 16688 争议码时按系统护栏禁止盲目强重下，先完成人工复核与举证归档。
 
 ### 前端构建产物同步门禁
 
@@ -173,4 +191,4 @@ git status -sb
 - [ ] 修改方案 2 前端源码时已重新构建并暂存 `frontend/dist/`
 - [ ] 所有受影响模块的 `pytest` / `typecheck` / `build` 全部通过
 - [ ] 核对 `git status -sb` 与 `git diff --cached --stat`，确认无临时文件、真实数据或敏感配置
-- [ ] 使用 Conventional Commits 提交并推送 `origin master`；涉及方案 2 线上改动再执行 `plan2-cloud.ps1 -Action deploy`
+- [ ] 使用 Conventional Commits 提交并推送 `origin master`；涉及方案 2 线上改动先核实工作区已构建 `frontend/dist/`，再执行 `plan2-cloud.ps1 -Action backup` / `deploy` / `health`（异常时用 `-Action rollback` 恢复）
