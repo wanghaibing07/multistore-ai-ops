@@ -10,6 +10,7 @@ interface GmailDoubleInputProps {
   primaryLabel?: string;
   confirmLabel?: string;
   warningText?: string;
+  helperText?: string;
   placeholder?: string;
   disabled?: boolean;
 }
@@ -19,17 +20,22 @@ export function GmailDoubleInput({
   onEmailChange,
   primaryLabel = "你的邮箱",
   warningText = "提交就占名额，填错或受限换号需补 49.9 元，提交前请核对。",
+  helperText,
   placeholder = "",
   disabled = false,
 }: GmailDoubleInputProps) {
   const [touchedPrimary, setTouchedPrimary] = useState(false);
   const baseId = useId();
   const primaryId = `${baseId}-primary`;
+  const helperId = `${baseId}-helper`;
   const primaryErrorId = `${baseId}-primary-error`;
 
   const check = validateGmailInput(email);
   const hasPrimary = email.trim().length > 0;
   const showPrimaryError = hasPrimary && !check.valid && (touchedPrimary || Boolean(check.suggestion));
+  const describedBy = [helperText ? helperId : null, showPrimaryError ? primaryErrorId : null]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <div className="stack">
@@ -42,6 +48,11 @@ export function GmailDoubleInput({
         <label className="field-label" htmlFor={primaryId}>
           <span>{primaryLabel}</span>
         </label>
+        {helperText ? (
+          <p id={helperId} className="field-helper">
+            {helperText}
+          </p>
+        ) : null}
         <input
           id={primaryId}
           type="email"
@@ -52,7 +63,7 @@ export function GmailDoubleInput({
           spellCheck={false}
           disabled={disabled}
           aria-invalid={showPrimaryError || undefined}
-          aria-describedby={showPrimaryError ? primaryErrorId : undefined}
+          aria-describedby={describedBy || undefined}
           className={`input mono ${
             showPrimaryError
               ? "input-error"

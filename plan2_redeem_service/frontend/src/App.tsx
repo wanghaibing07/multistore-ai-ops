@@ -1,12 +1,24 @@
-import type { MouseEvent } from "react";
+import { Suspense, lazy, type MouseEvent } from "react";
 import { Link, Route, Routes, useNavigate } from "react-router-dom";
 import { ButterflyBurstFX } from "./components/ButterflyBurstFX";
 import { BuyerWallpaper } from "./components/BuyerWallpaper";
 import { CastoriceIcon } from "./components/CastoriceIcon";
 import { HomePage } from "./pages/HomePage";
 import { RedeemPage } from "./pages/RedeemPage";
-import { AdminPage } from "./pages/admin/AdminPage";
 import { runRedeemViewTransition } from "./utils/viewTransition";
+
+const AdminPage = lazy(() =>
+  import("./pages/admin/AdminPage").then((mod) => ({ default: mod.AdminPage }))
+);
+
+function AdminRouteFallback() {
+  return (
+    <div className="admin-loading-shell" role="status" aria-live="polite">
+      <CastoriceIcon name="refresh" size={20} spin />
+      <span>正在加载管理后台...</span>
+    </div>
+  );
+}
 
 function NotFoundPage() {
   const navigate = useNavigate();
@@ -66,8 +78,22 @@ export function App() {
       <Routes>
         <Route path="/" element={<HomePage />} />
         <Route path="/r/:code" element={<RedeemPage />} />
-        <Route path="/admin" element={<AdminPage />} />
-        <Route path="/admin/*" element={<AdminPage />} />
+        <Route
+          path="/admin"
+          element={
+            <Suspense fallback={<AdminRouteFallback />}>
+              <AdminPage />
+            </Suspense>
+          }
+        />
+        <Route
+          path="/admin/*"
+          element={
+            <Suspense fallback={<AdminRouteFallback />}>
+              <AdminPage />
+            </Suspense>
+          }
+        />
         <Route path="*" element={<NotFoundPage />} />
       </Routes>
     </div>

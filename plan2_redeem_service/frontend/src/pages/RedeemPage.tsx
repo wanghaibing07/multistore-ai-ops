@@ -14,7 +14,7 @@ import {
   refreshPublicCode,
   submitPublicWarranty,
 } from "../api/client";
-import { BuyerWallpaper } from "../components/BuyerWallpaper";
+import { BuyerWallpaper, WallpaperMotionToggle } from "../components/BuyerWallpaper";
 import { CastoriceIcon } from "../components/CastoriceIcon";
 import { CastoriceWaitingStage } from "../components/CastoriceWaitingStage";
 import { ChibiSticker } from "../components/ChibiSticker";
@@ -33,6 +33,7 @@ import { validateGmailInput } from "../utils/validation";
 import { runRedeemViewTransition } from "../utils/viewTransition";
 
 const AUTO_POLL_INTERVAL_MS = 30_000;
+const MANUAL_REVIEW_POLL_INTERVAL_MS = 60_000;
 
 interface RedeemRouteState {
   prefetchedRecord?: PublicCodeResponse;
@@ -140,6 +141,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
 
   const [refreshing, setRefreshing] = useState(false);
   const [cooldownLeft, setCooldownLeft] = useState(0);
+  const [autoPollCountdown, setAutoPollCountdown] = useState(Math.round(AUTO_POLL_INTERVAL_MS / 1000));
 
   const [editingWarranty, setEditingWarranty] = useState(false);
   const [adminEmail, setAdminEmail] = useState("");
@@ -200,32 +202,45 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
   };
 
   useEffect(() => {
-    if (
-      !record ||
-      (record.status !== "waiting_fulfillment" &&
-        record.status !== "validating" &&
-        record.status !== "purchasing")
-    ) {
+    if (!record) return;
+    const isWaitingState =
+      record.status === "waiting_fulfillment" ||
+      record.status === "validating" ||
+      record.status === "purchasing";
+    const isManualReview = record.status === "needs_manual_review";
+    if (!isWaitingState && !isManualReview) {
       return;
     }
+    const intervalMs = isManualReview ? MANUAL_REVIEW_POLL_INTERVAL_MS : AUTO_POLL_INTERVAL_MS;
+    const intervalSec = Math.round(intervalMs / 1000);
+    setAutoPollCountdown(intervalSec);
 
     const timer = window.setInterval(() => {
       if (document.visibilityState === "visible") {
         void fetchRecord(true);
+        setAutoPollCountdown(intervalSec);
       }
-    }, AUTO_POLL_INTERVAL_MS);
+    }, intervalMs);
+
+    const tickTimer = window.setInterval(() => {
+      if (document.visibilityState === "visible") {
+        setAutoPollCountdown((prev) => (prev <= 1 ? intervalSec : prev - 1));
+      }
+    }, 1000);
 
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
         void fetchRecord(true);
+        setAutoPollCountdown(intervalSec);
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       window.clearInterval(timer);
+      window.clearInterval(tickTimer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [record, fetchRecord]);
+  }, [record?.status, record?.code, fetchRecord]);
 
   useEffect(() => {
     if (cooldownLeft <= 0) return;
@@ -238,6 +253,17 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
   const isExclusive = record?.product_type === "account";
   const is16688 = record?.channel === "16688";
   const sharedRecipientLabel = is16688 ? "收邀请的邮箱（部分隐藏）" : "收邀请的邮箱";
+  const supportTicketText = record
+    ? [
+        "【提货排查凭证】",
+        `兑换码：${record.code}`,
+        `渠道：${record.channel}`,
+        `商品：${record.sku_title}`,
+        `当前状态：${getBuyerStatusMeta(record).label} (${record.status})`,
+        `邮箱：${record.buyer_email_masked || "未填写"}`,
+        `更新时间：${formatDateTime(record.updated_at)}`,
+      ].join("\n")
+    : "";
   const slotEmailCheck = validateGmailInput(buyerEmail);
   const preflightReady = isExclusive
     ? checkFamily && checkPayment && checkExclusiveRule
@@ -435,10 +461,13 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
             </span>
             <span className="brand-lockup-title">Google AI Ultra 20x 自助提货</span>
           </Link>
-          <Link to="/" className="btn btn-ghost btn-sm buyer-back-btn" onClick={handleBackHome}>
-            <CastoriceIcon name="arrow-left" size={15} />
-            <span>换个兑换码</span>
-          </Link>
+          <div className="buyer-topbar-actions">
+            <WallpaperMotionToggle surface="dark" />
+            <Link to="/" className="btn btn-ghost btn-sm buyer-back-btn" onClick={handleBackHome}>
+              <CastoriceIcon name="arrow-left" size={15} />
+              <span>换个兑换码</span>
+            </Link>
+          </div>
         </header>
 
         {loading ? (
@@ -604,6 +633,15 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                     </div>
                   </div>
                 </div>
+                <div className="callout callout-danger">
+                  <CastoriceIcon name="alert" size={18} className="callout-icon" />
+                  <div>
+                    <strong>掉组或维护处理中，请勿自行退出家庭组</strong>
+                    <div style={{ marginTop: 4 }}>
+                      主动退组可能触发 Google 12 个月换组冷却限制，耐心等客服补发或修复即可。
+                    </div>
+                  </div>
+                </div>
                 <div className="kv-grid">
                   <div className="kv-item">
                     <div className="kv-label">当前状态</div>
@@ -613,17 +651,31 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                     <div className="kv-label">最近更新</div>
                     <div className="kv-value tabular">{formatDateTime(record.updated_at)}</div>
                   </div>
+                  <div className="kv-item">
+                    <div className="kv-label">自动刷新</div>
+                    <div className="kv-value tabular">{autoPollCountdown}s 后自动检查</div>
+                  </div>
                 </div>
-                <div className="row-between">
+                <div className="row-between" style={{ gap: 10, flexWrap: "wrap" }}>
                   <span style={{ fontSize: 13, color: "var(--ink-3)" }}>{record.support_hint}</span>
-                  <button
-                    type="button"
-                    className="btn btn-secondary btn-sm"
-                    onClick={() => void fetchRecord(false)}
-                  >
-                    <CastoriceIcon name="refresh" size={15} />
-                    <span>刷一下状态</span>
-                  </button>
+                  <div className="row" style={{ gap: 8, flexWrap: "wrap" }}>
+                    <CopyButton
+                      text={supportTicketText}
+                      label="复制客服排查凭证"
+                      copiedLabel="✓ 已复制凭证"
+                      toastMessage="已复制排查凭证，直接发给客服即可快速定位"
+                      variant="primary"
+                      size="sm"
+                    />
+                    <button
+                      type="button"
+                      className="btn btn-secondary btn-sm"
+                      onClick={() => void fetchRecord(false)}
+                    >
+                      <CastoriceIcon name="refresh" size={15} />
+                      <span>刷一下状态</span>
+                    </button>
+                  </div>
                 </div>
               </section>
             ) : null}
@@ -649,7 +701,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                       onChange={(event) => setCheckFamily(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>账号没在家庭组，且 12 个月内没进出过家庭组</strong>（Google 规定 12 个月只能换 1 次；点{" "}
+                      <strong>账号没在家庭组，且 12 个月内没进出过家庭组</strong>（Google 规则：<strong>12 个月内仅能换 1 次家庭组</strong>；点{" "}
                       <a href="https://g.co/yourfamily" target="_blank" rel="noreferrer">
                         g.co/yourfamily <CastoriceIcon name="external" size={13} className="inline-ext-icon" />
                       </a>{" "}
@@ -665,7 +717,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                       onChange={(event) => setCheckPayment(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>已关掉 Google 付款资料</strong>（点{" "}
+                      <strong>已关掉 Google 付款资料</strong>（<strong>关闭 Google 付款资料不会删除绑定的银行卡/信用卡</strong>，也不会影响账号数据；点{" "}
                       <a
                         href="https://payments.google.com/gp/w/home/settings"
                         target="_blank"
@@ -686,7 +738,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                       onChange={(event) => setCheckSlotRule(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>已知晓排队时间和退换规则</strong>：提交就占名额（3-7 小时发邀请，最晚 24 小时，履约时间内不退）；非商品问题不支持全额退款，换邮箱需补{" "}
+                      <strong>已知晓 0 积分规则、排队时间与退换说明</strong>：<strong>0 积分车位禁点 Veo / Flow 等耗积分功能</strong>；提交就占名额（3-7 小时发邀请，最晚 24 小时，履约时间内不退），非商品问题换邮箱需补{" "}
                       <strong>49.9 元</strong>，或扣 <strong>49.9 元</strong>退余款。
                     </div>
                   </label>
@@ -699,7 +751,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                       <strong>质保 30 天会员</strong>，不保个人账号；违规或反代封号不保。
                     </li>
                     <li>
-                      <strong>0 积分/点数车位</strong>，别用积分或点数，用了会被踢且不退款。
+                      <strong>0 积分车位禁点 Veo / Flow 等耗积分功能</strong>，误耗积分或点数会被踢且不退款。
                     </li>
                     <li>
                       账号受 12 个月限制、没退旧组、没关付款资料或填错邮箱等个人原因，按{" "}
@@ -713,7 +765,8 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                     email={buyerEmail}
                     onEmailChange={setBuyerEmail}
                     disabled={submittingRedeem}
-                    primaryLabel="收邀请的邮箱"
+                    primaryLabel="收邀请的邮箱（填你自己的 Gmail）"
+                    helperText="邀请将发往你下面填写的这个邮箱（不是店家提供的成品号），提交前请逐字核对拼写。"
                     warningText="别填错邮箱！提交就占名额，换邮箱需补 49.9 元手续费。"
                   />
 
@@ -798,6 +851,14 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                     <div className="kv-label">上次查进度</div>
                     <div className="kv-value tabular">{formatDateTime(record.fulfillment.last_polled_at)}</div>
                   </div>
+                </div>
+
+                <div className="auto-refresh-pill" aria-live="polite">
+                  <CastoriceIcon name="refresh" size={14} />
+                  <span>
+                    页面可见时每 30 秒自动查一次，下次自动刷新倒计时：
+                    <strong className="tabular"> {autoPollCountdown}s</strong>
+                  </span>
                 </div>
 
                 <div className="row-between">
@@ -921,7 +982,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                       onChange={(event) => setCheckFamily(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>已备好建组用的常用邮箱</strong>，不在别的家庭组且 12 个月内没进出过家庭组（点{" "}
+                      <strong>已备好建组用的常用邮箱</strong>，不在别的家庭组且 12 个月内没进出过家庭组（Google 规则：<strong>12 个月内仅能换 1 次家庭组</strong>；点{" "}
                       <a href="https://g.co/yourfamily" target="_blank" rel="noreferrer">
                         g.co/yourfamily <CastoriceIcon name="external" size={13} className="inline-ext-icon" />
                       </a>{" "}
@@ -937,7 +998,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                       onChange={(event) => setCheckPayment(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>已关掉 Google 付款资料</strong>（点{" "}
+                      <strong>已关掉 Google 付款资料</strong>（<strong>关闭 Google 付款资料不会删除绑定的银行卡/信用卡</strong>；点{" "}
                       <a
                         href="https://payments.google.com/gp/w/home/settings"
                         target="_blank"
@@ -958,7 +1019,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                       onChange={(event) => setCheckExclusiveRule(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>已知晓使用和售后规则</strong>：别把会员邮箱踢出家庭组，发完邀请回来登记质保；领号后非商品问题不支持全额退款，个人原因换号或补救收{" "}
+                      <strong>已知晓 0 积分与售后规则</strong>：别把会员邮箱踢出家庭组，0 积分功能慎点 Veo / Flow 等耗积分入口，发完邀请回来登记质保；领号后非商品问题不支持全额退款，个人原因换号或补救收{" "}
                       <strong>79.9 元</strong>（不保证一定恢复）。
                     </div>
                   </label>
@@ -1241,6 +1302,59 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
             ) : null}
           </>
         ) : null}
+
+        <section className="card stack faq-card" aria-label="自助排障与常见问题">
+          <div>
+            <h2 className="card-title" style={{ fontSize: 16 }}>
+              自助排障与常见问题
+            </h2>
+            <p className="card-subtitle">
+              90% 的进组、地区提示和客户端问题都可以按下面几步自己秒解决
+            </p>
+          </div>
+          <div className="faq-list">
+            <details className="faq-item">
+              <summary className="faq-summary">1. 一直没收到 Google 家庭组邀请邮件怎么办？</summary>
+              <div className="faq-body">
+                先打开 Gmail 的「垃圾邮件 / 推广 / 所有邮件」搜索 <code>Google Family</code>；排队拉人一般需要{" "}
+                <strong>3-7 小时（最晚 24 小时）</strong>，页面会自动刷新状态。核对页面里显示的邮箱是不是你自己填的邮箱，如已超 24 小时未收到，请点页面按钮复制排查凭证联系客服。
+              </div>
+            </details>
+            <details className="faq-item">
+              <summary className="faq-summary">2. 关闭 Google 付款资料会删掉我的银行卡或信用卡吗？</summary>
+              <div className="faq-body">
+                <strong>不会删除你绑定的银行卡/信用卡</strong>，也不会删掉 Gmail、云盘等账号数据。关闭付款资料只是清除旧的付款国家/地区绑定，避免接受家庭组邀请时报错「您所在的国家/地区不同」。入口：{" "}
+                <a href="https://payments.google.com/gp/w/home/settings" target="_blank" rel="noreferrer">
+                  payments.google.com/gp/w/home/settings
+                </a>
+                （拉到最底部关闭）。
+              </div>
+            </details>
+            <details className="faq-item">
+              <summary className="faq-summary">3. 提示“12 个月内只能切换一次家庭组”或换号怎么处理？</summary>
+              <div className="faq-body">
+                Google 规定每个账号 <strong>12 个月内仅能换 1 次家庭组</strong>。如果提示已达上限，说明这个号一年内进出过别的家庭组，需要换一个没受限的干净 Gmail（按页面对应商品的换号规则处理）。
+                <strong>如遇掉组或维护处理中，切勿自行退出家庭组</strong>，否则可能立刻触发 12 个月冷却。
+              </div>
+            </details>
+            <details className="faq-item">
+              <summary className="faq-summary">4. 进组后 Antigravity / Gemini 提示地区不支持或没生效？</summary>
+              <div className="faq-body">
+                桌面客户端（如 Antigravity）常不走普通系统代理：使用 <strong>flclash / Clash Verge</strong> 等工具时，请切换到干净的美国或支持地区节点，开启 <strong>TUN 模式（虚拟网卡）</strong>并尽量用全局/确保 Google 域名走代理，随后完全退出并重启客户端或无痕浏览器重新登录验证。
+              </div>
+            </details>
+            <details className="faq-item">
+              <summary className="faq-summary">5. 独享家庭组怎么登记 30 天质保？</summary>
+              <div className="faq-body">
+                领到会员邮箱后，用你自己的<strong>常用主邮箱</strong>在{" "}
+                <a href="https://g.co/yourfamily" target="_blank" rel="noreferrer">
+                  g.co/yourfamily
+                </a>{" "}
+                创建家庭组并邀请该会员邮箱加入，然后回到本页底部填写<strong>你的常用主邮箱</strong>提交报备（不要填领到的会员邮箱）。系统自动同步报备，30 天内非个人原因掉会员免费质保。
+              </div>
+            </details>
+          </div>
+        </section>
 
         <footer className="footer-links">
           <span>Google AI Ultra 20x 自助提货</span>

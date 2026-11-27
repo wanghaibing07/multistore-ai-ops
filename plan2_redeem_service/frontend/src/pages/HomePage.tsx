@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import { Link, useNavigate } from "react-router-dom";
 import { getPublicCode } from "../api/client";
 import { triggerButterflyBurst } from "../components/ButterflyBurstFX";
-import { BuyerWallpaper } from "../components/BuyerWallpaper";
+import { BuyerWallpaper, WallpaperMotionToggle } from "../components/BuyerWallpaper";
 import { CastoriceIcon } from "../components/CastoriceIcon";
 import { ChibiSticker } from "../components/ChibiSticker";
 import { useToast } from "../components/ToastProvider";
@@ -157,6 +157,7 @@ export function HomePage() {
               <span className="zzz-brand-sub">自助提货</span>
             </span>
           </Link>
+          <WallpaperMotionToggle surface="light" />
         </header>
 
         <main className="zzz-stage">

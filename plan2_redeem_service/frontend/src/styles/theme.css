@@ -1017,6 +1017,7 @@ p {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  flex-wrap: wrap;
   min-height: 52px;
   padding: 8px 14px;
   border-radius: var(--r);
@@ -2446,6 +2447,165 @@ dialog.native-dialog::backdrop {
     from { transform: translateY(28px); opacity: 0.7; }
     to { transform: translateY(0); opacity: 1; }
   }
+}
+
+/* =========================================================================
+   Wallpaper Motion Toggle, Auto-Refresh Pill, Helper Text & Buyer FAQ
+   ========================================================================= */
+.admin-loading-shell {
+  min-height: 100vh;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  color: var(--ink-2);
+  background: var(--bg);
+  font-size: 14px;
+}
+
+.buyer-topbar-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.wallpaper-toggle-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 11px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background-color 140ms ease, border-color 140ms ease, color 140ms ease;
+}
+
+.wallpaper-toggle-btn--dark {
+  color: var(--ink-2);
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(242, 167, 255, 0.22);
+}
+
+.wallpaper-toggle-btn--dark:hover {
+  color: var(--ink-1);
+  background: rgba(242, 167, 255, 0.14);
+  border-color: rgba(242, 167, 255, 0.38);
+}
+
+.wallpaper-toggle-btn--light {
+  color: #2c2142;
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.88);
+  box-shadow: 0 4px 14px rgba(34, 18, 56, 0.08);
+  backdrop-filter: blur(12px);
+}
+
+.wallpaper-toggle-btn--light:hover {
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.wallpaper-toggle-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: #9ca3af;
+}
+
+.wallpaper-toggle-btn.is-dynamic .wallpaper-toggle-dot {
+  background: #34d399;
+  box-shadow: 0 0 8px rgba(52, 211, 153, 0.7);
+}
+
+.field-helper {
+  margin: 0;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink-3);
+}
+
+.auto-refresh-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: var(--r-sm);
+  background: rgba(124, 92, 255, 0.12);
+  border: 1px solid rgba(168, 139, 255, 0.25);
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.faq-card {
+  gap: 14px;
+}
+
+.faq-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.faq-item {
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: rgba(255, 255, 255, 0.025);
+  overflow: hidden;
+}
+
+.faq-item[open] {
+  border-color: rgba(242, 167, 255, 0.28);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.faq-summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 12px 14px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--ink-1);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.faq-summary::-webkit-details-marker {
+  display: none;
+}
+
+.faq-summary::after {
+  content: "+";
+  font-size: 16px;
+  font-weight: 500;
+  color: var(--ink-3);
+  flex: 0 0 auto;
+}
+
+.faq-item[open] .faq-summary::after {
+  content: "−";
+  color: var(--accent-soft, #f2a7ff);
+}
+
+.faq-body {
+  padding: 0 14px 13px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--ink-2);
+}
+
+.faq-body code {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 1px 5px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.08);
 }
 
 /* =========================================================================
