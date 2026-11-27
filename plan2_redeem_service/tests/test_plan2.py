@@ -934,10 +934,15 @@ def test_vietnamese_forward_template_and_legacy_exclusive_compat_and_search(comp
         assert war.status_code == 200
         expected_new = format_warranty_forward_template(new_order, "new.owner@gmail.com")
         assert expected_new == (
-            "Chào shop ạ, em gửi thông tin đăng ký bảo hành gói Family nhé:\n"
-            f"- Mã đơn: {new_order}\n"
-            "- Gmail chủ nhóm: new.owner@gmail.com\n"
-            "Em đã mời tài khoản shop vào nhóm rồi ạ, nhờ shop ghi nhận bảo hành giúp em nhé. Em cảm ơn shop nhiều ạ!"
+            "Chào shop ạ,\n"
+            "Em gửi thông tin đăng ký bảo hành gói Family:\n"
+            "\n"
+            f"• Mã đơn: {new_order}\n"
+            "• Gmail chủ nhóm: new.owner@gmail.com\n"
+            "\n"
+            "Em đã gửi lời mời vào nhóm Family cho tài khoản shop.\n"
+            "Nhờ shop kiểm tra và ghi nhận bảo hành giúp em nhé.\n"
+            "Cảm ơn shop nhiều ạ!"
         )
         new_detail = c.get(f"/api/v1/admin/codes/{new_code}", headers=ADMIN).json()
         assert new_detail["warranty"]["forward_template"] == expected_new

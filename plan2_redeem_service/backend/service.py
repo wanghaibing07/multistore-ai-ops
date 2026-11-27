@@ -90,11 +90,20 @@ def mask_email(value: Optional[str]) -> Optional[str]:
 
 
 def format_warranty_forward_template(order_code: str, admin_email: str) -> str:
+    clean_order = (order_code or "").strip()
+    clean_email = (admin_email or "").strip()
+    order_line = f"• Mã đơn: {clean_order}".rstrip()
+    email_line = f"• Gmail chủ nhóm: {clean_email}".rstrip()
     return (
-        "Chào shop ạ, em gửi thông tin đăng ký bảo hành gói Family nhé:\n"
-        f"- Mã đơn: {order_code or ''}\n"
-        f"- Gmail chủ nhóm: {admin_email}\n"
-        "Em đã mời tài khoản shop vào nhóm rồi ạ, nhờ shop ghi nhận bảo hành giúp em nhé. Em cảm ơn shop nhiều ạ!"
+        "Chào shop ạ,\n"
+        "Em gửi thông tin đăng ký bảo hành gói Family:\n"
+        "\n"
+        f"{order_line}\n"
+        f"{email_line}\n"
+        "\n"
+        "Em đã gửi lời mời vào nhóm Family cho tài khoản shop.\n"
+        "Nhờ shop kiểm tra và ghi nhận bảo hành giúp em nhé.\n"
+        "Cảm ơn shop nhiều ạ!"
     )
 
 
