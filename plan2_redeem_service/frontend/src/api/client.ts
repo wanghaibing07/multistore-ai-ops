@@ -267,6 +267,21 @@ export async function revokeAdminCode(
   });
 }
 
+export async function resetAdminCodeToUnused(
+  token: string,
+  code: string,
+  note = ""
+): Promise<AdminCodeDetail> {
+  return requestJson<AdminCodeDetail>(
+    `/api/v1/admin/codes/${encodeURIComponent(code)}/reset-unused`,
+    {
+      method: "POST",
+      headers: authHeaders(token, true),
+      body: JSON.stringify({ note }),
+    }
+  );
+}
+
 export async function retryAdminCode(
   token: string,
   code: string,

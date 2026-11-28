@@ -405,7 +405,7 @@ export function AdminOrdersPage({
         <div>
           <h1 className="admin-page-title">订单和保修</h1>
           <p className="admin-page-sub">
-            点开任意订单可查看买家与商店邮箱、保修主邮箱、TG 自动报备状态与越南语话术，以及查进度、重下或作废。
+            点开任意订单可查看买家与商店邮箱、保修主邮箱、TG 自动报备状态与越南语话术，以及查进度、退回待提货、重下或作废。
           </p>
         </div>
         <div className="row" style={{ flexWrap: "wrap", justifyContent: "flex-end" }}>

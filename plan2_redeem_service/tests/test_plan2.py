@@ -2265,3 +2265,328 @@ def test_api_wrong_method_returns_405_with_allow_header(components):
         assert delete_404.status_code == 404
         assert delete_404.json()["error_code"] == "NOT_FOUND"
 
+
+def test_reset_unused_allows_buyer_resubmit_after_low_balance_and_preserves_order_binding(components):
+    app, _, canboso, _, mailer = components
+    with client(app) as http_client:
+        shared_code = issue(
+            http_client,
+            sku="ultra_shared_slot",
+            channel="taobao",
+            external_order_id="TB-LOW-001",
+            remark="余额不足回归测试",
+        )
+        canboso.balance = 5.0
+        first_redeem = http_client.post(
+            f"/api/v1/public/codes/{shared_code}/redeem",
+            json={
+                "buyer_email": "first@gmail.com",
+                "buyer_email_confirm": "first@gmail.com",
+                "preflight_confirmed": True,
+            },
+        )
+        assert first_redeem.status_code == 200
+        assert first_redeem.json()["status"] == "needs_manual_review"
+        assert len(canboso.orders) == 0
+        assert len(mailer.sent) == 1
+
+        detail_before = http_client.get(f"/api/v1/admin/codes/{shared_code}", headers=ADMIN).json()
+        assert detail_before["last_error_code"] == "LOW_BALANCE"
+        assert detail_before["can_reset_unused"] is True
+
+        list_before = http_client.get(
+            "/api/v1/admin/codes",
+            headers=ADMIN,
+            params={"error_code": "LOW_BALANCE"},
+        ).json()
+        listed_map = {item["code"]: item for item in list_before["items"]}
+        assert listed_map[shared_code]["can_reset_unused"] is True
+
+        retry_still_low = http_client.post(
+            f"/api/v1/admin/codes/{shared_code}/retry",
+            headers=ADMIN,
+            json={},
+        )
+        assert retry_still_low.status_code == 503
+        assert retry_still_low.json()["error_code"] == "LOW_BALANCE"
+        detail_after_retry_fail = http_client.get(f"/api/v1/admin/codes/{shared_code}", headers=ADMIN).json()
+        assert detail_after_retry_fail["can_reset_unused"] is True
+
+        reset_resp = http_client.post(
+            f"/api/v1/admin/codes/{shared_code}/reset-unused",
+            headers=ADMIN,
+            json={"note": "钱包已充值，请买家重交"},
+        )
+        assert reset_resp.status_code == 200
+        reset_data = reset_resp.json()
+        assert reset_data["status"] == "unused"
+        assert reset_data["display_status"] == "dispatched_unused"
+        assert reset_data["can_reset_unused"] is False
+        assert reset_data["external_order_id"] == "TB-LOW-001"
+        assert reset_data["remark"] == "余额不足回归测试"
+        assert reset_data["buyer_email"] is None
+        assert reset_data["buyer_email_masked"] is None
+        assert reset_data["idempotency_key"] is None
+        assert reset_data["submitted_at"] is None
+        assert reset_data["last_error_code"] is None
+        assert reset_data["last_error_message"] is None
+        assert any(
+            event["from_status"] == "needs_manual_review"
+            and event["to_status"] == "unused"
+            and event["reason"] == "admin_reset_unused:钱包已充值，请买家重交"
+            for event in reset_data["audit_events"]
+        )
+
+        public_reset = http_client.get(f"/api/v1/public/codes/{shared_code}").json()
+        assert public_reset["status"] == "unused"
+        assert public_reset["buyer_email_masked"] is None
+
+        second_low = http_client.post(
+            f"/api/v1/public/codes/{shared_code}/redeem",
+            json={
+                "buyer_email": "second@gmail.com",
+                "buyer_email_confirm": "second@gmail.com",
+                "preflight_confirmed": True,
+            },
+        )
+        assert second_low.status_code == 200
+        assert second_low.json()["status"] == "needs_manual_review"
+        assert len(mailer.sent) == 2
+
+        second_reset = http_client.post(
+            f"/api/v1/admin/codes/{shared_code}/reset-unused",
+            headers=ADMIN,
+            json={},
+        )
+        assert second_reset.status_code == 200
+        assert second_reset.json()["status"] == "unused"
+
+        canboso.balance = 500.0
+        resubmitted = http_client.post(
+            f"/api/v1/public/codes/{shared_code}/redeem",
+            json={
+                "buyer_email": "finalbuyer@gmail.com",
+                "buyer_email_confirm": "finalbuyer@gmail.com",
+                "preflight_confirmed": True,
+            },
+        )
+        assert resubmitted.status_code == 200
+        assert resubmitted.json()["status"] == "waiting_fulfillment"
+        final_detail = http_client.get(f"/api/v1/admin/codes/{shared_code}", headers=ADMIN).json()
+        assert final_detail["external_order_id"] == "TB-LOW-001"
+        assert final_detail["buyer_email"] == "finalbuyer@gmail.com"
+        assert final_detail["upstream_order_code"] is not None
+        assert final_detail["can_reset_unused"] is False
+
+        exc_batch = http_client.post(
+            "/api/v1/admin/codes/batch",
+            headers=ADMIN,
+            json={
+                "sku_key": "ultra_exclusive_admin",
+                "channel": "16688",
+                "goods_no": "G100",
+                "count": 1,
+            },
+        )
+        assert exc_batch.status_code == 201
+        exclusive_code = exc_batch.json()["codes"][0]
+        canboso.balance = 10.0
+        exc_first = http_client.post(
+            f"/api/v1/public/codes/{exclusive_code}/redeem",
+            json={"preflight_confirmed": True},
+        )
+        assert exc_first.status_code == 200
+        assert exc_first.json()["status"] == "needs_manual_review"
+        exc_detail = http_client.get(f"/api/v1/admin/codes/{exclusive_code}", headers=ADMIN).json()
+        assert exc_detail["external_order_id"] == "TB-001"
+        assert exc_detail["can_reset_unused"] is True
+
+        exc_reset = http_client.post(
+            f"/api/v1/admin/codes/{exclusive_code}/reset-unused",
+            headers=ADMIN,
+            json={"note": "独享单退回重交"},
+        )
+        assert exc_reset.status_code == 200
+        assert exc_reset.json()["status"] == "unused"
+        assert exc_reset.json()["external_order_id"] == "TB-001"
+
+        canboso.balance = 500.0
+        exc_resubmit = http_client.post(
+            f"/api/v1/public/codes/{exclusive_code}/redeem",
+            json={"preflight_confirmed": True},
+        )
+        assert exc_resubmit.status_code == 200
+        assert exc_resubmit.json()["status"] == "delivered_pending_warranty"
+        assert exc_resubmit.json()["delivery"]["account_text"]
+        exc_final = http_client.get(f"/api/v1/admin/codes/{exclusive_code}", headers=ADMIN).json()
+        assert exc_final["external_order_id"] == "TB-001"
+        assert exc_final["upstream_order_code"] is not None
+
+
+def test_reset_unused_blocks_purchase_attempts_active_orders_and_disputes(components, monkeypatch):
+    app, _, canboso, channel, _ = components
+    with client(app) as http_client:
+        missing_resp = http_client.post("/api/v1/admin/codes/NO-SUCH-CODE/reset-unused", headers=ADMIN, json={})
+        assert missing_resp.status_code == 404
+        assert missing_resp.json()["error_code"] == "CODE_NOT_FOUND"
+
+        unused_code = issue(http_client)
+        unused_resp = http_client.post(f"/api/v1/admin/codes/{unused_code}/reset-unused", headers=ADMIN, json={})
+        assert unused_resp.status_code == 409
+        assert unused_resp.json()["error_code"] == "RESET_NOT_AVAILABLE"
+
+        cancelled_code = issue(http_client)
+        http_client.post(
+            f"/api/v1/public/codes/{cancelled_code}/redeem",
+            json={"buyer_email": "cancel@gmail.com", "buyer_email_confirm": "cancel@gmail.com", "preflight_confirmed": True},
+        )
+        cancelled_up = app.state.ledger.get_code(cancelled_code)["upstream_order_code"]
+        canboso.orders[cancelled_up]["status"] = "cancelled"
+        http_client.post(f"/api/v1/admin/codes/{cancelled_code}/poll", headers=ADMIN)
+        cancelled_detail = http_client.get(f"/api/v1/admin/codes/{cancelled_code}", headers=ADMIN).json()
+        assert cancelled_detail["can_reset_unused"] is False
+        cancelled_reset = http_client.post(f"/api/v1/admin/codes/{cancelled_code}/reset-unused", headers=ADMIN, json={})
+        assert cancelled_reset.status_code == 409
+        assert cancelled_reset.json()["error_code"] == "UPSTREAM_ORDER_EXISTS"
+
+        timeout_code = issue(http_client)
+        original_purchase = canboso.purchase
+
+        def raise_timeout(idempotency_key, payload):
+            raise UpstreamTimeout("purchase timeout")
+
+        monkeypatch.setattr(canboso, "purchase", raise_timeout)
+        http_client.post(
+            f"/api/v1/public/codes/{timeout_code}/redeem",
+            json={"buyer_email": "timeout@gmail.com", "buyer_email_confirm": "timeout@gmail.com", "preflight_confirmed": True},
+        )
+        assert http_client.get(f"/api/v1/admin/codes/{timeout_code}", headers=ADMIN).json()["can_reset_unused"] is False
+        timeout_reset = http_client.post(f"/api/v1/admin/codes/{timeout_code}/reset-unused", headers=ADMIN, json={})
+        assert timeout_reset.status_code == 409
+        assert timeout_reset.json()["error_code"] == "RESET_NOT_AVAILABLE"
+
+        canboso.balance = 1.0
+        http_client.post(f"/api/v1/admin/codes/{timeout_code}/retry", headers=ADMIN, json={})
+        timeout_after_low = http_client.get(f"/api/v1/admin/codes/{timeout_code}", headers=ADMIN).json()
+        assert timeout_after_low["last_error_code"] == "LOW_BALANCE"
+        assert timeout_after_low["can_reset_unused"] is False
+        timeout_still_blocked = http_client.post(
+            f"/api/v1/admin/codes/{timeout_code}/reset-unused",
+            headers=ADMIN,
+            json={},
+        )
+        assert timeout_still_blocked.status_code == 409
+        assert timeout_still_blocked.json()["error_code"] == "RESET_NOT_AVAILABLE"
+
+        canboso.balance = 500.0
+
+        def raise_http_error(idempotency_key, payload):
+            raise UpstreamError(500, "internal failure")
+
+        monkeypatch.setattr(canboso, "purchase", raise_http_error)
+        http_err_code = issue(http_client)
+        http_client.post(
+            f"/api/v1/public/codes/{http_err_code}/redeem",
+            json={"buyer_email": "httperr@gmail.com", "buyer_email_confirm": "httperr@gmail.com", "preflight_confirmed": True},
+        )
+        assert http_client.get(f"/api/v1/admin/codes/{http_err_code}", headers=ADMIN).json()["can_reset_unused"] is False
+        assert http_client.post(
+            f"/api/v1/admin/codes/{http_err_code}/reset-unused",
+            headers=ADMIN,
+            json={},
+        ).status_code == 409
+
+        def return_empty_order(idempotency_key, payload):
+            return {"order": {}, "payment": {"currency": "USD", "amount": 13.47}}
+
+        monkeypatch.setattr(canboso, "purchase", return_empty_order)
+        unconfirmed_code = issue(http_client)
+        http_client.post(
+            f"/api/v1/public/codes/{unconfirmed_code}/redeem",
+            json={"buyer_email": "unconf@gmail.com", "buyer_email_confirm": "unconf@gmail.com", "preflight_confirmed": True},
+        )
+        unconf_detail = http_client.get(f"/api/v1/admin/codes/{unconfirmed_code}", headers=ADMIN).json()
+        assert unconf_detail["last_error_code"] == "UPSTREAM_ERROR"
+        assert unconf_detail["can_reset_unused"] is False
+        assert http_client.post(
+            f"/api/v1/admin/codes/{unconfirmed_code}/reset-unused",
+            headers=ADMIN,
+            json={},
+        ).status_code == 409
+
+        monkeypatch.setattr(canboso, "purchase", original_purchase)
+        stuck_code = issue(http_client)
+        app.state.ledger.claim_for_purchase(
+            stuck_code,
+            {"product_id": SKUS["ultra_shared_slot"]["product_id"], "quantity": 1, "customer_email": "stuck@gmail.com"},
+            "stuck@gmail.com",
+            "stuck@gmail.com",
+        )
+        old_ts = (datetime.now(timezone.utc).astimezone() - timedelta(minutes=30)).isoformat(timespec="seconds")
+        with app.state.ledger.transaction(immediate=True) as conn:
+            conn.execute("UPDATE codes SET updated_at=? WHERE code=?", (old_ts, stuck_code))
+        app.state.service.recover_stuck_purchasing()
+        assert http_client.get(f"/api/v1/admin/codes/{stuck_code}", headers=ADMIN).json()["can_reset_unused"] is False
+        assert http_client.post(
+            f"/api/v1/admin/codes/{stuck_code}/reset-unused",
+            headers=ADMIN,
+            json={},
+        ).status_code == 409
+
+        rej_batch = http_client.post(
+            "/api/v1/admin/codes/batch",
+            headers=ADMIN,
+            json={
+                "sku_key": "ultra_exclusive_admin",
+                "channel": "16688",
+                "goods_no": "G100",
+                "count": 1,
+            },
+        )
+        assert rej_batch.status_code == 201
+        rejected_16688_code = rej_batch.json()["codes"][0]
+        canboso.balance = 5.0
+        rej_first = http_client.post(
+            f"/api/v1/public/codes/{rejected_16688_code}/redeem",
+            json={"preflight_confirmed": True},
+        )
+        assert rej_first.status_code == 200
+        assert rej_first.json()["status"] == "needs_manual_review"
+        assert http_client.get(
+            f"/api/v1/admin/codes/{rejected_16688_code}",
+            headers=ADMIN,
+        ).json()["can_reset_unused"] is True
+        canboso.balance = 500.0
+        channel.allowed = False
+        rej_retry = http_client.post(f"/api/v1/admin/codes/{rejected_16688_code}/retry", headers=ADMIN, json={})
+        assert rej_retry.status_code == 409
+        assert rej_retry.json()["error_code"] == "ORDER_NOT_ELIGIBLE"
+        rejected_detail = http_client.get(f"/api/v1/admin/codes/{rejected_16688_code}", headers=ADMIN).json()
+        assert rejected_detail["can_reset_unused"] is False
+        assert http_client.post(
+            f"/api/v1/admin/codes/{rejected_16688_code}/reset-unused",
+            headers=ADMIN,
+            json={},
+        ).status_code == 409
+
+        channel.allowed = True
+        retry_purchase_code = issue(http_client)
+        canboso.balance = 5.0
+        http_client.post(
+            f"/api/v1/public/codes/{retry_purchase_code}/redeem",
+            json={"buyer_email": "retrytimeout@gmail.com", "buyer_email_confirm": "retrytimeout@gmail.com", "preflight_confirmed": True},
+        )
+        canboso.balance = 500.0
+        monkeypatch.setattr(canboso, "purchase", raise_timeout)
+        http_client.post(f"/api/v1/admin/codes/{retry_purchase_code}/retry", headers=ADMIN, json={})
+        canboso.balance = 5.0
+        http_client.post(f"/api/v1/admin/codes/{retry_purchase_code}/retry", headers=ADMIN, json={})
+        retry_detail = http_client.get(f"/api/v1/admin/codes/{retry_purchase_code}", headers=ADMIN).json()
+        assert retry_detail["last_error_code"] == "LOW_BALANCE"
+        assert retry_detail["can_reset_unused"] is False
+        assert http_client.post(
+            f"/api/v1/admin/codes/{retry_purchase_code}/reset-unused",
+            headers=ADMIN,
+            json={},
+        ).status_code == 409
+

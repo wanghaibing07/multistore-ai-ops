@@ -43,6 +43,7 @@ from .models import (
     Channel16688RestockRequest,
     IssueRequest,
     RedeemRequest,
+    ResetUnusedRequest,
     RetryRequest,
     RevokeRequest,
     SkuPatchRequest,
@@ -112,6 +113,8 @@ def status_for(code: str) -> int:
         "ORDER_NOT_ELIGIBLE": 409,
         "CANNOT_REVOKE_COMPLETED": 409,
         "RETRY_NOT_AVAILABLE": 409,
+        "RESET_NOT_AVAILABLE": 409,
+        "UPSTREAM_ORDER_EXISTS": 409,
         "CANBOSO_ORDER_CANCELLED": 409,
         "UPSTREAM_ORDER_ACTIVE": 409,
         "NO_UPSTREAM_ORDER": 409,
@@ -683,8 +686,17 @@ def create_app(
         sku_map = ledger.get_all_skus()
         review_codes = [row["code"] for row in rows if row["status"] == "needs_manual_review"]
         disputed_codes = ledger.list_disputed_16688_codes(review_codes)
+        resettable_codes = ledger.list_resettable_codes(rows)
         return {
-            "items": [svc.admin_summary(row, sku_map=sku_map, disputed_codes=disputed_codes) for row in rows],
+            "items": [
+                svc.admin_summary(
+                    row,
+                    sku_map=sku_map,
+                    disputed_codes=disputed_codes,
+                    resettable_codes=resettable_codes,
+                )
+                for row in rows
+            ],
             "total": total, "page": page, "page_size": page_size,
         }
 
@@ -733,6 +745,19 @@ def create_app(
             return error("CONCURRENT_IN_PROGRESS", "订单正在处理，请等下单结果落账后再作废", 409)
         svc.ledger.mark_agiso_delivery_revoked(code)
         return svc.admin_detail(ledger.get_code(code))
+
+    @app.post("/api/v1/admin/codes/{code}/reset-unused", dependencies=[Depends(require_admin)])
+    def reset_unused(code: str, body: ResetUnusedRequest, svc: Service = Depends(get_service)) -> Any:
+        detail, err_code = svc.reset_code_to_unused(code, body.note)
+        if err_code:
+            messages = {
+                "CODE_NOT_FOUND": "没找到这个兑换码",
+                "CONCURRENT_IN_PROGRESS": "订单正在处理中，请稍候再操作",
+                "UPSTREAM_ORDER_EXISTS": "这笔单已经生成上游采购单号，禁止退回待提货（防止重复扣款）",
+                "RESET_NOT_AVAILABLE": "仅限未向上游发起下单的预检失败单（如余额不足、缺货或超限价）才能退回待提货；已尝试下单或状态不符的订单请走核对或重下流程",
+            }
+            return error(err_code, messages.get(err_code, "退回待提货失败"), status_for(err_code))
+        return detail
 
     @app.post("/api/v1/admin/codes/{code}/retry", dependencies=[Depends(require_admin)])
     def retry(code: str, body: RetryRequest, svc: Service = Depends(get_service)) -> Any:

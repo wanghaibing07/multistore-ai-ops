@@ -37,6 +37,10 @@ class RevokeRequest(BaseModel):
     force: bool = False
 
 
+class ResetUnusedRequest(BaseModel):
+    note: str = Field(default="", max_length=200)
+
+
 class RetryRequest(BaseModel):
     override_price_limit: bool = False
     note: str = ""

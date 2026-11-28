@@ -179,6 +179,7 @@ export interface AdminCodeSummary {
   elapsed_minutes: number | null;
   can_poll_upstream?: boolean;
   can_reorder?: boolean;
+  can_reset_unused?: boolean;
   submitted_at: string | null;
   completed_at: string | null;
   created_at: string;

@@ -138,6 +138,17 @@ function translateAuditReason(rawReason: string): { title?: string; detail: stri
     const mapped = translateAuditReason(sub).detail;
     return { title: "重试没通过", detail: `重新下单被拦下：${mapped}` };
   }
+  if (reason === "admin_reset_unused" || reason.startsWith("admin_reset_unused:")) {
+    const note = reason.startsWith("admin_reset_unused:")
+      ? reason.slice("admin_reset_unused:".length).trim()
+      : "";
+    return {
+      title: "商家已退回待提货",
+      detail: note
+        ? `已重置为未使用，买家可用原码重新提交（备注：${note}）`
+        : "已重置为未使用，买家可用原兑换码重新提交",
+    };
+  }
 
   switch (reason) {
     case "canboso_order_cancelled":

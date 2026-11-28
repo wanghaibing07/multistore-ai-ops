@@ -7,6 +7,7 @@ import {
   getAdminCodeDetail,
   pollAdminCode,
   recordAdminUpstreamRefund,
+  resetAdminCodeToUnused,
   retryAdminCode,
   revokeAdminCode,
 } from "../../api/client";
@@ -138,6 +139,9 @@ export function AdminOrderDrawer({
   const [merchantVerifiedRecipientEmail, setMerchantVerifiedRecipientEmail] = useState("");
   const [retryConfirmOpen, setRetryConfirmOpen] = useState(false);
   const [retrying, setRetrying] = useState(false);
+  const [resetNote, setResetNote] = useState("");
+  const [resetConfirmOpen, setResetConfirmOpen] = useState(false);
+  const [resetting, setResetting] = useState(false);
 
   const [revokeReason, setRevokeReason] = useState("买家退款或手动作废");
   const [revokeConfirmOpen, setRevokeConfirmOpen] = useState(false);
@@ -179,6 +183,8 @@ export function AdminOrderDrawer({
     setMerchantVerifiedOrderNo("");
     setMerchantVerifiedRecipientEmail("");
     setRetryConfirmOpen(false);
+    setResetNote("");
+    setResetConfirmOpen(false);
     setAckNote("");
     setRevokeReason("买家退款或手动作废");
     setRevokeConfirmOpen(false);
@@ -389,6 +395,29 @@ export function AdminOrderDrawer({
     }
   };
 
+  const handleResetUnusedConfirm = async () => {
+    if (resetting || !canResetUnused || detail?.code !== code) return;
+    setResetting(true);
+    try {
+      const updated = await resetAdminCodeToUnused(token, code, resetNote.trim());
+      setDetail(updated);
+      setResetConfirmOpen(false);
+      setResetNote("");
+      onMutated();
+      pushToast(`兑换码 ${code} 已退回待提货，买家可用原码重新提交`, "success");
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      setResetConfirmOpen(false);
+      void loadDetail();
+      pushToast(caught instanceof ApiError ? caught.message : "退回待提货失败", "error");
+    } finally {
+      setResetting(false);
+    }
+  };
+
   const closeRevokeDialog = () => {
     setRevokeConfirmOpen(false);
     setRevokeForceRequired(false);
@@ -482,6 +511,7 @@ export function AdminOrderDrawer({
       !detail.upstream_order_code
   );
   const canReorder = Boolean(detail?.can_reorder);
+  const canResetUnused = Boolean(detail?.can_reset_unused);
   const canRetry = canIdempotentRetry || canReorder;
   const forceNewOrderRequired = canReorder && !canIdempotentRetry;
   const effectiveForceNewOrder = forceNewOrderRequired || (canReorder && forceNewOrder);
@@ -510,7 +540,7 @@ export function AdminOrderDrawer({
     detail && detail.cost_usd !== null && detail.cost_usd !== undefined
       ? Math.max(0, detail.cost_usd - (detail.upstream_refund_usd ?? 0))
       : null;
-  const hasActions = canPoll || canRetry || canRevoke || showActiveUpstreamGuard;
+  const hasActions = canPoll || canResetUnused || canRetry || canRevoke || showActiveUpstreamGuard;
 
   return (
     <>
@@ -1031,8 +1061,8 @@ export function AdminOrderDrawer({
                   <section className="stack-sm" aria-label="订单操作">
                     <strong style={{ fontSize: 14 }}>订单操作</strong>
 
-                    {(canPoll || canRevoke) && (
-                      <div className="row">
+                    {(canPoll || canResetUnused || canRevoke) && (
+                      <div className="row" style={{ flexWrap: "wrap" }}>
                         {canPoll && (
                           <button
                             type="button"
@@ -1043,6 +1073,19 @@ export function AdminOrderDrawer({
                           >
                             <CastoriceIcon name="refresh" size={17} spin={polling} />
                             <span>立即查一次上游进度</span>
+                          </button>
+                        )}
+
+                        {canResetUnused && (
+                          <button
+                            type="button"
+                            className={`btn btn-primary ${resetting ? "is-loading" : ""}`}
+                            disabled={resetting}
+                            aria-busy={resetting}
+                            onClick={() => setResetConfirmOpen(true)}
+                          >
+                            <CastoriceIcon name="refresh" size={17} spin={resetting} />
+                            <span>退回待提货（让买家重交）</span>
                           </button>
                         )}
 
@@ -1410,6 +1453,36 @@ export function AdminOrderDrawer({
         {needsRecipientConfirmation && (
           <p>确认你已向买家核对收邀请邮箱 <strong className="mono">{verifiedRecipient}</strong>。</p>
         )}
+      </ConfirmDialog>
+
+      <ConfirmDialog
+        open={resetConfirmOpen && canResetUnused && detail?.code === code}
+        title="确认退回待提货（让买家重交）"
+        confirmLabel="确认退回待提货"
+        busy={resetting}
+        onConfirm={() => void handleResetUnusedConfirm()}
+        onClose={() => setResetConfirmOpen(false)}
+      >
+        <p>
+          即将把兑换码 <strong className="mono">{code}</strong> 重置为未使用（待提货），并清空本次失败记录。
+        </p>
+        <p>
+          原发码渠道和外部订单号会保留，确认 Canboso 钱包已充值后，让买家刷新原提货链接重新提交即可；本操作不会直接扣款。
+        </p>
+        <div className="field-group">
+          <label className="field-label" htmlFor="reset-unused-note-input">
+            <span>操作备注（可选）</span>
+          </label>
+          <input
+            id="reset-unused-note-input"
+            type="text"
+            className="input"
+            maxLength={200}
+            placeholder="例如：钱包已充值，请买家重新提交"
+            value={resetNote}
+            onChange={(event) => setResetNote(event.target.value)}
+          />
+        </div>
       </ConfirmDialog>
 
       <ConfirmDialog

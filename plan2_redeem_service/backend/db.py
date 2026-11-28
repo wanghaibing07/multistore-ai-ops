@@ -10,6 +10,32 @@ from typing import Any, Callable, Iterator, Optional
 
 
 STATUSES = {"unused", "validating", "purchasing", "waiting_fulfillment", "delivered_pending_warranty", "completed", "needs_manual_review", "revoked"}
+RESETTABLE_PREFLIGHT_REASONS = (
+    "LOW_BALANCE",
+    "UPSTREAM_OUT_OF_STOCK",
+    "PRICE_LIMIT_EXCEEDED",
+    "UPSTREAM_ERROR",
+)
+RESETTABLE_ERROR_CODES = (
+    "LOW_BALANCE",
+    "UPSTREAM_OUT_OF_STOCK",
+    "PRICE_LIMIT_EXCEEDED",
+    "UPSTREAM_ERROR",
+    "CHANNEL16688_OPENAPI_PAUSED",
+)
+PURCHASE_ATTEMPT_AUDIT_REASONS = (
+    "upstream_timeout",
+    "upstream_error",
+    "upstream_purchase_unconfirmed",
+    "purchasing_stuck_recovery",
+    "canboso_purchase_cancelled",
+    "canboso_order_cancelled",
+    "shared_order_accepted",
+    "exclusive_delivered",
+    "fulfillment_over_24h",
+    "admin_manual_canboso_purchase_16688_api_paused",
+    "16688_openapi_paused_auto_purchase",
+)
 
 LIST_CODES_ORDER_BY: dict[str, str] = {
     "created_at_desc": "created_at DESC, code DESC",
@@ -296,6 +322,99 @@ class Ledger:
             c.execute(
                 "INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)",
                 (code, old, "revoked", revoke_reason, t),
+            )
+            return "OK"
+
+    @staticmethod
+    def _is_reset_candidate_row(row: dict[str, Any]) -> bool:
+        return (
+            row.get("status") == "needs_manual_review"
+            and not row.get("upstream_order_code")
+            and not row.get("upstream_status")
+            and row.get("cost_usd") is None
+            and not row.get("delivery_json")
+            and not row.get("warranty_json")
+            and not row.get("completed_at")
+            and (row.get("last_error_code") or "") in RESETTABLE_ERROR_CODES
+        )
+
+    def _reset_unused_block_reason(self, conn: sqlite3.Connection, row: dict[str, Any]) -> str:
+        code = row["code"]
+        if row.get("status") == "purchasing":
+            return "CONCURRENT_IN_PROGRESS"
+        if row.get("upstream_order_code"):
+            return "UPSTREAM_ORDER_EXISTS"
+        if not self._is_reset_candidate_row(row):
+            return "RESET_NOT_AVAILABLE"
+        if self._was_consumed(conn, code, row.get("last_error_code")):
+            return "RESET_NOT_AVAILABLE"
+        if row.get("channel") == "16688" and self._16688_sale_rejected(conn, code, 0):
+            return "RESET_NOT_AVAILABLE"
+        blocked_marks = ",".join("?" for _ in PURCHASE_ATTEMPT_AUDIT_REASONS)
+        has_purchase_attempt = conn.execute(
+            f"""SELECT 1 FROM audit_events WHERE code=? AND (
+                to_status IN ('waiting_fulfillment', 'delivered_pending_warranty', 'completed')
+                OR (from_status='needs_manual_review' AND to_status='purchasing')
+                OR reason IN ({blocked_marks})
+            ) LIMIT 1""",
+            (code, *PURCHASE_ATTEMPT_AUDIT_REASONS),
+        ).fetchone()
+        if has_purchase_attempt is not None:
+            return "RESET_NOT_AVAILABLE"
+        latest_review = conn.execute(
+            """SELECT reason FROM audit_events
+               WHERE code=? AND from_status='purchasing' AND to_status='needs_manual_review'
+               ORDER BY event_id DESC LIMIT 1""",
+            (code,),
+        ).fetchone()
+        if not latest_review or latest_review["reason"] not in RESETTABLE_PREFLIGHT_REASONS:
+            return "RESET_NOT_AVAILABLE"
+        return ""
+
+    def can_reset_to_unused(self, row: dict[str, Any]) -> bool:
+        if not self._is_reset_candidate_row(row):
+            return False
+        with closing(self.connect()) as conn:
+            return self._reset_unused_block_reason(conn, row) == ""
+
+    def list_resettable_codes(self, rows: list[dict[str, Any]]) -> set[str]:
+        candidates = [row for row in rows if self._is_reset_candidate_row(row)]
+        if not candidates:
+            return set()
+        with closing(self.connect()) as conn:
+            return {
+                row["code"]
+                for row in candidates
+                if self._reset_unused_block_reason(conn, row) == ""
+            }
+
+    def reset_code_to_unused(self, code: str, note: str = "") -> str:
+        with self.transaction(immediate=True) as conn:
+            row_obj = conn.execute("SELECT * FROM codes WHERE code=?", (code,)).fetchone()
+            if not row_obj:
+                return "CODE_NOT_FOUND"
+            row = dict(row_obj)
+            block_reason = self._reset_unused_block_reason(conn, row)
+            if block_reason:
+                return block_reason
+            timestamp = now_iso()
+            clean_note = note.strip()[:200]
+            audit_reason = f"admin_reset_unused:{clean_note}" if clean_note else "admin_reset_unused"
+            conn.execute(
+                """UPDATE codes SET status='unused', buyer_email=NULL, buyer_email_masked=NULL,
+                   idempotency_key=NULL, request_payload_json=NULL,
+                   last_error_code=NULL, last_error_message=NULL, last_polled_at=NULL,
+                   submitted_at=NULL, updated_at=? WHERE code=?""",
+                (timestamp, code),
+            )
+            conn.execute(
+                "INSERT INTO audit_events(code,from_status,to_status,reason,created_at) VALUES(?,?,?,?,?)",
+                (code, "needs_manual_review", "unused", audit_reason, timestamp),
+            )
+            alert_prefix = f"alert:{code}:"
+            conn.execute(
+                "DELETE FROM notification_keys WHERE substr(dedupe_key, 1, ?) = ?",
+                (len(alert_prefix), alert_prefix),
             )
             return "OK"
 

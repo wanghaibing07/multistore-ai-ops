@@ -1137,6 +1137,13 @@ class Service:
             return {}, "NO_UPSTREAM_ORDER"
         return self.admin_detail(self.ledger.get_code(code)), None
 
+    def reset_code_to_unused(self, code: str, note: str = "") -> tuple[dict[str, Any], Optional[str]]:
+        outcome = self.ledger.reset_code_to_unused(code, note)
+        if outcome != "OK":
+            row = self.ledger.get_code(code)
+            return (self.admin_detail(row) if row else {}), outcome
+        return self.admin_detail(self.ledger.get_code(code)), None
+
     def alert(self, code: str, reason: str) -> None:
         if self.ledger.claim_notification(f"alert:{code}:{reason}"):
             self._safe_send("Plan 2 异常报警", f"兑换码 {code} 需要人工处理。事件：{reason}。")
@@ -1292,6 +1299,7 @@ class Service:
         *,
         sku_map: Optional[dict[str, dict[str, Any]]] = None,
         disputed_codes: Optional[set[str]] = None,
+        resettable_codes: Optional[set[str]] = None,
     ) -> dict[str, Any]:
         sku = (sku_map or {}).get(row["sku_key"]) or self.ledger.get_sku(row["sku_key"])
         elapsed = self._elapsed_minutes(row)
@@ -1323,6 +1331,11 @@ class Service:
             and not unconfirmed_purchase
             and (not row.get("upstream_order_code") or upstream_status_low in CANBOSO_CANCELLED_STATUSES)
         )
+        can_reset_unused = (
+            row["code"] in resettable_codes
+            if resettable_codes is not None
+            else self.ledger.can_reset_to_unused(row)
+        )
         return {
             "code": row["code"],
             "sku_key": row["sku_key"],
@@ -1350,6 +1363,7 @@ class Service:
             "elapsed_minutes": elapsed,
             "can_poll_upstream": can_poll_upstream,
             "can_reorder": can_reorder,
+            "can_reset_unused": can_reset_unused,
             "submitted_at": row.get("submitted_at"),
             "completed_at": row.get("completed_at"),
             "created_at": row["created_at"],
