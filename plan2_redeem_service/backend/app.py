@@ -530,17 +530,17 @@ def create_app(
         if err_code:
             messages = {
                 "CODE_NOT_FOUND": "没找到这个兑换码，请核对后重试",
-                "WARRANTY_LOCKED": "保修已经登记完，不能再改了，有变化请联系客服",
+                "WARRANTY_LOCKED": "主邮箱已完成系统登记，不能再修改了，如有变化请联系客服",
                 "INVALID_EMAIL": "请填正确的邮箱地址",
                 "EMAIL_MISMATCH": "两次填的邮箱不一样，请核对后再提交",
                 "WARRANTY_SAME_AS_STORE_EMAIL": "这里请填你自己的常用邮箱（家庭组组长邮箱），不要填我们发给你的商店会员邮箱",
                 "INVALID_SCREENSHOT_TYPE": "截图只支持 JPG、PNG 或 WEBP 格式",
                 "SCREENSHOT_TOO_LARGE": "截图太大了，请传 5MB 以内的图片",
                 "SCREENSHOT_EMPTY": "截图文件是空的，请重新上传",
-                "WARRANTY_NOT_APPLICABLE": "这个商品不用在这里登记保修",
-                "WARRANTY_NOT_ALLOWED": "还没到登记保修这一步，请先领账号",
+                "WARRANTY_NOT_APPLICABLE": "这个商品不用在这里登记交付主邮箱",
+                "WARRANTY_NOT_ALLOWED": "还没到登记主邮箱这一步，请先领会员邮箱",
             }
-            return error(err_code, messages.get(err_code, "现在提交不了保修，请刷新页面后再试"), status_for(err_code))
+            return error(err_code, messages.get(err_code, "现在提交不了主邮箱登记，请刷新页面后再试"), status_for(err_code))
         return result
 
     @app.get("/api/v1/admin/overview", dependencies=[Depends(require_admin)])

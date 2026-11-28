@@ -206,6 +206,8 @@ function translateAuditReason(rawReason: string): { title?: string; detail: stri
       return { title: "上游已接单", detail: "开始排队拉买家进家庭组（一般 3-7 小时，最晚 24 小时）" };
     case "shared_poll":
       return { title: "刷新过一次进度", detail: "上游还在排队拉人中，继续等就行" };
+    case "exclusive_poll":
+      return { title: "刷新过一次进度", detail: "上游还在排队分配独立会员邮箱中，继续等就行" };
     case "shared_fulfillment_completed":
       return { title: "拉人完成", detail: "上游确认已发出家庭组邀请，这单完成了" };
     case "warranty_submitted":

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { useCallback, useEffect, useId, useRef, useState } from "react";
 import {
   ackAdminWarranty,
   ApiError,
@@ -159,6 +159,8 @@ export function AdminOrderDrawer({
   const [refundAmountInput, setRefundAmountInput] = useState("");
   const [refundNoteInput, setRefundNoteInput] = useState("");
   const [savingRefund, setSavingRefund] = useState(false);
+  const activeCodeRef = useRef(code);
+  activeCodeRef.current = code;
 
   const loadDetail = useCallback(async () => {
     if (!code) return;
@@ -359,16 +361,19 @@ export function AdminOrderDrawer({
   };
 
   const handleToggleExclusiveActivated = async (activated: boolean) => {
+    const targetCode = code;
     setTogglingActivation(true);
     try {
       const updated = await markAdminExclusiveActivated(
         token,
-        code,
+        targetCode,
         activated,
         activationNote.trim()
       );
-      setDetail(updated);
-      setActivationNote("");
+      if (activeCodeRef.current === targetCode) {
+        setDetail(updated);
+        setActivationNote("");
+      }
       onMutated();
       pushToast(
         activated
@@ -386,7 +391,9 @@ export function AdminOrderDrawer({
         "error"
       );
     } finally {
-      setTogglingActivation(false);
+      if (activeCodeRef.current === targetCode) {
+        setTogglingActivation(false);
+      }
     }
   };
 
@@ -1122,6 +1129,7 @@ export function AdminOrderDrawer({
                           <input
                             type="text"
                             className="input"
+                            maxLength={200}
                             placeholder={
                               warranty.activated_at
                                 ? "撤销备注（可选，例如：误点需重新核查）"

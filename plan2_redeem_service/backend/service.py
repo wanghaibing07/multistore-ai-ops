@@ -775,7 +775,8 @@ class Service:
             if recovered_from_error:
                 updates.update({"last_error_code": None, "last_error_message": None})
             if state_changed or recovered_from_error:
-                self.ledger.transition(code, "waiting_fulfillment", "shared_poll", updates, ("waiting_fulfillment",))
+                poll_reason = "exclusive_poll" if row["sku_key"] == "ultra_exclusive_admin" else "shared_poll"
+                self.ledger.transition(code, "waiting_fulfillment", poll_reason, updates, ("waiting_fulfillment",))
             else:
                 self.ledger.touch_poll(code, updates, allowed=("waiting_fulfillment",))
         return self.public_row(self.ledger.get_code(code))
@@ -1005,7 +1006,7 @@ class Service:
             if row["status"] not in {"delivered_pending_warranty", "completed"} or self._channel16688_delivery_on_hold(row):
                 return {}, "WARRANTY_NOT_ALLOWED"
             old_warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else {}
-            if old_warranty.get("status") == "registered_upstream":
+            if old_warranty.get("status") == "registered_upstream" or bool(old_warranty.get("activated_at")):
                 return {}, "WARRANTY_LOCKED"
             email = admin_email.strip().lower()
             if not is_valid_email(email):
@@ -1077,8 +1078,10 @@ class Service:
                 if path is not None:
                     path.unlink(missing_ok=True)
                 current = self.ledger.get_code(code)
-                if current and json.loads(current.get("warranty_json") or "{}").get("status") == "registered_upstream":
-                    return {}, "WARRANTY_LOCKED"
+                if current:
+                    current_warranty = json.loads(current.get("warranty_json") or "{}")
+                    if current_warranty.get("status") == "registered_upstream" or bool(current_warranty.get("activated_at")):
+                        return {}, "WARRANTY_LOCKED"
                 return {}, "WARRANTY_NOT_ALLOWED"
             if old_path and old_path != screenshot_path_value:
                 old = Path(old_path)

@@ -683,6 +683,18 @@
   border-color: rgba(168, 85, 247, 0.30);
 }
 
+.buyer-page .email-role-tag-buyer {
+  background: rgba(224, 242, 254, 0.92);
+  border-color: rgba(2, 132, 199, 0.24);
+  color: #0369a1;
+}
+
+.buyer-page .email-role-tag-store {
+  background: rgba(243, 232, 255, 0.94);
+  border-color: rgba(168, 85, 247, 0.28);
+  color: #7e22ce;
+}
+
 .buyer-page .input,
 .buyer-page .select,
 .buyer-page .textarea {
@@ -1068,6 +1080,14 @@
 /* Stepper Pixel Sprite & Completed Shimmer Badge */
 .buyer-page .stepper-item {
   position: relative;
+}
+
+.buyer-page .stepper.stepper--four {
+  grid-template-columns:
+    minmax(0, 0.78fr)
+    minmax(0, 1.12fr)
+    minmax(0, 1.38fr)
+    minmax(0, 0.86fr);
 }
 
 .buyer-page .stepper--four .stepper-item {

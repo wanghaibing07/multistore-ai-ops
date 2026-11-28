@@ -8,6 +8,7 @@ export const EXCLUSIVE_WAIT_MAX_MINUTES = 36 * 60;
 interface CastoriceWaitingStageProps {
   record: PublicCodeResponse;
   autoPollIntervalMs?: number;
+  countdownSeconds?: number;
   refreshing?: boolean;
   exclusiveDismissed?: boolean;
 }
@@ -53,7 +54,7 @@ const POKE_HEALING_LINES = [
 ] as const;
 
 const EXCLUSIVE_POKE_LINES = [
-  "你的家庭组邀请已登记在案，源头正按序处理",
+  "你的独享交付排队已登记在案，系统正在按序安排进组",
   "一般 3-7 小时就会同意进组，去忙别的不用一直盯屏",
   "对方一点同意，你就能立马再拉 4 位家人一起用",
   "关掉本页也不会丢进度，随时回来点去家庭组看一眼就行",
@@ -158,8 +159,8 @@ function isTerminalCompletedRecord(record: PublicCodeResponse): boolean {
   if (record.status !== "completed") {
     return false;
   }
-  if (record.product_type === "account" && isExclusiveAwaitingActivation(record, false)) {
-    return false;
+  if (record.product_type === "account") {
+    return Boolean(record.fulfillment.exclusive_activated_at);
   }
   return true;
 }
@@ -218,7 +219,7 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
 
   if (record.status === "validating") {
     return {
-      nodes: ["核对兑换码", "分配会员邮箱", "建组填主邮箱"],
+      nodes: ["核对兑换码", "分配会员邮箱", "建组登记排队"],
       activeNode: 0,
       progressPct: 18,
       caption: "正在核对兑换码，马上分配独立会员邮箱…",
@@ -231,10 +232,10 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
 
   if (record.status === "purchasing") {
     return {
-      nodes: ["核对兑换码", "分配会员邮箱", "建组填主邮箱"],
+      nodes: ["核对兑换码", "分配会员邮箱", "建组登记排队"],
       activeNode: 1,
       progressPct: 50,
-      caption: "正在向上游申请独立会员邮箱，请稍等片刻",
+      caption: "正在申请独立会员邮箱，请稍等片刻",
       statusPill: null,
       spriteSrc: COURIER_RUN_ASSET,
       spriteAlt: "Q 版瑕蝶捧信火速派送",
@@ -244,10 +245,10 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
 
   if (record.status === "waiting_fulfillment") {
     return {
-      nodes: ["核对兑换码", "排队分配邮箱", "建组填主邮箱"],
+      nodes: ["核对兑换码", "排队分配邮箱", "建组登记排队"],
       activeNode: 1,
       progressPct: 56,
-      caption: "上游已接单，正在排队分配独立会员邮箱 · 一般 3-7 小时，最晚 24 小时",
+      caption: "已进入分配队列，正在排队分配独立会员邮箱 · 一般 3-7 小时，最晚 24 小时",
       statusPill: "排队取号中",
       spriteSrc: EXCLUSIVE_CHECK_ASSET,
       spriteAlt: "Q 版瑕蝶核对排队出号进度",
@@ -256,11 +257,11 @@ function resolveCourierTrackMeta(record: PublicCodeResponse): {
   }
 
   return {
-    nodes: ["领取会员邮箱", "建组拉它入组", "填主邮箱进入等待"],
+    nodes: ["领取会员邮箱", "建组拉它入组", "登记交付排队"],
     activeNode: 2,
     progressPct: 82,
-    caption: "会员邮箱领到了！拉它进家庭组后填主邮箱登记质保，即进入 3-7 小时交付等待",
-    statusPill: "第 2/4 步 · 待填主邮箱",
+    caption: "会员邮箱领到了！拉它进家庭组后提交主邮箱登记排队，即进入进组等待",
+    statusPill: "第 2/4 步 · 待登记排队",
     spriteSrc: COURIER_RUN_ASSET,
     spriteAlt: "Q 版瑕蝶捧信火速派送",
     isExclusiveCheckSprite: false,
@@ -271,6 +272,7 @@ function resolveExclusivePhaseMeta(phase: ExclusiveWaitPhase): {
   badgeTitle: string;
   badgeSub: string;
   slaTag: string;
+  captionDone: string;
   etaHeadline: string;
   etaSub: string;
   stickerSrc: string;
@@ -280,39 +282,42 @@ function resolveExclusivePhaseMeta(phase: ExclusiveWaitPhase): {
 } {
   if (phase === "overdue") {
     return {
-      badgeTitle: "等待已超 24 小时",
-      badgeSub: "建议加急",
-      slaTag: "已超 24h 承诺窗",
+      badgeTitle: "等待会员邮箱进组",
+      badgeSub: "已超 24 小时",
+      slaTag: "已超 24 小时",
+      captionDone: "已超 24h · 建议联系客服",
       etaHeadline: "优先加急",
-      etaSub: "已超 24h 承诺，建议联系客服",
+      etaSub: "超 24 小时，建议带凭证加急",
       stickerSrc: EXCLUSIVE_CHECK_ASSET,
       stickerAlt: "Q 版瑕蝶核对超时加急进度",
-      step3Detail: "已超 24 小时承诺窗，请先打开家庭组确认是否已入组，未入组请带凭证找客服加急",
+      step3Detail: "等待已超 24 小时，请先打开家庭组确认是否已入组，未入组请带凭证找客服加急",
       footerHint: "超 24 小时未入组可点击下方凭证按钮，发客服优先人工处理",
     };
   }
   if (phase === "peak") {
     return {
-      badgeTitle: "已进入交付等待 · 高峰排队",
-      badgeSub: "仍在 24h 内",
-      slaTag: "高峰处理窗（7–24h）",
+      badgeTitle: "等待会员邮箱进组",
+      badgeSub: "高峰排队中",
+      slaTag: "高峰排队 · 24h 内",
+      captionDone: "高峰排队处理中",
       etaHeadline: "24 小时内",
-      etaSub: "常规 3-7h 已过，仍在承诺内",
+      etaSub: "高峰排队中，24 小时内完成",
       stickerSrc: EXCLUSIVE_CHECK_ASSET,
       stickerAlt: "Q 版瑕蝶核对高峰排队进度",
-      step3Detail: "当前处于高峰时段，仍在 24 小时承诺窗内，源头同意后即刻生效",
-      footerHint: "源头按序处理中，关掉页面不影响排队进度",
+      step3Detail: "当前处于高峰排队时段，仍在 24 小时内，会员邮箱同意后即刻生效",
+      footerHint: "系统正在按序安排进组，关掉页面不影响排队进度",
     };
   }
   return {
-    badgeTitle: "已进入交付等待 · 黄金窗",
-    badgeSub: "3-7h 常规 / ≤24h",
-    slaTag: "常规交付窗（3–7h）",
+    badgeTitle: "等待会员邮箱进组",
+    badgeSub: "",
+    slaTag: "常规 3-7 小时",
+    captionDone: "等待会员邮箱进组",
     etaHeadline: "3-7 小时",
     etaSub: "最晚不超过 24 小时",
     stickerSrc: EXCLUSIVE_WAIT_ASSET,
     stickerAlt: "Q 版瑕蝶守护独享家庭组等待",
-    step3Detail: "源头正按序登录会员邮箱同意你的家庭组邀请（一般 3-7 小时，最晚 24 小时）",
+    step3Detail: "系统已排入交付队列，会员邮箱将按序同意你的家庭组邀请（一般 3-7 小时，最晚 24 小时）",
     footerHint: "关闭页面也不会影响进组进度，随时回来查看即可",
   };
 }
@@ -406,10 +411,13 @@ function FamilySeatConstellation() {
 export function CastoriceWaitingStage({
   record,
   autoPollIntervalMs = 30_000,
+  countdownSeconds,
   refreshing = false,
   exclusiveDismissed = false,
 }: CastoriceWaitingStageProps) {
   const pollCycleSeconds = Math.max(5, Math.round(autoPollIntervalMs / 1000));
+  const hasExternalCountdown =
+    typeof countdownSeconds === "number" && Number.isFinite(countdownSeconds);
   const currentMode = resolveWaitingStageMode(record, exclusiveDismissed);
   const autoPollingActive =
     currentMode === "exclusive_wait" ||
@@ -522,12 +530,12 @@ export function CastoriceWaitingStage({
   }, [pollCycleSeconds, refreshing]);
 
   useEffect(() => {
-    if (currentMode === "none" || !autoPollingActive) return;
+    if (hasExternalCountdown || currentMode === "none" || !autoPollingActive) return;
     const intervalId = window.setInterval(() => {
       setSecondsLeft((prevSeconds) => (prevSeconds <= 1 ? pollCycleSeconds : prevSeconds - 1));
     }, 1000);
     return () => window.clearInterval(intervalId);
-  }, [autoPollingActive, currentMode, pollCycleSeconds]);
+  }, [autoPollingActive, currentMode, hasExternalCountdown, pollCycleSeconds]);
 
   useEffect(() => {
     if (currentMode !== "tea") return;
@@ -657,7 +665,7 @@ export function CastoriceWaitingStage({
           </div>
           <div className="cws-bloom-sub">
             {isExclusiveDone
-              ? "30 天质保已就绪，现在可以拉入最多 4 位家人共享会员"
+              ? "会员邮箱已成功入组，现在可以正常使用会员了"
               : "已送到，马上为你打开查收操作说明…"}
           </div>
         </div>
@@ -665,9 +673,12 @@ export function CastoriceWaitingStage({
     );
   }
 
+  const effectiveSecondsLeft = hasExternalCountdown
+    ? Math.max(0, Math.floor(countdownSeconds))
+    : secondsLeft;
   const cycleProgressPct = Math.min(
     100,
-    Math.max(12, Math.round(((pollCycleSeconds - secondsLeft) / pollCycleSeconds) * 88 + 12))
+    Math.max(12, Math.round(((pollCycleSeconds - effectiveSecondsLeft) / pollCycleSeconds) * 88 + 12))
   );
   const courierBubbleSideClass =
     courierMeta.progressPct >= 48 ? "is-side-left" : "is-side-right";
@@ -682,16 +693,16 @@ export function CastoriceWaitingStage({
       meta: record.delivery?.delivered_at ? formatDateTime(record.delivery.delivered_at) : "已完成",
     },
     {
-      title: "建组邀请并登记主邮箱",
+      title: "建组邀请并登记交付排队",
       detail:
         record.warranty?.status === "registered_upstream"
-          ? "主邮箱已提交并完成 30 天质保自动报备"
-          : "主邮箱已登记，系统正在同步官方 30 天质保报备",
+          ? "主邮箱已完成系统登记，已排入独享套餐交付队列"
+          : "主邮箱已提交系统登记，已排入独享套餐交付队列",
       state: "done",
       meta: warrantySubmittedTime ? formatDateTime(warrantySubmittedTime) : "已提交",
     },
     {
-      title: "等待源头登录同意进组",
+      title: "等待会员邮箱进组",
       detail: exclusiveMeta.step3Detail,
       state: "active",
       meta: exclusiveMeta.slaTag,
@@ -720,7 +731,9 @@ export function CastoriceWaitingStage({
       : "信使火速派送";
   const sceneSub =
     currentMode === "exclusive_wait"
-      ? ` · ${exclusiveMeta.badgeSub}`
+      ? exclusiveMeta.badgeSub
+        ? ` · ${exclusiveMeta.badgeSub}`
+        : ""
       : currentMode === "tea"
       ? " · 后台会自动帮你查进度"
       : " · 实时更新进度";
@@ -738,7 +751,7 @@ export function CastoriceWaitingStage({
           <span className="cws-scene-dot" aria-hidden="true" />
           <span>
             {sceneTitle}
-            <span className="cws-scene-sub">{sceneSub}</span>
+            {sceneSub ? <span className="cws-scene-sub">{sceneSub}</span> : null}
           </span>
         </div>
 
@@ -762,7 +775,9 @@ export function CastoriceWaitingStage({
                 )}
               </span>
               {!refreshing ? (
-                <span className="cws-countdown-time">{formatCountdownClock(secondsLeft)}</span>
+                <span className="cws-countdown-time">
+                  {formatCountdownClock(effectiveSecondsLeft)}
+                </span>
               ) : null}
             </span>
           ) : courierMeta.statusPill ? (
@@ -845,7 +860,9 @@ export function CastoriceWaitingStage({
               </div>
             ) : (
               <span className="cws-ex-poke-caption">
-                {companionCount === 0 ? "轻触小蝶互动 · 6 席家庭组等待中" : exclusiveMeta.slaTag}
+                {companionCount === 0
+                  ? "轻触小蝶互动 · 6 席家庭组等待中"
+                  : exclusiveMeta.captionDone}
               </span>
             )}
 
@@ -891,7 +908,7 @@ export function CastoriceWaitingStage({
 
             <div className="cws-sla-card" data-testid="cws-sla-progress">
               <div className="cws-sla-head">
-                <span className="cws-sla-title">交付时效标尺</span>
+                <span className="cws-sla-title">预计交付进度</span>
                 <span className="cws-sla-pill">{exclusiveMeta.slaTag}</span>
               </div>
               <div
@@ -910,7 +927,7 @@ export function CastoriceWaitingStage({
               <div className="cws-sla-ticks" aria-hidden="true">
                 <span className="cws-sla-tick is-start">0h</span>
                 <span className="cws-sla-tick is-golden-start">3h</span>
-                <span className="cws-sla-tick is-golden-end">7h 常规窗</span>
+                <span className="cws-sla-tick is-golden-end">7h</span>
                 <span className="cws-sla-tick is-end">24h</span>
               </div>
             </div>

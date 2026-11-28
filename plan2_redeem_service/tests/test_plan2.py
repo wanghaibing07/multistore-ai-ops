@@ -2698,6 +2698,13 @@ def test_exclusive_waiting_fulfillment_metadata_and_activation_toggle(components
         assert pub_after_act["fulfillment"]["exclusive_activated_at"] == activated_at
         assert set(pub_after_act["warranty"]) == {"status", "admin_email_masked", "submitted_at", "has_screenshot", "note"}
 
+        locked_after_act = http_client.post(
+            f"/api/v1/public/codes/{code}/warranty",
+            data={"admin_email": "other@gmail.com", "admin_email_confirm": "other@gmail.com"},
+        )
+        assert locked_after_act.status_code == 409
+        assert locked_after_act.json()["error_code"] == "WARRANTY_LOCKED"
+
         reverted = http_client.post(
             f"/api/v1/admin/codes/{code}/exclusive-activated",
             headers=ADMIN,

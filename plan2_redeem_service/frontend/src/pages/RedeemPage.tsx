@@ -124,26 +124,26 @@ function getBuyerStatusMeta(
       return { label: "排队取号中", tone: "warning", pulse: true };
     }
     if (record.status === "delivered_pending_warranty") {
-      return { label: "已领邮箱 · 待填主邮箱登记质保", tone: "info" };
+      return { label: "已领邮箱 · 待登记交付排队", tone: "info" };
     }
     if (record.status === "completed") {
       if (record.fulfillment.exclusive_activated_at) {
-        return { label: "已生效 · 30 天质保已报备", tone: "success" };
+        return { label: "已进组生效", tone: "success" };
       }
       if (exclusiveAwaiting) {
         if (exclusivePhase === "overdue") {
           return { label: "等待超 24h · 建议联系客服加急", tone: "danger", pulse: true };
         }
         if (exclusivePhase === "peak") {
-          return { label: "等待进组 · 高峰排队中（≤24h）", tone: "warning", pulse: true };
+          return { label: "等待会员邮箱进组 · 高峰排队", tone: "warning", pulse: true };
         }
-        return { label: "已进入交付等待（3-7 小时）", tone: "info", pulse: true };
+        return { label: "等待会员邮箱进组", tone: "info", pulse: true };
       }
       if (record.warranty?.status === "registered_upstream") {
-        return { label: "已完成 · 质保已报备", tone: "success" };
+        return { label: "已完成 · 排队已登记", tone: "success" };
       }
       if (record.warranty?.status === "submitted") {
-        return { label: "保修邮箱已登记 · 报备中", tone: "warning" };
+        return { label: "主邮箱已登记 · 排队中", tone: "warning" };
       }
       return { label: "已完成", tone: "success" };
     }
@@ -158,7 +158,7 @@ function getBuyerStatusMeta(
     case "waiting_fulfillment":
       return { label: "排队拉人中", tone: "warning", pulse: true };
     case "delivered_pending_warranty":
-      return { label: "已领邮箱 · 待填主邮箱登记质保", tone: "info" };
+      return { label: "已领邮箱 · 待登记交付排队", tone: "info" };
     case "completed":
       return { label: "邀请已发出", tone: "success" };
     case "needs_manual_review":
@@ -168,14 +168,20 @@ function getBuyerStatusMeta(
   }
 }
 
-function getBuyerWarrantyBadgeMeta(status: WarrantyStatus | undefined): { label: string; tone: Tone } {
+function getBuyerWarrantyBadgeMeta(
+  status: WarrantyStatus | undefined,
+  exclusiveActivated = false
+): { label: string; tone: Tone } {
+  if (exclusiveActivated) {
+    return { label: "已进组生效", tone: "success" };
+  }
   switch (status) {
     case "submitted":
-      return { label: "邮箱已登记 · 报备中", tone: "warning" };
+      return { label: "已登记排队", tone: "info" };
     case "registered_upstream":
-      return { label: "30 天质保已报备", tone: "success" };
+      return { label: "已登记 · 已入交付队列", tone: "success" };
     default:
-      return { label: "待填主邮箱", tone: "warning" };
+      return { label: "待登记交付排队", tone: "warning" };
   }
 }
 
@@ -513,14 +519,14 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
       if (isExclusiveAwaitingActivation(updated, false)) {
         setExclusiveWaitDismissed(false);
         writeExclusiveDismissedFlag(code, false);
-        pushToast("主邮箱已登记，已进入交付等待（一般 3-7 小时，最晚 24 小时）", "success");
+        pushToast("主邮箱已提交登记，已排入独享套餐交付队列（一般 3-7 小时，最晚 24 小时）", "success");
       } else if (updated.warranty?.status === "registered_upstream") {
-        pushToast("30 天质保已自动完成官方报备", "success");
+        pushToast("主邮箱已完成系统登记，已排入交付队列", "success");
       } else {
-        pushToast("保修邮箱已登记，系统正在帮你向官方报备", "success");
+        pushToast("主邮箱已提交登记，系统正在为你排入交付队列", "success");
       }
     } catch (err) {
-      const message = err instanceof Error ? err.message : "保修提交没成功，请稍后再试。";
+      const message = err instanceof Error ? err.message : "提交登记没成功，请稍后再试。";
       setWarrantyError(message);
       pushToast(message, "error");
     } finally {
@@ -530,13 +536,15 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
 
   const warrantySubmitted =
     record?.warranty?.status === "submitted" || record?.warranty?.status === "registered_upstream";
-  const warrantyLocked = record?.warranty?.status === "registered_upstream";
+  const warrantyLocked =
+    record?.warranty?.status === "registered_upstream" ||
+    Boolean(record?.fulfillment?.exclusive_activated_at);
   const isFullyCompleted = Boolean(record && record.status === "completed" && !exclusiveAwaiting);
   const activeStep = record
     ? resolveStepIndex(record.product_type, record.status, warrantySubmitted, exclusiveAwaiting)
     : 0;
   const steps = isExclusive
-    ? ["领邮箱", "建组填主邮箱", "等待同意进组", "生效完成"]
+    ? ["领邮箱", "建组登记排队", "等待会员邮箱进组", "生效完成"]
     : ["填邮箱", "排队拉人", "收邀请"];
 
   const accountCredentials =
@@ -550,7 +558,10 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
   const extraCredentials = accountCredentials.filter(
     (item) => item.value.trim().toLowerCase() !== storeEmail.trim().toLowerCase()
   );
-  const buyerWarrantyBadge = getBuyerWarrantyBadgeMeta(record?.warranty?.status);
+  const buyerWarrantyBadge = getBuyerWarrantyBadgeMeta(
+    record?.warranty?.status,
+    Boolean(record?.fulfillment.exclusive_activated_at)
+  );
   const isBuyerGmail =
     !record?.buyer_email_masked ||
     /@(gmail|googlemail)\.com$/i.test(record.buyer_email_masked);
@@ -566,7 +577,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
     : "没看到邀请邮件记得翻垃圾箱";
   const exclusiveWarrantyNotice = (
     <div className="inset-panel stack-sm">
-      <strong style={{ fontSize: 13.5 }}>质保和退换说明</strong>
+      <strong style={{ fontSize: 13.5 }}>使用与售后须知</strong>
       <ol className="guide-steps">
         <li>
           <strong>千万别把会员邮箱踢出家庭组</strong>，踢掉立刻掉会员且不保修。
@@ -595,7 +606,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
             <span className="brand-lockup-title">Google AI Ultra 20x 自助提货</span>
           </Link>
           <div className="buyer-topbar-actions">
-            <WallpaperMotionToggle surface="dark" />
+            <WallpaperMotionToggle surface="light" />
             <Link to="/" className="btn btn-ghost btn-sm buyer-back-btn" onClick={handleBackHome}>
               <CastoriceIcon name="arrow-left" size={15} />
               <span>换个兑换码</span>
@@ -740,6 +751,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
               autoPollIntervalMs={
                 exclusiveAwaiting ? EXCLUSIVE_WAIT_POLL_INTERVAL_MS : AUTO_POLL_INTERVAL_MS
               }
+              countdownSeconds={autoPollCountdown}
               refreshing={refreshing}
               exclusiveDismissed={exclusiveWaitDismissed}
             />
@@ -1095,7 +1107,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                 <div>
                   <h2 className="card-title">先领会员邮箱</h2>
                   <p className="card-subtitle">
-                    你自己当组长：先领会员邮箱，再用常用邮箱建家庭组把它拉进去，最后回来填主邮箱登记 30 天质保（免截图）。
+                    你自己当组长：先领会员邮箱，再用常用邮箱建家庭组把它拉进去，最后回来提交主邮箱登记独享套餐交付排队（免截图）。
                   </p>
                 </div>
 
@@ -1107,8 +1119,8 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                       用你自己的<strong>常用邮箱</strong>建 Google 家庭组并拉它进组；对方同意后开通会员，<strong>还能再拉 4 个人</strong>。
                     </li>
                     <li>
-                      发完邀请回来填<strong>你的常用主邮箱</strong>登记 30 天质保（免截图，自动报备；人工一般{" "}
-                      <strong>3-7 小时，最晚 24 小时</strong>）。
+                      发完邀请回来提交<strong>你的常用主邮箱</strong>，系统自动登记独享套餐交付排队（免截图；一般{" "}
+                      <strong>3-7 小时，最晚 24 小时</strong>完成进组）。
                     </li>
                   </ol>
                 </div>
@@ -1159,7 +1171,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                       onChange={(event) => setCheckExclusiveRule(event.target.checked)}
                     />
                     <div className="check-card-body">
-                      <strong>已知晓 0 积分与售后规则</strong>：别把会员邮箱踢出家庭组，0 积分功能慎点 Veo / Flow 等耗积分入口，发完邀请回来登记质保；领号后非商品问题不支持全额退款，个人原因换号或补救收{" "}
+                      <strong>已知晓 0 积分与售后规则</strong>：别把会员邮箱踢出家庭组，0 积分功能慎点 Veo / Flow 等耗积分入口，发完邀请回来登记交付排队；领号后非商品问题不支持全额退款，个人原因换号或补救收{" "}
                       <strong>79.9 元</strong>（不保证一定恢复）。
                     </div>
                   </label>
@@ -1282,22 +1294,24 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                 style={staggerStyle(3)}
                 data-testid="exclusive-waiting-action-card"
               >
-                <div className="ewc-header">
-                  <div>
-                    <h2 className="card-title">已进入交付等待 · 静候源头同意进组</h2>
-                    <p className="card-subtitle">
-                      你的家庭组邀请和 30 天质保主邮箱已全部提交。源头正按序登录会员邮箱同意邀请，
-                      <strong>一般 3-7 小时，最晚 24 小时</strong>完成，无需一直停留在页面。
-                    </p>
+                {exclusivePhase === "overdue" ? (
+                  <div className="ewc-overdue-bar" role="alert">
+                    <div className="ewc-overdue-text">
+                      <strong>等待已超过 24 小时</strong>
+                      <span>
+                        请先点下方「去 Google 家庭组看进度」确认是否已入组；若仍显示待接受，请一键复制凭证发客服优先加急。
+                      </span>
+                    </div>
+                    <CopyButton
+                      text={supportTicketText}
+                      label="复制客服加急凭证"
+                      copiedLabel="✓ 已复制凭证"
+                      toastMessage="已复制加急排查凭证，直接发给客服即可优先处理"
+                      variant="primary"
+                      size="sm"
+                    />
                   </div>
-                  <span className="ewc-sla-chip">
-                    {exclusivePhase === "overdue"
-                      ? "已超 24h · 建议加急"
-                      : exclusivePhase === "peak"
-                      ? "高峰窗 · 24h 内交付"
-                      : "常规窗 · 3-7 小时"}
-                  </span>
-                </div>
+                ) : null}
 
                 <div className="ewc-cta-grid">
                   <a
@@ -1322,58 +1336,11 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                   </a>
                 </div>
 
-                {exclusivePhase === "overdue" ? (
-                  <div className="ewc-overdue-bar" role="alert">
-                    <div className="ewc-overdue-text">
-                      <strong>等待已超过 24 小时承诺窗</strong>
-                      <span>
-                        请先点上方「去 Google 家庭组看进度」确认是否已入组；若仍显示待接受，请一键复制凭证发客服优先加急。
-                      </span>
-                    </div>
-                    <CopyButton
-                      text={supportTicketText}
-                      label="复制客服加急凭证"
-                      copiedLabel="✓ 已复制凭证"
-                      toastMessage="已复制加急排查凭证，直接发给客服即可优先处理"
-                      variant="primary"
-                      size="sm"
-                    />
-                  </div>
-                ) : null}
-
-                <details className="ewc-checklist">
-                  <summary className="ewc-checklist-summary">
-                    生效后拉 4 位家人避坑清单（建议提前看一眼）
-                  </summary>
-                  <div className="ewc-checklist-body">
-                    <ol className="guide-steps">
-                      <li>
-                        <strong>千万别把商店会员邮箱踢出家庭组</strong>，否则全组立即掉会员且不在质保范围内。
-                      </li>
-                      <li>
-                        你作为家庭组长还能再拉 <strong>4 位家人</strong>（共 6 席）；家人进组前同样需要 12 个月内未频繁换组，且先去{" "}
-                        <a
-                          href="https://payments.google.com/gp/w/home/settings"
-                          target="_blank"
-                          rel="noreferrer"
-                        >
-                          payments.google.com/gp/w/home/settings
-                        </a>{" "}
-                        关闭旧付款资料（不会删卡）。
-                      </li>
-                      <li>
-                        <strong>0 积分套餐慎点 Veo / Flow 等耗积分入口</strong>；日常对话、Deep Research、代码和 Antigravity 客户端均可正常使用。
-                      </li>
-                    </ol>
-                  </div>
-                </details>
-
                 <div className="ewc-footer-bar">
                   <span className="ewc-footer-sync" aria-live="polite">
                     <CastoriceIcon name="refresh" size={14} />
                     <span>
-                      每 60 秒自动同步状态 · 下次{" "}
-                      <strong className="tabular">{autoPollCountdown}s</strong>
+                      关掉页面不影响排队，系统每 60 秒自动同步
                     </span>
                   </span>
                   <div className="ewc-footer-actions">
@@ -1413,14 +1380,14 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                 style={staggerStyle(3)}
                 data-testid="exclusive-restore-wait-bar"
               >
-                <span>已收起独享交付等待视图 · 如家庭组尚未显示生效，可随时重新展开跟踪进度</span>
+                <span>已收起等待进度视图 · 如家庭组尚未显示生效，可随时重新展开</span>
                 <button
                   type="button"
                   className="btn btn-secondary btn-sm"
                   data-testid="exclusive-restore-wait-btn"
                   onClick={handleRestoreExclusiveWait}
                 >
-                  重新展开等待页
+                  重新展开进度
                 </button>
               </div>
             ) : null}
@@ -1435,7 +1402,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                 <div className="callout callout-success">
                   <CastoriceIcon name="check" size={20} className="callout-icon" />
                   <div>
-                    <strong>独享家庭组已生效 · 30 天质保已就绪</strong>
+                    <strong>独享家庭组已进组生效</strong>
                     <div style={{ marginTop: 4 }}>
                       商店会员邮箱已加入你的家庭组（确认时间：
                       <span className="tabular">
@@ -1471,8 +1438,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
             ) : null}
 
             {/* Exclusive: Delivered (Pending Warranty or Completed) */}
-            {isExclusive &&
-            (record.status === "delivered_pending_warranty" || record.status === "completed") ? (
+            {isExclusive && record.status === "delivered_pending_warranty" ? (
               <>
                 <section className="card stack redeem-stagger-block" style={staggerStyle(3)}>
                   <div className="row-between">
@@ -1489,7 +1455,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                       <div className="stack-sm grow">
                         <div className="email-line">
                           <span className="email-role-tag email-role-tag-store">会员邮箱（商店邮箱）</span>
-                          <span className="field-hint">用来拉进家庭组，别填到下面保修框</span>
+                          <span className="field-hint">用来拉进家庭组，别填到下面登记框</span>
                         </div>
                         <div className="credential-value">{storeEmail}</div>
                       </div>
@@ -1540,237 +1506,295 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                         点「发送邀请」，把上面<strong>会员邮箱</strong>粘进去；对方同意后生效，<strong>还能再拉 4 个人</strong>。
                       </li>
                       <li>
-                        发完邀请在下面填<strong>你的常用主邮箱</strong>登记 30 天质保（免截图，自动报备；人工{" "}
-                        <strong>3-7 小时，最晚 24 小时</strong>）。
+                        发完邀请在下面提交<strong>你的常用主邮箱</strong>，系统登记后自动排入独享套餐交付队列（免截图；一般{" "}
+                        <strong>3-7 小时，最晚 24 小时</strong>进组）。
                       </li>
                     </ol>
                   </div>
                 </section>
 
-                {/* Warranty Section */}
+                {/* Delivery Queue Registration Section */}
                 <section className="card stack redeem-stagger-block" style={staggerStyle(4)}>
                   <div className="row-between">
                     <div style={{ flex: "1 1 240px", minWidth: 0 }}>
-                      <h2 className="card-title">第 3 步：填主邮箱登记 30 天质保</h2>
+                      <h2 className="card-title">第 3 步：提交主邮箱，登记交付排队</h2>
                       <p className="card-subtitle">
-                        填你建家庭组的常用主邮箱（免截图），提交后自动报备质保。
+                        填你建家庭组的常用主邮箱（免截图），提交后自动登记独享套餐交付排队。
                       </p>
                     </div>
                     <ToneBadge label={buyerWarrantyBadge.label} tone={buyerWarrantyBadge.tone} />
                   </div>
 
-                  {warrantySubmitted && (!editingWarranty || warrantyLocked) ? (
-                    <div className="stack">
-                      <div className={`callout ${warrantyLocked ? "callout-success" : "callout-info"}`}>
-                        <CastoriceIcon name="check" size={19} className="callout-icon" />
-                        <div>
-                          <strong>
-                            {warrantyLocked
-                              ? "30 天质保已自动完成官方报备"
-                              : "保修邮箱已登记"}
-                          </strong>
-                          <div style={{ marginTop: 4 }}>
-                            {warrantyLocked ? (
-                              <>
-                                你的主邮箱{" "}
-                                <span className="mono">{record.warranty?.admin_email_masked || "-"}</span>{" "}
-                                {exclusiveAwaiting
-                                  ? "已完成 30 天质保报备，当前已进入源头同意进组等待（一般 3-7 小时，最晚 24 小时）。"
-                                  : "已完成报备，安心用就行。"}
-                              </>
-                            ) : (
-                              <>
-                                已登记主邮箱{" "}
-                                <span className="mono">{record.warranty?.admin_email_masked || "-"}</span>
-                                ，正在报备质保（3-7 小时内完成，最晚 24 小时）。
-                              </>
-                            )}
-                          </div>
-                        </div>
+                  <form onSubmit={handleWarrantySubmit} className="stack">
+                    <GmailDoubleInput
+                      email={adminEmail}
+                      onEmailChange={setAdminEmail}
+                      primaryLabel="建家庭组的常用主邮箱"
+                      warningText="填你自己建组的常用邮箱，别填成上面的会员邮箱。"
+                      disabled={submittingWarranty}
+                    />
+
+                    {warrantyUsesStoreEmail ? (
+                      <div className="callout callout-danger" role="alert">
+                        <CastoriceIcon name="alert" size={18} className="callout-icon" />
+                        <div>你填成了上面的会员邮箱，请改成你自己的常用邮箱。</div>
                       </div>
+                    ) : null}
 
-                      <div className="kv-grid">
-                        <div className="kv-item">
-                          <div className="kv-label">你的常用主邮箱</div>
-                          <div className="kv-value mono">{record.warranty?.admin_email_masked || "-"}</div>
-                        </div>
-                        <div className="kv-item">
-                          <div className="kv-label">会员邮箱（商店邮箱）</div>
-                          <div className="kv-value mono">{storeEmail || "-"}</div>
-                        </div>
-                        <div className="kv-item">
-                          <div className="kv-label">提交时间</div>
-                          <div className="kv-value tabular">{formatDateTime(record.warranty?.submitted_at)}</div>
-                        </div>
-                        <div className="kv-item">
-                          <div className="kv-label">报备状态</div>
-                          <div className="kv-value">
-                            {warrantyLocked ? "已完成官方报备" : "待官方报备完成"}
-                          </div>
-                        </div>
-                      </div>
-
-                      {record.warranty?.note ? (
-                        <div className="inset-panel" style={{ fontSize: 13.5, color: "var(--ink-2)" }}>
-                          <span style={{ color: "var(--ink-3)" }}>备注：</span>
-                          {record.warranty.note}
-                        </div>
-                      ) : null}
-
-                      {!warrantyLocked ? (
-                        <div className="row" style={{ justifyContent: "flex-end" }}>
-                          <button
-                            type="button"
-                            className="btn btn-secondary btn-sm"
-                            onClick={() => {
-                              setWarrantyError(null);
-                              setEditingWarranty(true);
-                            }}
-                          >
-                            修改主邮箱
-                          </button>
-                        </div>
-                      ) : null}
-                    </div>
-                  ) : (
-                    <form onSubmit={handleWarrantySubmit} className="stack">
-                      <GmailDoubleInput
-                        email={adminEmail}
-                        onEmailChange={setAdminEmail}
-                        primaryLabel="建家庭组的常用主邮箱"
-                        warningText="填你自己建组的常用邮箱，别填成上面的会员邮箱。"
+                    <div className="field-group">
+                      <label className="field-label" htmlFor="warranty-note-input">
+                        <span>补充备注（选填）</span>
+                        <span className="field-hint tabular">{warrantyNote.length}/300</span>
+                      </label>
+                      <input
+                        id="warranty-note-input"
+                        type="text"
+                        maxLength={300}
+                        enterKeyHint="done"
+                        className="input"
+                        placeholder="已发家庭组邀请，请帮忙安排进组"
+                        value={warrantyNote}
+                        onChange={(event) => setWarrantyNote(event.target.value)}
                         disabled={submittingWarranty}
                       />
+                    </div>
 
-                      {warrantyUsesStoreEmail ? (
-                        <div className="callout callout-danger" role="alert">
-                          <CastoriceIcon name="alert" size={18} className="callout-icon" />
-                          <div>你填成了上面的会员邮箱，请改成你自己的常用邮箱。</div>
-                        </div>
-                      ) : null}
-
-                      <div className="field-group">
-                        <label className="field-label" htmlFor="warranty-note-input">
-                          <span>补充备注（选填）</span>
-                          <span className="field-hint tabular">{warrantyNote.length}/300</span>
-                        </label>
-                        <input
-                          id="warranty-note-input"
-                          type="text"
-                          maxLength={300}
-                          enterKeyHint="done"
-                          className="input"
-                          placeholder="已发邀请，帮忙登记质保"
-                          value={warrantyNote}
-                          onChange={(event) => setWarrantyNote(event.target.value)}
-                          disabled={submittingWarranty}
-                        />
+                    {warrantyError ? (
+                      <div className="callout callout-danger" role="alert">
+                        <CastoriceIcon name="alert" size={18} className="callout-icon" />
+                        <div>{warrantyError}</div>
                       </div>
+                    ) : null}
 
-                      {warrantyError ? (
-                        <div className="callout callout-danger" role="alert">
-                          <CastoriceIcon name="alert" size={18} className="callout-icon" />
-                          <div>{warrantyError}</div>
-                        </div>
-                      ) : null}
-
-                      <div className="row">
-                        {editingWarranty ? (
-                          <button
-                            type="button"
-                            className="btn btn-secondary"
-                            onClick={() => setEditingWarranty(false)}
-                            disabled={submittingWarranty}
-                          >
-                            取消修改
-                          </button>
-                        ) : null}
-                        <button
-                          type="submit"
-                          className={`btn btn-primary btn-lg grow ${submittingWarranty ? "is-loading" : ""}`}
-                          disabled={
-                            !warrantyEmailCheck.valid ||
-                            warrantyUsesStoreEmail ||
-                            submittingWarranty
-                          }
-                          aria-busy={submittingWarranty}
-                        >
-                          {submittingWarranty ? (
-                            <>
-                              <CastoriceIcon name="refresh" size={17} spin />
-                              <span>正在提交报备...</span>
-                            </>
-                          ) : (
-                            <>
-                              <CastoriceIcon name="check" size={18} />
-                              <span>提交主邮箱并登记质保</span>
-                            </>
-                          )}
-                        </button>
-                      </div>
-                    </form>
-                  )}
+                    <button
+                      type="submit"
+                      className={`btn btn-primary btn-lg btn-block ${submittingWarranty ? "is-loading" : ""}`}
+                      disabled={
+                        !warrantyEmailCheck.valid ||
+                        warrantyUsesStoreEmail ||
+                        submittingWarranty
+                      }
+                      aria-busy={submittingWarranty}
+                    >
+                      {submittingWarranty ? (
+                        <>
+                          <CastoriceIcon name="refresh" size={17} spin />
+                          <span>正在提交登记...</span>
+                        </>
+                      ) : (
+                        <>
+                          <CastoriceIcon name="check" size={18} />
+                          <span>提交主邮箱，进入交付排队</span>
+                        </>
+                      )}
+                    </button>
+                  </form>
 
                   {exclusiveWarrantyNotice}
                 </section>
               </>
             ) : null}
+
+            {/* Exclusive: Compact Registered Delivery Summary (Completed / Waiting / Activated) */}
+            {isExclusive && record.status === "completed" ? (
+              <section
+                className="card stack redeem-stagger-block"
+                style={staggerStyle(4)}
+                data-testid="exclusive-delivery-summary"
+              >
+                <div className="row-between">
+                  <h2 className="card-title">已登记的交付信息</h2>
+                  <ToneBadge label={buyerWarrantyBadge.label} tone={buyerWarrantyBadge.tone} />
+                </div>
+
+                {storeEmail ? (
+                  <div className="store-email-box">
+                    <div className="stack-sm grow">
+                      <div className="email-line">
+                        <span className="email-role-tag email-role-tag-store">会员邮箱（商店邮箱）</span>
+                        <span className="field-hint">已发放的会员邮箱，可随时核对家庭组成员</span>
+                      </div>
+                      <div className="credential-value">{storeEmail}</div>
+                    </div>
+                    <CopyButton
+                      text={storeEmail}
+                      label="复制会员邮箱"
+                      toastMessage="会员邮箱已复制"
+                      variant="secondary"
+                    />
+                  </div>
+                ) : null}
+
+                {extraCredentials.length > 0 ? (
+                  <div className="stack-sm">
+                    {extraCredentials.map((cred) => (
+                      <div key={`${cred.label}-${cred.value}`} className="credential-box">
+                        <div className="grow">
+                          <div className="credential-label">{cred.label}</div>
+                          <div className="credential-value">{cred.value}</div>
+                        </div>
+                        <CopyButton
+                          text={cred.value}
+                          label="复制"
+                          toastMessage={`已复制${cred.label}`}
+                          variant="secondary"
+                        />
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+
+                {warrantySubmitted && (!editingWarranty || warrantyLocked) ? (
+                  <div className="stack-sm">
+                    <div className="kv-grid">
+                      <div className="kv-item">
+                        <div className="kv-label">你的常用主邮箱</div>
+                        <div className="kv-value mono">{record.warranty?.admin_email_masked || "-"}</div>
+                      </div>
+                      <div className="kv-item">
+                        <div className="kv-label">登记状态</div>
+                        <div className="kv-value">
+                          {exclusiveActivated
+                            ? "已进组生效"
+                            : warrantyLocked
+                            ? "已完成系统登记"
+                            : "已进入交付排队"}
+                        </div>
+                      </div>
+                      <div className="kv-item">
+                        <div className="kv-label">提交时间</div>
+                        <div className="kv-value tabular">{formatDateTime(record.warranty?.submitted_at)}</div>
+                      </div>
+                      <div className="kv-item">
+                        <div className="kv-label">领号时间</div>
+                        <div className="kv-value tabular">{formatDateTime(record.delivery?.delivered_at)}</div>
+                      </div>
+                    </div>
+
+                    {record.warranty?.note ? (
+                      <div className="inset-panel" style={{ fontSize: 13.5, color: "var(--ink-2)" }}>
+                        <span style={{ color: "var(--ink-3)" }}>备注：</span>
+                        {record.warranty.note}
+                      </div>
+                    ) : null}
+
+                    {!warrantyLocked ? (
+                      <div className="ewc-edit-bar">
+                        <span className="ewc-edit-hint">填错了主邮箱？进组前可随时修改</span>
+                        <button
+                          type="button"
+                          className="btn btn-secondary btn-sm"
+                          onClick={() => {
+                            setWarrantyError(null);
+                            setEditingWarranty(true);
+                          }}
+                        >
+                          修改主邮箱
+                        </button>
+                      </div>
+                    ) : null}
+                  </div>
+                ) : (
+                  <form onSubmit={handleWarrantySubmit} className="stack">
+                    <GmailDoubleInput
+                      email={adminEmail}
+                      onEmailChange={setAdminEmail}
+                      primaryLabel="建家庭组的常用主邮箱"
+                      warningText="填你自己建组的常用邮箱，别填成上面的会员邮箱。"
+                      disabled={submittingWarranty}
+                    />
+
+                    {warrantyUsesStoreEmail ? (
+                      <div className="callout callout-danger" role="alert">
+                        <CastoriceIcon name="alert" size={18} className="callout-icon" />
+                        <div>你填成了上面的会员邮箱，请改成你自己的常用邮箱。</div>
+                      </div>
+                    ) : null}
+
+                    <div className="field-group">
+                      <label className="field-label" htmlFor="warranty-note-input">
+                        <span>补充备注（选填）</span>
+                        <span className="field-hint tabular">{warrantyNote.length}/300</span>
+                      </label>
+                      <input
+                        id="warranty-note-input"
+                        type="text"
+                        maxLength={300}
+                        enterKeyHint="done"
+                        className="input"
+                        placeholder="已发家庭组邀请，请帮忙安排进组"
+                        value={warrantyNote}
+                        onChange={(event) => setWarrantyNote(event.target.value)}
+                        disabled={submittingWarranty}
+                      />
+                    </div>
+
+                    {warrantyError ? (
+                      <div className="callout callout-danger" role="alert">
+                        <CastoriceIcon name="alert" size={18} className="callout-icon" />
+                        <div>{warrantyError}</div>
+                      </div>
+                    ) : null}
+
+                    <div className="row">
+                      {editingWarranty ? (
+                        <button
+                          type="button"
+                          className="btn btn-secondary"
+                          onClick={() => setEditingWarranty(false)}
+                          disabled={submittingWarranty}
+                        >
+                          取消修改
+                        </button>
+                      ) : null}
+                      <button
+                        type="submit"
+                        className={`btn btn-primary btn-lg grow ${submittingWarranty ? "is-loading" : ""}`}
+                        disabled={
+                          !warrantyEmailCheck.valid ||
+                          warrantyUsesStoreEmail ||
+                          submittingWarranty
+                        }
+                        aria-busy={submittingWarranty}
+                      >
+                        {submittingWarranty ? (
+                          <>
+                            <CastoriceIcon name="refresh" size={17} spin />
+                            <span>正在保存登记...</span>
+                          </>
+                        ) : (
+                          <>
+                            <CastoriceIcon name="check" size={18} />
+                            <span>保存主邮箱登记</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </form>
+                )}
+
+                <details className="ewc-notice-details">
+                  <summary className="ewc-notice-summary">使用与售后须知</summary>
+                  <div className="ewc-notice-body">
+                    <ol className="guide-steps">
+                      <li>
+                        <strong>千万别把会员邮箱踢出家庭组</strong>，踢掉立刻掉会员且不保修。
+                      </li>
+                      <li>
+                        <strong>质保 30 天</strong>（从领号起算），非个人原因掉会员免费保修；领号后非商品问题不支持全额退款。
+                      </li>
+                      <li>自己账号被封、登不上不保修。</li>
+                      <li>
+                        个人原因（封号、12 个月换组限制、误踢会员邮箱）导致用不了，补救或换号收{" "}
+                        <strong>79.9 元</strong>（不保证一定恢复）。
+                      </li>
+                    </ol>
+                  </div>
+                </details>
+              </section>
+            ) : null}
           </>
         ) : null}
-
-        <section className="card stack faq-card" aria-label="自助排障与常见问题">
-          <div>
-            <h2 className="card-title" style={{ fontSize: 16 }}>
-              自助排障与常见问题
-            </h2>
-            <p className="card-subtitle">
-              90% 的进组、地区提示和客户端问题都可以按下面几步自己秒解决
-            </p>
-          </div>
-          <div className="faq-list">
-            <details className="faq-item">
-              <summary className="faq-summary">1. 一直没收到 Google 家庭组邀请邮件怎么办？</summary>
-              <div className="faq-body">
-                先打开 Gmail 的「垃圾邮件 / 推广 / 所有邮件」搜索 <code>Google Family</code>；排队拉人一般需要{" "}
-                <strong>3-7 小时（最晚 24 小时）</strong>，页面会自动刷新状态。核对页面里显示的邮箱是不是你自己填的邮箱，如已超 24 小时未收到，请点页面按钮复制排查凭证联系客服。
-              </div>
-            </details>
-            <details className="faq-item">
-              <summary className="faq-summary">2. 关闭 Google 付款资料会删掉我的银行卡或信用卡吗？</summary>
-              <div className="faq-body">
-                <strong>不会删除你绑定的银行卡/信用卡</strong>，也不会删掉 Gmail、云盘等账号数据。关闭付款资料只是清除旧的付款国家/地区绑定，避免接受家庭组邀请时报错「您所在的国家/地区不同」。入口：{" "}
-                <a href="https://payments.google.com/gp/w/home/settings" target="_blank" rel="noreferrer">
-                  payments.google.com/gp/w/home/settings
-                </a>
-                （拉到最底部关闭）。
-              </div>
-            </details>
-            <details className="faq-item">
-              <summary className="faq-summary">3. 提示“12 个月内只能切换一次家庭组”或换号怎么处理？</summary>
-              <div className="faq-body">
-                Google 规定每个账号 <strong>12 个月内仅能换 1 次家庭组</strong>。如果提示已达上限，说明这个号一年内进出过别的家庭组，需要换一个没受限的干净 Gmail（按页面对应商品的换号规则处理）。
-                <strong>如遇掉组或维护处理中，切勿自行退出家庭组</strong>，否则可能立刻触发 12 个月冷却。
-              </div>
-            </details>
-            <details className="faq-item">
-              <summary className="faq-summary">4. 进组后 Antigravity / Gemini 提示地区不支持或没生效？</summary>
-              <div className="faq-body">
-                桌面客户端（如 Antigravity）常不走普通系统代理：使用 <strong>flclash / Clash Verge</strong> 等工具时，请切换到干净的美国或支持地区节点，开启 <strong>TUN 模式（虚拟网卡）</strong>并尽量用全局/确保 Google 域名走代理，随后完全退出并重启客户端或无痕浏览器重新登录验证。
-              </div>
-            </details>
-            <details className="faq-item">
-              <summary className="faq-summary">5. 独享家庭组怎么登记 30 天质保？</summary>
-              <div className="faq-body">
-                领到会员邮箱后，用你自己的<strong>常用主邮箱</strong>在{" "}
-                <a href="https://g.co/yourfamily" target="_blank" rel="noreferrer">
-                  g.co/yourfamily
-                </a>{" "}
-                创建家庭组并邀请该会员邮箱加入，然后回到本页底部填写<strong>你的常用主邮箱</strong>提交报备（不要填领到的会员邮箱）。提交后即进入交付等待，源头一般{" "}
-                <strong>3-7 小时（最晚 24 小时）</strong>同意进组，本页会自动同步进度；30 天内非个人原因掉会员免费质保。
-              </div>
-            </details>
-          </div>
-        </section>
 
         <footer className="footer-links">
           <span>Google AI Ultra 20x 自助提货</span>
