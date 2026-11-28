@@ -70,6 +70,7 @@ class Settings:
     poll_interval_seconds: int = 1200
     purchasing_stuck_timeout_seconds: int = 300
     shared_sla_eta_text: str = "一般 3-7 小时内发家庭组邀请，最晚 24 小时"
+    exclusive_sla_eta_text: str = "一般 3-7 小时内完成交付，最晚 24 小时"
     support_contact_hint: str = "有问题请把订单号和兑换码发给客服。"
     agiso_app_id: str = ""
     agiso_app_secret: str = ""

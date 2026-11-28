@@ -5,6 +5,7 @@ import {
   fetchAdminWarrantyScreenshot,
   forwardAdminWarranty,
   getAdminCodeDetail,
+  markAdminExclusiveActivated,
   pollAdminCode,
   recordAdminUpstreamRefund,
   resetAdminCodeToUnused,
@@ -78,6 +79,9 @@ function buildDisputeEvidenceSummary(detail: AdminCodeDetail): string {
         detail.warranty.registered_at ? `（报备于 ${formatDateTime(detail.warranty.registered_at)}）` : ""
       }`
     );
+    if (detail.warranty.activated_at) {
+      lines.push(`独享进组生效：${formatDateTime(detail.warranty.activated_at)}`);
+    }
   }
   if (detail.last_error_code || detail.last_error_message) {
     lines.push(
@@ -130,6 +134,8 @@ export function AdminOrderDrawer({
   const [ackNote, setAckNote] = useState("");
   const [acking, setAcking] = useState(false);
   const [forwarding, setForwarding] = useState(false);
+  const [togglingActivation, setTogglingActivation] = useState(false);
+  const [activationNote, setActivationNote] = useState("");
 
   const [overridePriceLimit, setOverridePriceLimit] = useState(false);
   const [forceNewOrder, setForceNewOrder] = useState(false);
@@ -186,6 +192,7 @@ export function AdminOrderDrawer({
     setResetNote("");
     setResetConfirmOpen(false);
     setAckNote("");
+    setActivationNote("");
     setRevokeReason("买家退款或手动作废");
     setRevokeConfirmOpen(false);
     setRevokeForceRequired(false);
@@ -348,6 +355,38 @@ export function AdminOrderDrawer({
       }
     } finally {
       setForwarding(false);
+    }
+  };
+
+  const handleToggleExclusiveActivated = async (activated: boolean) => {
+    setTogglingActivation(true);
+    try {
+      const updated = await markAdminExclusiveActivated(
+        token,
+        code,
+        activated,
+        activationNote.trim()
+      );
+      setDetail(updated);
+      setActivationNote("");
+      onMutated();
+      pushToast(
+        activated
+          ? "已标记为进组生效，买家页将退出等待状态"
+          : "已撤销进组生效标记，买家页将重新显示等待引导",
+        "success"
+      );
+    } catch (caught) {
+      if (caught instanceof ApiError && caught.status === 401) {
+        onUnauthorized();
+        return;
+      }
+      pushToast(
+        caught instanceof ApiError ? caught.message : "更新独享进组生效状态失败",
+        "error"
+      );
+    } finally {
+      setTogglingActivation(false);
     }
   };
 
@@ -1053,6 +1092,75 @@ export function AdminOrderDrawer({
                         </button>
                       </div>
                     )}
+
+                    {isExclusive &&
+                      detail.status === "completed" &&
+                      Boolean(warranty.admin_email?.trim()) && (
+                        <div
+                          className="stack-sm"
+                          style={{
+                            paddingTop: 12,
+                            marginTop: 10,
+                            borderTop: "1px solid var(--border)",
+                          }}
+                        >
+                          <div className="row-between">
+                            <strong style={{ fontSize: 13.5 }}>独享进组生效状态</strong>
+                            <span
+                              className={`badge ${
+                                warranty.activated_at ? "badge-success" : "badge-warning"
+                              }`}
+                            >
+                              {warranty.activated_at ? "已进组生效" : "买家等待进组中"}
+                            </span>
+                          </div>
+                          <p style={{ margin: 0, fontSize: 12.5, color: "var(--ink-3)" }}>
+                            {warranty.activated_at
+                              ? `已于 ${formatDateTime(warranty.activated_at)} 标记进组生效，买家提货页已切换为已生效完成态。`
+                              : "确认源头已登录商店邮箱同意家庭组邀请且会员生效后，点此可立即结束买家页面的等待状态。"}
+                          </p>
+                          <input
+                            type="text"
+                            className="input"
+                            placeholder={
+                              warranty.activated_at
+                                ? "撤销备注（可选，例如：误点需重新核查）"
+                                : "生效备注（可选，例如：源头已点同意进组）"
+                            }
+                            value={activationNote}
+                            onChange={(event) => setActivationNote(event.target.value)}
+                            disabled={togglingActivation}
+                          />
+                          <button
+                            type="button"
+                            className={`btn ${
+                              warranty.activated_at ? "btn-secondary" : "btn-primary"
+                            } btn-block ${togglingActivation ? "is-loading" : ""}`}
+                            disabled={togglingActivation}
+                            aria-busy={togglingActivation}
+                            onClick={() =>
+                              void handleToggleExclusiveActivated(!Boolean(warranty.activated_at))
+                            }
+                          >
+                            {togglingActivation ? (
+                              <>
+                                <CastoriceIcon name="refresh" size={17} spin />
+                                <span>保存中...</span>
+                              </>
+                            ) : warranty.activated_at ? (
+                              <>
+                                <CastoriceIcon name="retry" size={16} />
+                                <span>撤销生效标记</span>
+                              </>
+                            ) : (
+                              <>
+                                <CastoriceIcon name="check" size={17} />
+                                <span>标记已进组生效</span>
+                              </>
+                            )}
+                          </button>
+                        </div>
+                      )}
                   </section>
                   );
                 })()}

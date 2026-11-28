@@ -54,6 +54,9 @@ export interface PublicFulfillmentInfo {
   completed_at: string | null;
   last_polled_at: string | null;
   elapsed_minutes: number | null;
+  warranty_submitted_at?: string | null;
+  exclusive_activated_at?: string | null;
+  warranty_elapsed_minutes?: number | null;
 }
 
 export interface PublicCodeResponse {
@@ -200,6 +203,7 @@ export interface AdminWarrantyDetail {
   tg_message_id?: number | string | null;
   tg_sent_at?: string | null;
   tg_error?: string | null;
+  activated_at?: string | null;
 }
 
 export interface AuditEventItem {

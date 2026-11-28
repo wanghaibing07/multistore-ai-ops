@@ -478,13 +478,17 @@ class Service:
             updates.update(self._canboso_cancellation(status))
         elif sku["product_type"] == "account":
             delivery = self._safe_delivery(result.get("delivery") or {})
-            updates.update({
-                "delivery_json": json.dumps(delivery, ensure_ascii=False),
-                "completed_at": None,
-                "last_error_code": None,
-                "last_error_message": None,
-            })
-            target, reason = "delivered_pending_warranty", "exclusive_delivered"
+            if status in {"completed", "delivered"} or self._has_delivery_credentials(delivery):
+                updates.update({
+                    "delivery_json": json.dumps(delivery, ensure_ascii=False),
+                    "completed_at": None,
+                    "last_error_code": None,
+                    "last_error_message": None,
+                })
+                target, reason = "delivered_pending_warranty", "exclusive_delivered"
+            else:
+                updates.update({"last_error_code": None, "last_error_message": None})
+                target, reason = "waiting_fulfillment", "exclusive_order_accepted"
         else:
             updates.update({"last_error_code": None, "last_error_message": None})
             target, reason = "waiting_fulfillment", "shared_order_accepted"
@@ -1137,6 +1141,41 @@ class Service:
             )
             return self.admin_detail(self.ledger.get_code(code)), None
 
+    def mark_exclusive_activated(
+        self,
+        code: str,
+        activated: bool = True,
+        note: str = "",
+    ) -> tuple[dict[str, Any], Optional[str]]:
+        with self._warranty_lock(code):
+            row = self.ledger.get_code(code)
+            if not row:
+                return {}, "CODE_NOT_FOUND"
+            if row["sku_key"] != "ultra_exclusive_admin":
+                return {}, "WARRANTY_NOT_APPLICABLE"
+            warranty = json.loads(row["warranty_json"]) if row.get("warranty_json") else {}
+            if (
+                row["status"] != "completed"
+                or not isinstance(warranty, dict)
+                or not str(warranty.get("admin_email") or "").strip()
+            ):
+                return {}, "WARRANTY_NOT_ALLOWED"
+            clean_note = note.strip()
+            if activated:
+                warranty["activated_at"] = warranty.get("activated_at") or now_iso()
+                reason = f"exclusive_activated:{clean_note}" if clean_note else "exclusive_activated"
+            else:
+                warranty["activated_at"] = None
+                reason = f"exclusive_activation_reverted:{clean_note}" if clean_note else "exclusive_activation_reverted"
+            self.ledger.transition(
+                code,
+                "completed",
+                reason,
+                {"warranty_json": json.dumps(warranty, ensure_ascii=False)},
+                ("completed",),
+            )
+            return self.admin_detail(self.ledger.get_code(code)), None
+
     def record_upstream_refund(self, code: str, refund_usd: float, note: str = "") -> tuple[dict[str, Any], Optional[str]]:
         row = self.ledger.get_code(code)
         if not row:
@@ -1223,6 +1262,16 @@ class Service:
             "delivered_at": now_iso(),
         }
 
+    @staticmethod
+    def _has_delivery_credentials(delivery: Optional[dict[str, Any]]) -> bool:
+        if not isinstance(delivery, dict):
+            return False
+        return bool(
+            str(delivery.get("account_text") or "").strip()
+            or delivery.get("credentials")
+            or delivery.get("raw_lines")
+        )
+
     def _code_row(self, code: str) -> dict[str, Any]:
         return self.ledger.get_code(code)
 
@@ -1252,12 +1301,21 @@ class Service:
 
     @staticmethod
     def _elapsed_minutes(row: dict[str, Any]) -> Optional[int]:
-        if not row.get("submitted_at"):
+        return Service._elapsed_minutes_from_iso(row.get("submitted_at"))
+
+    @staticmethod
+    def _elapsed_minutes_from_iso(iso_text: Optional[str]) -> Optional[int]:
+        raw = str(iso_text or "").strip()
+        if not raw:
             return None
         try:
-            return max(0, int((datetime.now(timezone.utc).astimezone() - datetime.fromisoformat(row["submitted_at"])).total_seconds() // 60))
+            parsed = datetime.fromisoformat(raw.replace("Z", "+00:00"))
         except ValueError:
             return None
+        now_dt = datetime.now(timezone.utc).astimezone()
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=now_dt.tzinfo)
+        return max(0, int((now_dt - parsed).total_seconds() // 60))
 
     def public_row(self, row: Optional[dict[str, Any]]) -> dict[str, Any]:
         if not row:
@@ -1308,7 +1366,51 @@ class Service:
         elif row["channel"] == "16688" and sku["product_type"] == "slot" and display_email:
             local, domain = display_email.rsplit("@", 1)
             display_email = f"{local[:1]}***@{domain}"
-        return {"code": row["code"], "sku_key": row["sku_key"], "sku_title": sku["title"], "product_type": sku["product_type"], "channel": row["channel"], "status": status, "buyer_email_masked": display_email, "delivery": delivery, "warranty": warranty, "fulfillment": {"eta_text": self.settings.shared_sla_eta_text if sku["product_type"] == "slot" else None, "submitted_at": None if delivery_on_hold else row.get("submitted_at"), "completed_at": None if delivery_on_hold else row.get("completed_at"), "last_polled_at": None if delivery_on_hold else row.get("last_polled_at"), "elapsed_minutes": elapsed}, "buyer_notice": notice, "support_hint": self.settings.support_contact_hint, "created_at": row["created_at"], "updated_at": row["updated_at"]}
+        warranty_submitted_at = (
+            None
+            if delivery_on_hold
+            else (raw_warranty.get("submitted_at") if isinstance(raw_warranty, dict) else None)
+        )
+        exclusive_activated_at = (
+            None
+            if delivery_on_hold
+            else (raw_warranty.get("activated_at") if isinstance(raw_warranty, dict) else None)
+        )
+        warranty_elapsed = (
+            None
+            if delivery_on_hold
+            else self._elapsed_minutes_from_iso(warranty_submitted_at)
+        )
+        eta_text = (
+            self.settings.shared_sla_eta_text
+            if sku["product_type"] == "slot"
+            else self.settings.exclusive_sla_eta_text
+        )
+        return {
+            "code": row["code"],
+            "sku_key": row["sku_key"],
+            "sku_title": sku["title"],
+            "product_type": sku["product_type"],
+            "channel": row["channel"],
+            "status": status,
+            "buyer_email_masked": display_email,
+            "delivery": delivery,
+            "warranty": warranty,
+            "fulfillment": {
+                "eta_text": eta_text,
+                "submitted_at": None if delivery_on_hold else row.get("submitted_at"),
+                "completed_at": None if delivery_on_hold else row.get("completed_at"),
+                "last_polled_at": None if delivery_on_hold else row.get("last_polled_at"),
+                "elapsed_minutes": elapsed,
+                "warranty_submitted_at": warranty_submitted_at,
+                "exclusive_activated_at": exclusive_activated_at,
+                "warranty_elapsed_minutes": warranty_elapsed,
+            },
+            "buyer_notice": notice,
+            "support_hint": self.settings.support_contact_hint,
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
 
     def admin_summary(
         self,
@@ -1407,6 +1509,7 @@ class Service:
             warranty.setdefault("tg_message_id", None)
             warranty.setdefault("tg_sent_at", None)
             warranty.setdefault("tg_error", None)
+            warranty.setdefault("activated_at", None)
         result.update({
             "redeem_url": f"{self.settings.public_base_url}/r/{row['code']}",
             "batch_id": row.get("batch_id"),

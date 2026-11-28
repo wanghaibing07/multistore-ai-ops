@@ -41,6 +41,7 @@ from .models import (
     AgisoSyncOrdersRequest,
     BatchRequest,
     Channel16688RestockRequest,
+    ExclusiveActivatedRequest,
     IssueRequest,
     RedeemRequest,
     ResetUnusedRequest,
@@ -812,6 +813,18 @@ def create_app(
                 "WARRANTY_NOT_ALLOWED": "买家还没提交保修邮箱或订单状态不符合，暂时不能确认已报备",
             }
             return error(err_code, messages.get(err_code, "确认保修报备失败"), status_for(err_code))
+        return detail
+
+    @app.post("/api/v1/admin/codes/{code}/exclusive-activated", dependencies=[Depends(require_admin)])
+    def exclusive_activated(code: str, body: ExclusiveActivatedRequest, svc: Service = Depends(get_service)) -> Any:
+        detail, err_code = svc.mark_exclusive_activated(code, activated=body.activated, note=body.note)
+        if err_code:
+            messages = {
+                "CODE_NOT_FOUND": "没找到这个兑换码",
+                "WARRANTY_NOT_APPLICABLE": "只有独享家庭组套餐支持标记进组生效",
+                "WARRANTY_NOT_ALLOWED": "买家还没提交主邮箱或订单状态不符合，暂时不能标记进组生效",
+            }
+            return error(err_code, messages.get(err_code, "更新独享生效状态失败"), status_for(err_code))
         return detail
 
     @app.post("/api/v1/admin/codes/{code}/warranty-forward", dependencies=[Depends(require_admin)])

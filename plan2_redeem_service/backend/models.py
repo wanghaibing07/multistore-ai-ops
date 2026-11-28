@@ -59,6 +59,11 @@ class WarrantyAckRequest(BaseModel):
     note: str = ""
 
 
+class ExclusiveActivatedRequest(BaseModel):
+    activated: bool = True
+    note: str = Field(default="", max_length=200)
+
+
 class SkuPatchRequest(BaseModel):
     max_cost_usd: float = Field(gt=0, allow_inf_nan=False)
     goods_no: Optional[str] = None

@@ -2631,3 +2631,128 @@ def test_reset_unused_blocks_purchase_attempts_active_orders_and_disputes(compon
             json={},
         ).status_code == 409
 
+
+def test_exclusive_waiting_fulfillment_metadata_and_activation_toggle(components):
+    app, _, _, _, _ = components
+    with client(app) as http_client:
+        shared_code = issue(http_client, sku="ultra_shared_slot")
+        assert http_client.post(
+            "/api/v1/admin/codes/NO-SUCH-CODE/exclusive-activated",
+            headers=ADMIN,
+            json={"activated": True},
+        ).status_code == 404
+        bad_sku = http_client.post(
+            f"/api/v1/admin/codes/{shared_code}/exclusive-activated",
+            headers=ADMIN,
+            json={"activated": True},
+        )
+        assert bad_sku.status_code == 409
+        assert bad_sku.json()["error_code"] == "WARRANTY_NOT_APPLICABLE"
+
+        code = issue(http_client, sku="ultra_exclusive_admin")
+        redeemed = http_client.post(
+            f"/api/v1/public/codes/{code}/redeem",
+            json={"preflight_confirmed": True},
+        )
+        assert redeemed.status_code == 200
+        body = redeemed.json()
+        assert body["status"] == "delivered_pending_warranty"
+        assert body["fulfillment"]["eta_text"] == "一般 3-7 小时内完成交付，最晚 24 小时"
+        assert body["fulfillment"]["warranty_submitted_at"] is None
+        assert body["fulfillment"]["exclusive_activated_at"] is None
+        assert body["fulfillment"]["warranty_elapsed_minutes"] is None
+        assert set(body["warranty"]) == {"status", "admin_email_masked", "submitted_at", "has_screenshot", "note"}
+
+        before_warranty = http_client.post(
+            f"/api/v1/admin/codes/{code}/exclusive-activated",
+            headers=ADMIN,
+            json={"activated": True},
+        )
+        assert before_warranty.status_code == 409
+        assert before_warranty.json()["error_code"] == "WARRANTY_NOT_ALLOWED"
+
+        submitted = http_client.post(
+            f"/api/v1/public/codes/{code}/warranty",
+            data={"admin_email": "owner@gmail.com", "admin_email_confirm": "owner@gmail.com", "note": "主号"},
+        )
+        assert submitted.status_code == 200
+        sub_body = submitted.json()
+        assert sub_body["status"] == "completed"
+        assert set(sub_body["warranty"]) == {"status", "admin_email_masked", "submitted_at", "has_screenshot", "note"}
+        assert sub_body["fulfillment"]["warranty_submitted_at"] == sub_body["warranty"]["submitted_at"]
+        assert sub_body["fulfillment"]["exclusive_activated_at"] is None
+        assert isinstance(sub_body["fulfillment"]["warranty_elapsed_minutes"], int)
+        assert sub_body["fulfillment"]["warranty_elapsed_minutes"] >= 0
+
+        activated = http_client.post(
+            f"/api/v1/admin/codes/{code}/exclusive-activated",
+            headers=ADMIN,
+            json={"activated": True, "note": "已同意进组"},
+        )
+        assert activated.status_code == 200
+        act_detail = activated.json()
+        activated_at = act_detail["warranty"]["activated_at"]
+        assert activated_at
+        assert any(ev["reason"] == "exclusive_activated:已同意进组" for ev in act_detail["audit_events"])
+        pub_after_act = http_client.get(f"/api/v1/public/codes/{code}").json()
+        assert pub_after_act["fulfillment"]["exclusive_activated_at"] == activated_at
+        assert set(pub_after_act["warranty"]) == {"status", "admin_email_masked", "submitted_at", "has_screenshot", "note"}
+
+        reverted = http_client.post(
+            f"/api/v1/admin/codes/{code}/exclusive-activated",
+            headers=ADMIN,
+            json={"activated": False, "note": "误点撤销"},
+        )
+        assert reverted.status_code == 200
+        rev_detail = reverted.json()
+        assert rev_detail["warranty"]["activated_at"] is None
+        assert any(ev["reason"] == "exclusive_activation_reverted:误点撤销" for ev in rev_detail["audit_events"])
+        pub_after_rev = http_client.get(f"/api/v1/public/codes/{code}").json()
+        assert pub_after_rev["fulfillment"]["exclusive_activated_at"] is None
+
+
+def test_exclusive_pending_upstream_enters_waiting_fulfillment_and_polls_to_delivery(components, monkeypatch):
+    app, _, canboso, _, _ = components
+    with client(app) as http_client:
+        code = issue(http_client, sku="ultra_exclusive_admin")
+
+        def pending_purchase(idempotency_key, payload):
+            order_code = "ORD-EXCL-WAIT"
+            canboso.orders[order_code] = {
+                "orderCode": order_code,
+                "status": "pending",
+                "payment": {"amountUsd": 12.0},
+            }
+            return {
+                "order": {"orderCode": order_code, "status": "pending"},
+                "payment": {"amountUsd": 12.0},
+                "delivery": {},
+            }
+
+        monkeypatch.setattr(canboso, "purchase", pending_purchase)
+        redeemed = http_client.post(
+            f"/api/v1/public/codes/{code}/redeem",
+            json={"preflight_confirmed": True},
+        )
+        assert redeemed.status_code == 200
+        body = redeemed.json()
+        assert body["status"] == "waiting_fulfillment"
+        assert body["delivery"] is None
+        assert body["fulfillment"]["eta_text"] == "一般 3-7 小时内完成交付，最晚 24 小时"
+
+        detail = http_client.get(f"/api/v1/admin/codes/{code}", headers=ADMIN).json()
+        assert detail["can_reset_unused"] is False
+        shanghai_day = datetime.now(timezone(timedelta(hours=8))).strftime("%Y-%m-%d")
+        totals = app.state.ledger.canboso_purchase_totals(shanghai_day)
+        assert totals["order_count"] == 1
+        assert totals["gross_usd"] == 12.0
+
+        canboso.orders["ORD-EXCL-WAIT"]["status"] = "completed"
+        canboso.orders["ORD-EXCL-WAIT"]["deliveredAt"] = now_iso()
+        canboso.orders["ORD-EXCL-WAIT"]["delivery"] = {"accounts": [{"email": "store-ultra@gmail.com"}]}
+        polled = http_client.post(f"/api/v1/admin/codes/{code}/poll", headers=ADMIN)
+        assert polled.status_code == 200
+        polled_body = polled.json()
+        assert polled_body["status"] == "delivered_pending_warranty"
+        assert polled_body["delivery"]["account_text"] == "store-ultra@gmail.com"
+

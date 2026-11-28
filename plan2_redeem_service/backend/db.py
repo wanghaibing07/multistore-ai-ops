@@ -31,6 +31,7 @@ PURCHASE_ATTEMPT_AUDIT_REASONS = (
     "canboso_purchase_cancelled",
     "canboso_order_cancelled",
     "shared_order_accepted",
+    "exclusive_order_accepted",
     "exclusive_delivered",
     "fulfillment_over_24h",
     "admin_manual_canboso_purchase_16688_api_paused",
@@ -252,7 +253,7 @@ class Ledger:
     def _was_consumed(c: sqlite3.Connection, code: str, last_error: Optional[str]) -> bool:
         return last_error == "CHANNEL16688_RECIPIENT_DISPUTED" or c.execute(
             """SELECT 1 FROM audit_events WHERE code=? AND reason IN (
-               'shared_order_accepted','exclusive_delivered','canboso_purchase_cancelled',
+               'shared_order_accepted','exclusive_order_accepted','exclusive_delivered','canboso_purchase_cancelled',
                '16688_recipient_disputed','16688_platform_resold_redeemed_code',
                '16688_consumed_unsold_stock') LIMIT 1""",
             (code,),
@@ -560,7 +561,7 @@ class Ledger:
                            MAX(CASE WHEN lower(c.upstream_status) IN ('cancelled', 'canceled', 'refunded') THEN 1 ELSE 0 END) AS cancelled,
                            MIN(julianday(a.created_at)) AS accepted_at
                     FROM audit_events a JOIN codes c ON c.code=a.code
-                    WHERE a.reason IN ('shared_order_accepted', 'exclusive_delivered', 'canboso_purchase_cancelled')
+                    WHERE a.reason IN ('shared_order_accepted', 'exclusive_order_accepted', 'exclusive_delivered', 'canboso_purchase_cancelled')
                       AND COALESCE(c.upstream_order_code, '') <> '' AND c.cost_usd IS NOT NULL
                     GROUP BY c.upstream_order_code
                 )

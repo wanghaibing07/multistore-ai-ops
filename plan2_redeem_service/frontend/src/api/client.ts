@@ -328,6 +328,22 @@ export async function ackAdminWarranty(
   );
 }
 
+export async function markAdminExclusiveActivated(
+  token: string,
+  code: string,
+  activated: boolean,
+  note = ""
+): Promise<AdminCodeDetail> {
+  return requestJson<AdminCodeDetail>(
+    `/api/v1/admin/codes/${encodeURIComponent(code)}/exclusive-activated`,
+    {
+      method: "POST",
+      headers: authHeaders(token, true),
+      body: JSON.stringify({ activated, note }),
+    }
+  );
+}
+
 export async function forwardAdminWarranty(
   token: string,
   code: string

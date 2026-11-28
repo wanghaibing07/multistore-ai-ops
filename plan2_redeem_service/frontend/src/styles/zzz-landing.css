@@ -1070,6 +1070,23 @@
   position: relative;
 }
 
+.buyer-page .stepper--four .stepper-item {
+  padding: 9px 8px;
+  gap: 5px;
+  font-size: 12px;
+}
+
+.buyer-page .stepper--four .stepper-num {
+  width: 20px;
+  height: 20px;
+  font-size: 11px;
+}
+
+.buyer-page .stepper--four .stepper-sprite {
+  width: 20px;
+  height: 20px;
+}
+
 .stepper-sprite {
   width: 28px;
   height: 28px;
@@ -1418,6 +1435,10 @@ html[data-vt-fallback] .redeem-card-morph {
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 6px;
     padding-top: 6px;
+  }
+
+  .buyer-page .stepper.stepper--four {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .buyer-page .stepper-item {

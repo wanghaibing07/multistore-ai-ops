@@ -149,6 +149,31 @@ function translateAuditReason(rawReason: string): { title?: string; detail: stri
         : "已重置为未使用，买家可用原兑换码重新提交",
     };
   }
+  if (reason === "exclusive_activated" || reason.startsWith("exclusive_activated:")) {
+    const note = reason.startsWith("exclusive_activated:")
+      ? reason.slice("exclusive_activated:".length).trim()
+      : "";
+    return {
+      title: "商家已标记进组生效",
+      detail: note
+        ? `已确认独享家庭组进组生效，买家端等待页已收起（备注：${note}）`
+        : "已确认独享家庭组进组生效，买家端等待页已自动收起",
+    };
+  }
+  if (
+    reason === "exclusive_activation_reverted" ||
+    reason.startsWith("exclusive_activation_reverted:")
+  ) {
+    const note = reason.startsWith("exclusive_activation_reverted:")
+      ? reason.slice("exclusive_activation_reverted:".length).trim()
+      : "";
+    return {
+      title: "已撤销进组生效标记",
+      detail: note
+        ? `已撤销独享进组生效标记，买家端恢复展示等待引导（备注：${note}）`
+        : "已撤销独享进组生效标记，买家端恢复展示等待引导",
+    };
+  }
 
   switch (reason) {
     case "canboso_order_cancelled":
@@ -172,6 +197,11 @@ function translateAuditReason(rawReason: string): { title?: string; detail: stri
       return { title: "买家发起提货", detail: "买家点了确认提货，系统开始向上游下单" };
     case "exclusive_delivered":
       return { title: "发出商店邮箱", detail: "上游已秒发商店套餐邮箱，等买家建家庭组并交保修" };
+    case "exclusive_order_accepted":
+      return {
+        title: "上游已接单（独享）",
+        detail: "正在排队出号，一般 3-7 小时最晚 24 小时",
+      };
     case "shared_order_accepted":
       return { title: "上游已接单", detail: "开始排队拉买家进家庭组（一般 3-7 小时，最晚 24 小时）" };
     case "shared_poll":

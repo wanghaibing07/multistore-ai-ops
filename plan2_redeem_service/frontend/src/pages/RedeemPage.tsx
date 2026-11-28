@@ -16,7 +16,10 @@ import {
 } from "../api/client";
 import { BuyerWallpaper, WallpaperMotionToggle } from "../components/BuyerWallpaper";
 import { CastoriceIcon } from "../components/CastoriceIcon";
-import { CastoriceWaitingStage } from "../components/CastoriceWaitingStage";
+import {
+  CastoriceWaitingStage,
+  isExclusiveAwaitingActivation,
+} from "../components/CastoriceWaitingStage";
 import { ChibiSticker } from "../components/ChibiSticker";
 import { CopyButton } from "../components/CopyButton";
 import { GmailDoubleInput } from "../components/GmailDoubleInput";
@@ -34,6 +37,7 @@ import { runRedeemViewTransition } from "../utils/viewTransition";
 
 const AUTO_POLL_INTERVAL_MS = 30_000;
 const MANUAL_REVIEW_POLL_INTERVAL_MS = 60_000;
+const EXCLUSIVE_WAIT_POLL_INTERVAL_MS = 60_000;
 
 interface RedeemRouteState {
   prefetchedRecord?: PublicCodeResponse;
@@ -43,29 +47,98 @@ function staggerStyle(index: number): CSSProperties {
   return { "--stagger-idx": index } as CSSProperties;
 }
 
-function resolveStepIndex(productType: ProductType, status: CodeStatus, warrantySubmitted: boolean): number {
+function resolveStepIndex(
+  productType: ProductType,
+  status: CodeStatus,
+  warrantySubmitted: boolean,
+  exclusiveAwaiting: boolean
+): number {
   if (productType === "slot") {
     if (status === "completed") return 2;
     if (status === "waiting_fulfillment" || status === "purchasing" || status === "validating") return 1;
     return 0;
   }
-  if (status === "completed" || warrantySubmitted) return 2;
+  if (status === "completed") {
+    return exclusiveAwaiting ? 2 : 3;
+  }
   if (status === "delivered_pending_warranty") return 1;
+  if (warrantySubmitted) return 2;
   return 0;
 }
 
-function getBuyerStatusMeta(record: PublicCodeResponse): { label: string; tone: Tone; pulse?: boolean } {
+function resolveExclusiveElapsedMinutes(record: PublicCodeResponse): number {
+  if (
+    typeof record.fulfillment.warranty_elapsed_minutes === "number" &&
+    Number.isFinite(record.fulfillment.warranty_elapsed_minutes)
+  ) {
+    return Math.max(0, Math.floor(record.fulfillment.warranty_elapsed_minutes));
+  }
+  const submittedIso = record.fulfillment.warranty_submitted_at ?? record.warranty?.submitted_at ?? "";
+  const parsedMs = submittedIso ? Date.parse(submittedIso) : Number.NaN;
+  if (Number.isNaN(parsedMs)) return 0;
+  return Math.max(0, Math.floor((Date.now() - parsedMs) / 60_000));
+}
+
+function resolveExclusivePhase(elapsedMinutes: number): "golden" | "peak" | "overdue" {
+  if (elapsedMinutes >= 24 * 60) return "overdue";
+  if (elapsedMinutes >= 7 * 60) return "peak";
+  return "golden";
+}
+
+function readExclusiveDismissedFlag(code: string): boolean {
+  if (!code) return false;
+  try {
+    return window.localStorage.getItem(`plan2_exclusive_wait_dismissed_${code}`) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function writeExclusiveDismissedFlag(code: string, dismissed: boolean): void {
+  if (!code) return;
+  try {
+    const storageKey = `plan2_exclusive_wait_dismissed_${code}`;
+    if (dismissed) {
+      window.localStorage.setItem(storageKey, "1");
+    } else {
+      window.localStorage.removeItem(storageKey);
+    }
+  } catch {
+    // Ignore storage write failures in restricted browsing contexts.
+  }
+}
+
+function getBuyerStatusMeta(
+  record: PublicCodeResponse,
+  exclusiveAwaiting: boolean,
+  exclusivePhase: "golden" | "peak" | "overdue"
+): { label: string; tone: Tone; pulse?: boolean } {
   if (record.product_type === "account") {
     if (record.status === "unused") {
       return { label: "待领会员邮箱", tone: "neutral" };
     }
     if (record.status === "validating" || record.status === "purchasing") {
-      return { label: "正在出货", tone: "info", pulse: true };
+      return { label: "正在分配邮箱", tone: "info", pulse: true };
+    }
+    if (record.status === "waiting_fulfillment") {
+      return { label: "排队取号中", tone: "warning", pulse: true };
     }
     if (record.status === "delivered_pending_warranty") {
       return { label: "已领邮箱 · 待填主邮箱登记质保", tone: "info" };
     }
     if (record.status === "completed") {
+      if (record.fulfillment.exclusive_activated_at) {
+        return { label: "已生效 · 30 天质保已报备", tone: "success" };
+      }
+      if (exclusiveAwaiting) {
+        if (exclusivePhase === "overdue") {
+          return { label: "等待超 24h · 建议联系客服加急", tone: "danger", pulse: true };
+        }
+        if (exclusivePhase === "peak") {
+          return { label: "等待进组 · 高峰排队中（≤24h）", tone: "warning", pulse: true };
+        }
+        return { label: "已进入交付等待（3-7 小时）", tone: "info", pulse: true };
+      }
       if (record.warranty?.status === "registered_upstream") {
         return { label: "已完成 · 质保已报备", tone: "success" };
       }
@@ -148,6 +221,9 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
   const [warrantyNote, setWarrantyNote] = useState("");
   const [warrantyError, setWarrantyError] = useState<string | null>(null);
   const [submittingWarranty, setSubmittingWarranty] = useState(false);
+  const [exclusiveWaitDismissed, setExclusiveWaitDismissed] = useState<boolean>(() =>
+    readExclusiveDismissedFlag(code)
+  );
 
   const fetchRecord = useCallback(
     async (silent = false) => {
@@ -201,6 +277,29 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
     runRedeemViewTransition(() => navigate("/"), "back");
   };
 
+  const isExclusive = record?.product_type === "account";
+  const exclusiveAwaitingRaw = Boolean(record && isExclusiveAwaitingActivation(record, false));
+  const exclusiveAwaiting = Boolean(
+    record && isExclusiveAwaitingActivation(record, exclusiveWaitDismissed)
+  );
+  const exclusiveActivated = Boolean(
+    record && isExclusive && record.fulfillment.exclusive_activated_at
+  );
+  const exclusiveElapsedMin = record ? resolveExclusiveElapsedMinutes(record) : 0;
+  const exclusivePhase = resolveExclusivePhase(exclusiveElapsedMin);
+
+  const handleDismissExclusiveWait = () => {
+    setExclusiveWaitDismissed(true);
+    writeExclusiveDismissedFlag(code, true);
+    pushToast("已收起等待页，如还没生效可随时重新展开", "info");
+  };
+
+  const handleRestoreExclusiveWait = () => {
+    setExclusiveWaitDismissed(false);
+    writeExclusiveDismissedFlag(code, false);
+    pushToast("已重新展开独享交付等待页", "info");
+  };
+
   useEffect(() => {
     if (!record) return;
     const isWaitingState =
@@ -208,10 +307,14 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
       record.status === "validating" ||
       record.status === "purchasing";
     const isManualReview = record.status === "needs_manual_review";
-    if (!isWaitingState && !isManualReview) {
+    if (!isWaitingState && !isManualReview && !exclusiveAwaiting) {
       return;
     }
-    const intervalMs = isManualReview ? MANUAL_REVIEW_POLL_INTERVAL_MS : AUTO_POLL_INTERVAL_MS;
+    const intervalMs = isManualReview
+      ? MANUAL_REVIEW_POLL_INTERVAL_MS
+      : exclusiveAwaiting
+      ? EXCLUSIVE_WAIT_POLL_INTERVAL_MS
+      : AUTO_POLL_INTERVAL_MS;
     const intervalSec = Math.round(intervalMs / 1000);
     setAutoPollCountdown(intervalSec);
 
@@ -240,7 +343,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
       window.clearInterval(tickTimer);
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, [record?.status, record?.code, fetchRecord]);
+  }, [record?.status, record?.code, exclusiveAwaiting, fetchRecord]);
 
   useEffect(() => {
     if (cooldownLeft <= 0) return;
@@ -250,17 +353,22 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
     return () => window.clearInterval(timer);
   }, [cooldownLeft]);
 
-  const isExclusive = record?.product_type === "account";
   const is16688 = record?.channel === "16688";
   const sharedRecipientLabel = is16688 ? "收邀请的邮箱（部分隐藏）" : "收邀请的邮箱";
+  const buyerStatusMeta = record
+    ? getBuyerStatusMeta(record, exclusiveAwaiting, exclusivePhase)
+    : null;
   const supportTicketText = record
     ? [
         "【提货排查凭证】",
         `兑换码：${record.code}`,
         `渠道：${record.channel}`,
         `商品：${record.sku_title}`,
-        `当前状态：${getBuyerStatusMeta(record).label} (${record.status})`,
-        `邮箱：${record.buyer_email_masked || "未填写"}`,
+        `当前状态：${buyerStatusMeta ? buyerStatusMeta.label : record.status} (${record.status})`,
+        `邮箱：${record.buyer_email_masked || record.warranty?.admin_email_masked || "未填写"}`,
+        ...(isExclusive && exclusiveAwaitingRaw
+          ? [`独享已等待：${formatElapsedMinutes(exclusiveElapsedMin)}`]
+          : []),
         `更新时间：${formatDateTime(record.updated_at)}`,
       ].join("\n")
     : "";
@@ -321,6 +429,8 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
       setRecord(updated);
       if (updated.status === "needs_manual_review") {
         pushToast("已转人工处理，收藏本页随时看进度", "info");
+      } else if (updated.status === "waiting_fulfillment") {
+        pushToast("已进入排队取号，一般 3-7 小时分配独立会员邮箱", "info");
       } else {
         pushToast("商店套餐邮箱领好了，按下面步骤建组就行", "success");
       }
@@ -344,7 +454,17 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
       const updated = await refreshPublicCode(code);
       setRecord(updated);
       setCooldownLeft(updated.cooldown_seconds ?? 15);
-      if (updated.status === "completed") {
+      if (updated.product_type === "account") {
+        if (updated.fulfillment.exclusive_activated_at) {
+          pushToast("独享家庭组已确认生效，现在可以拉家人一起用", "success");
+        } else if (updated.status === "delivered_pending_warranty") {
+          pushToast("会员邮箱已分配好，按下方步骤建组即可", "success");
+        } else if (isExclusiveAwaitingActivation(updated, false)) {
+          pushToast("进度已同步，当前仍在 3-7 小时进组等待中", "info");
+        } else {
+          pushToast("进度已刷新", "info");
+        }
+      } else if (updated.status === "completed") {
         pushToast("家庭组邀请发出来了，快去邮箱查收", "success");
       } else {
         pushToast("进度已刷新", "info");
@@ -390,7 +510,11 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
       });
       setRecord(updated);
       setEditingWarranty(false);
-      if (updated.warranty?.status === "registered_upstream") {
+      if (isExclusiveAwaitingActivation(updated, false)) {
+        setExclusiveWaitDismissed(false);
+        writeExclusiveDismissedFlag(code, false);
+        pushToast("主邮箱已登记，已进入交付等待（一般 3-7 小时，最晚 24 小时）", "success");
+      } else if (updated.warranty?.status === "registered_upstream") {
         pushToast("30 天质保已自动完成官方报备", "success");
       } else {
         pushToast("保修邮箱已登记，系统正在帮你向官方报备", "success");
@@ -407,9 +531,12 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
   const warrantySubmitted =
     record?.warranty?.status === "submitted" || record?.warranty?.status === "registered_upstream";
   const warrantyLocked = record?.warranty?.status === "registered_upstream";
-  const activeStep = record ? resolveStepIndex(record.product_type, record.status, warrantySubmitted) : 0;
+  const isFullyCompleted = Boolean(record && record.status === "completed" && !exclusiveAwaiting);
+  const activeStep = record
+    ? resolveStepIndex(record.product_type, record.status, warrantySubmitted, exclusiveAwaiting)
+    : 0;
   const steps = isExclusive
-    ? ["领邮箱", "建组邀请", "登记质保"]
+    ? ["领邮箱", "建组填主邮箱", "等待同意进组", "生效完成"]
     : ["填邮箱", "排队拉人", "收邀请"];
 
   const accountCredentials =
@@ -423,7 +550,6 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
   const extraCredentials = accountCredentials.filter(
     (item) => item.value.trim().toLowerCase() !== storeEmail.trim().toLowerCase()
   );
-  const buyerStatusMeta = record ? getBuyerStatusMeta(record) : null;
   const buyerWarrantyBadge = getBuyerWarrantyBadgeMeta(record?.warranty?.status);
   const isBuyerGmail =
     !record?.buyer_email_masked ||
@@ -431,6 +557,13 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
   const hasMobileGmailDock = Boolean(
     record && !isExclusive && record.status === "completed" && isBuyerGmail
   );
+  const chibiBubbleText = isExclusive
+    ? exclusiveAwaiting
+      ? "一般 3-7 小时进组，关掉本页也不掉队"
+      : exclusiveActivated
+      ? "家庭组已生效，快去拉 4 位家人共享吧"
+      : "发完家庭组邀请记得回来填你的常用主邮箱"
+    : "没看到邀请邮件记得翻垃圾箱";
   const exclusiveWarrantyNotice = (
     <div className="inset-panel stack-sm">
       <strong style={{ fontSize: 13.5 }}>质保和退换说明</strong>
@@ -524,7 +657,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
               <ChibiSticker
                 variant="mail"
                 springEntrance
-                bubbleText="没看到邀请邮件记得翻垃圾箱"
+                bubbleText={chibiBubbleText}
               />
 
               <div className="voucher-head voucher-head--with-sticker redeem-stagger-block" style={staggerStyle(0)}>
@@ -542,7 +675,7 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                         label={buyerStatusMeta.label}
                         tone={buyerStatusMeta.tone}
                         pulse={Boolean(buyerStatusMeta.pulse)}
-                        shimmer={record.status === "completed"}
+                        shimmer={isFullyCompleted}
                       />
                     ) : null}
                   </div>
@@ -566,9 +699,13 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
               </div>
 
               {record.status !== "revoked" && record.status !== "needs_manual_review" ? (
-                <ol className="stepper redeem-stagger-block" style={staggerStyle(2)} aria-label="提货进度">
+                <ol
+                  className={`stepper ${isExclusive ? "stepper--four" : ""} redeem-stagger-block`}
+                  style={staggerStyle(2)}
+                  aria-label="提货进度"
+                >
                   {steps.map((label, idx) => {
-                    const isDone = idx < activeStep || (record.status === "completed" && idx <= activeStep);
+                    const isDone = idx < activeStep || (isFullyCompleted && idx <= activeStep);
                     const isCurrent = !isDone && idx === activeStep;
                     const showSprite = idx === activeStep;
                     return (
@@ -600,8 +737,11 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
 
             <CastoriceWaitingStage
               record={record}
-              autoPollIntervalMs={AUTO_POLL_INTERVAL_MS}
+              autoPollIntervalMs={
+                exclusiveAwaiting ? EXCLUSIVE_WAIT_POLL_INTERVAL_MS : AUTO_POLL_INTERVAL_MS
+              }
               refreshing={refreshing}
+              exclusiveDismissed={exclusiveWaitDismissed}
             />
 
             {/* Revoked */}
@@ -1057,6 +1197,279 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
               </section>
             ) : null}
 
+            {/* Exclusive: Provisioning / Waiting Fulfillment Queue */}
+            {isExclusive &&
+            (record.status === "validating" ||
+              record.status === "purchasing" ||
+              record.status === "waiting_fulfillment") ? (
+              <section className="card stack redeem-stagger-block" style={staggerStyle(3)}>
+                <div className="callout callout-info">
+                  <CastoriceIcon name="refresh" size={18} className="callout-icon" />
+                  <div>
+                    <strong>
+                      {record.status === "waiting_fulfillment"
+                        ? "已进入排队取号，请耐心等待会员邮箱发放"
+                        : "正在为你分配独立会员邮箱"}
+                    </strong>
+                    <div style={{ marginTop: 4 }}>
+                      {record.fulfillment.eta_text || "一般 3-7 小时完成，最晚不超过 24 小时"}
+                      。拿到会员邮箱后本页会自动更新，关掉页面也不会掉队。
+                    </div>
+                  </div>
+                </div>
+
+                <div className="kv-grid">
+                  <div className="kv-item">
+                    <div className="kv-label">当前阶段</div>
+                    <div className="kv-value">
+                      {record.status === "waiting_fulfillment" ? "排队分配会员邮箱" : "正在出货"}
+                    </div>
+                  </div>
+                  <div className="kv-item">
+                    <div className="kv-label">已经等了</div>
+                    <div className="kv-value tabular">
+                      {formatElapsedMinutes(record.fulfillment.elapsed_minutes)}
+                    </div>
+                  </div>
+                  <div className="kv-item">
+                    <div className="kv-label">提交时间</div>
+                    <div className="kv-value tabular">
+                      {formatDateTime(record.fulfillment.submitted_at)}
+                    </div>
+                  </div>
+                  <div className="kv-item">
+                    <div className="kv-label">上次同步</div>
+                    <div className="kv-value tabular">
+                      {formatDateTime(record.fulfillment.last_polled_at)}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="auto-refresh-pill" aria-live="polite">
+                  <CastoriceIcon name="refresh" size={14} />
+                  <span>
+                    页面可见时每 30 秒自动查一次，下次自动刷新倒计时：
+                    <strong className="tabular"> {autoPollCountdown}s</strong>
+                  </span>
+                </div>
+
+                <div className="row-between" style={{ gap: 10, flexWrap: "wrap" }}>
+                  <span style={{ fontSize: 13, color: "var(--ink-3)" }}>{record.support_hint}</span>
+                  <button
+                    type="button"
+                    className={`btn btn-secondary ${refreshing ? "is-loading" : ""}`}
+                    disabled={refreshing || cooldownLeft > 0}
+                    aria-busy={refreshing}
+                    onClick={() => void handleManualRefresh()}
+                  >
+                    <CastoriceIcon name="refresh" size={15} spin={refreshing} />
+                    <span>
+                      {refreshing
+                        ? "正在查..."
+                        : cooldownLeft > 0
+                        ? `稍后再查 (${cooldownLeft}s)`
+                        : "手动查一下进度"}
+                    </span>
+                  </button>
+                </div>
+              </section>
+            ) : null}
+
+            {/* Exclusive: Post-Warranty Delivery Waiting Action Card */}
+            {isExclusive && exclusiveAwaiting ? (
+              <section
+                className={`card stack ewc-card ewc-card--${exclusivePhase} redeem-stagger-block`}
+                style={staggerStyle(3)}
+                data-testid="exclusive-waiting-action-card"
+              >
+                <div className="ewc-header">
+                  <div>
+                    <h2 className="card-title">已进入交付等待 · 静候源头同意进组</h2>
+                    <p className="card-subtitle">
+                      你的家庭组邀请和 30 天质保主邮箱已全部提交。源头正按序登录会员邮箱同意邀请，
+                      <strong>一般 3-7 小时，最晚 24 小时</strong>完成，无需一直停留在页面。
+                    </p>
+                  </div>
+                  <span className="ewc-sla-chip">
+                    {exclusivePhase === "overdue"
+                      ? "已超 24h · 建议加急"
+                      : exclusivePhase === "peak"
+                      ? "高峰窗 · 24h 内交付"
+                      : "常规窗 · 3-7 小时"}
+                  </span>
+                </div>
+
+                <div className="ewc-cta-grid">
+                  <a
+                    href="https://g.co/yourfamily"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn btn-primary"
+                  >
+                    <CastoriceIcon name="check" size={16} />
+                    <span>去 Google 家庭组看进度</span>
+                    <CastoriceIcon name="external" size={14} />
+                  </a>
+                  <a
+                    href="https://gemini.google.com"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn btn-secondary"
+                  >
+                    <CastoriceIcon name="emblem" size={16} />
+                    <span>去 Gemini 看会员状态</span>
+                    <CastoriceIcon name="external" size={14} />
+                  </a>
+                </div>
+
+                {exclusivePhase === "overdue" ? (
+                  <div className="ewc-overdue-bar" role="alert">
+                    <div className="ewc-overdue-text">
+                      <strong>等待已超过 24 小时承诺窗</strong>
+                      <span>
+                        请先点上方「去 Google 家庭组看进度」确认是否已入组；若仍显示待接受，请一键复制凭证发客服优先加急。
+                      </span>
+                    </div>
+                    <CopyButton
+                      text={supportTicketText}
+                      label="复制客服加急凭证"
+                      copiedLabel="✓ 已复制凭证"
+                      toastMessage="已复制加急排查凭证，直接发给客服即可优先处理"
+                      variant="primary"
+                      size="sm"
+                    />
+                  </div>
+                ) : null}
+
+                <details className="ewc-checklist">
+                  <summary className="ewc-checklist-summary">
+                    生效后拉 4 位家人避坑清单（建议提前看一眼）
+                  </summary>
+                  <div className="ewc-checklist-body">
+                    <ol className="guide-steps">
+                      <li>
+                        <strong>千万别把商店会员邮箱踢出家庭组</strong>，否则全组立即掉会员且不在质保范围内。
+                      </li>
+                      <li>
+                        你作为家庭组长还能再拉 <strong>4 位家人</strong>（共 6 席）；家人进组前同样需要 12 个月内未频繁换组，且先去{" "}
+                        <a
+                          href="https://payments.google.com/gp/w/home/settings"
+                          target="_blank"
+                          rel="noreferrer"
+                        >
+                          payments.google.com/gp/w/home/settings
+                        </a>{" "}
+                        关闭旧付款资料（不会删卡）。
+                      </li>
+                      <li>
+                        <strong>0 积分套餐慎点 Veo / Flow 等耗积分入口</strong>；日常对话、Deep Research、代码和 Antigravity 客户端均可正常使用。
+                      </li>
+                    </ol>
+                  </div>
+                </details>
+
+                <div className="ewc-footer-bar">
+                  <span className="ewc-footer-sync" aria-live="polite">
+                    <CastoriceIcon name="refresh" size={14} />
+                    <span>
+                      每 60 秒自动同步状态 · 下次{" "}
+                      <strong className="tabular">{autoPollCountdown}s</strong>
+                    </span>
+                  </span>
+                  <div className="ewc-footer-actions">
+                    <button
+                      type="button"
+                      className={`btn btn-secondary btn-sm ${refreshing ? "is-loading" : ""}`}
+                      disabled={refreshing || cooldownLeft > 0}
+                      aria-busy={refreshing}
+                      onClick={() => void handleManualRefresh()}
+                    >
+                      <CastoriceIcon name="refresh" size={14} spin={refreshing} />
+                      <span>
+                        {refreshing
+                          ? "同步中..."
+                          : cooldownLeft > 0
+                          ? `稍后再刷 (${cooldownLeft}s)`
+                          : "手动刷一下"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      className="btn btn-ghost btn-sm"
+                      data-testid="exclusive-dismiss-wait-btn"
+                      onClick={handleDismissExclusiveWait}
+                    >
+                      我已看到进组生效，收起等待
+                    </button>
+                  </div>
+                </div>
+              </section>
+            ) : null}
+
+            {/* Exclusive: Reversible Restore Bar When Buyer Dismissed Waiting View */}
+            {isExclusive && exclusiveAwaitingRaw && exclusiveWaitDismissed && !exclusiveActivated ? (
+              <div
+                className="ewc-restore-bar redeem-stagger-block"
+                style={staggerStyle(3)}
+                data-testid="exclusive-restore-wait-bar"
+              >
+                <span>已收起独享交付等待视图 · 如家庭组尚未显示生效，可随时重新展开跟踪进度</span>
+                <button
+                  type="button"
+                  className="btn btn-secondary btn-sm"
+                  data-testid="exclusive-restore-wait-btn"
+                  onClick={handleRestoreExclusiveWait}
+                >
+                  重新展开等待页
+                </button>
+              </div>
+            ) : null}
+
+            {/* Exclusive: Confirmed Activated Card */}
+            {isExclusive && exclusiveActivated ? (
+              <section
+                className="card stack ewc-activated-card redeem-stagger-block"
+                style={staggerStyle(3)}
+                data-testid="exclusive-activated-card"
+              >
+                <div className="callout callout-success">
+                  <CastoriceIcon name="check" size={20} className="callout-icon" />
+                  <div>
+                    <strong>独享家庭组已生效 · 30 天质保已就绪</strong>
+                    <div style={{ marginTop: 4 }}>
+                      商店会员邮箱已加入你的家庭组（确认时间：
+                      <span className="tabular">
+                        {formatDateTime(record.fulfillment.exclusive_activated_at)}
+                      </span>
+                      ）。你现在可以直接使用会员，并还能再拉入最多 4 位家人共享。
+                    </div>
+                  </div>
+                </div>
+                <div className="ewc-cta-grid">
+                  <a
+                    href="https://g.co/yourfamily"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn btn-primary"
+                  >
+                    <CastoriceIcon name="check" size={16} />
+                    <span>去家庭组管理 / 拉家人</span>
+                    <CastoriceIcon name="external" size={14} />
+                  </a>
+                  <a
+                    href="https://gemini.google.com"
+                    target="_blank"
+                    rel="noreferrer"
+                    className="btn btn-secondary"
+                  >
+                    <CastoriceIcon name="emblem" size={16} />
+                    <span>去打开 Gemini</span>
+                    <CastoriceIcon name="external" size={14} />
+                  </a>
+                </div>
+              </section>
+            ) : null}
+
             {/* Exclusive: Delivered (Pending Warranty or Completed) */}
             {isExclusive &&
             (record.status === "delivered_pending_warranty" || record.status === "completed") ? (
@@ -1161,7 +1574,9 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                               <>
                                 你的主邮箱{" "}
                                 <span className="mono">{record.warranty?.admin_email_masked || "-"}</span>{" "}
-                                已完成报备，安心用就行。
+                                {exclusiveAwaiting
+                                  ? "已完成 30 天质保报备，当前已进入源头同意进组等待（一般 3-7 小时，最晚 24 小时）。"
+                                  : "已完成报备，安心用就行。"}
                               </>
                             ) : (
                               <>
@@ -1350,7 +1765,8 @@ function RedeemOrder({ code, prefetchedForCode }: { code: string; prefetchedForC
                 <a href="https://g.co/yourfamily" target="_blank" rel="noreferrer">
                   g.co/yourfamily
                 </a>{" "}
-                创建家庭组并邀请该会员邮箱加入，然后回到本页底部填写<strong>你的常用主邮箱</strong>提交报备（不要填领到的会员邮箱）。系统自动同步报备，30 天内非个人原因掉会员免费质保。
+                创建家庭组并邀请该会员邮箱加入，然后回到本页底部填写<strong>你的常用主邮箱</strong>提交报备（不要填领到的会员邮箱）。提交后即进入交付等待，源头一般{" "}
+                <strong>3-7 小时（最晚 24 小时）</strong>同意进组，本页会自动同步进度；30 天内非个人原因掉会员免费质保。
               </div>
             </details>
           </div>
