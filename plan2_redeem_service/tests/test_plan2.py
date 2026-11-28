@@ -19,7 +19,7 @@ from backend.config import Settings
 from backend.db import now_iso
 from backend.gateways import DryRun16688, DryRunCanboso, UpstreamError, UpstreamTimeout
 from backend.gateways import CanbosoClient, Channel16688Client
-from backend.service import Mailer, SKUS, format_warranty_forward_template
+from backend.service import Mailer, SKUS, Service, format_warranty_forward_template
 
 
 ADMIN = {"Authorization": "Bearer test-admin"}
@@ -407,6 +407,47 @@ def test_16688_admin_retry_reports_price_guard_after_verified_redemption(compone
 
 def raise_16688_paused(*_):
     raise UpstreamError(502, "系统长时间超负载，已影响平台稳定性，暂停OpenAPI", rejected=True)
+
+
+def test_16688_openapi_pause_message_matching_and_fallback(components, monkeypatch):
+    app, _, canboso, channel, _ = components
+    for msg in (
+        "系统长时间超负载，已影响平台稳定性，暂停OpenAPI",
+        "系统长时间因爬虫、AI自动化操作OpenApi超负载，已影响平台稳定性，短时间OpenAPI不再恢复",
+        "短时间OpenAPI不再恢复",
+        "OpenAPI 维护中，请稍后重试",
+    ):
+        exc = UpstreamError(502, msg, rejected=True)
+        assert Service._channel16688_paused(exc) is True
+        assert Service._channel16688_unavailable(exc) is True
+
+    for msg in (
+        "未暂停 OpenAPI",
+        "没有暂停OpenAPI",
+        "OpenAPI 已恢复",
+        "仅卡密商品支持查询库存",
+        "订单不存在",
+    ):
+        exc = UpstreamError(502, msg, rejected=True)
+        assert Service._channel16688_paused(exc) is False
+        assert Service._channel16688_unavailable(exc) is False
+
+    def raise_new_16688_paused(*_):
+        raise UpstreamError(
+            502,
+            "系统长时间因爬虫、AI自动化操作OpenApi超负载，已影响平台稳定性，短时间OpenAPI不再恢复",
+            rejected=True,
+        )
+
+    with client(app) as c:
+        code, = issue_16688_batch(c)
+        monkeypatch.setattr(channel, "verify_order", raise_new_16688_paused)
+        resp = c.post(
+            f"/api/v1/public/codes/{code}/redeem",
+            json={"buyer_email": "buyer@example.com", "preflight_confirmed": True},
+        )
+        assert resp.status_code == 200 and resp.json()["status"] == "waiting_fulfillment"
+        assert canboso.charge_count == 1
 
 
 def test_16688_pause_blocks_uncertain_inventory_and_previously_consumed_codes(components, monkeypatch):

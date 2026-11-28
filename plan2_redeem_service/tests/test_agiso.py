@@ -1187,3 +1187,27 @@ def test_agiso_restock_missing_cpc_and_push_error_alerts(tmp_path: Path):
         subjects = [mail["subject"] for mail in mailer.sent]
         assert any("推送失败" in subject for subject in subjects)
         assert any("未找到对应卡种" in subject for subject in subjects)
+
+
+def test_agiso_restock_storage_query_error_does_not_alert(tmp_path: Path):
+    restock_rules = json.dumps(
+        [{"sku_key": "ultra_shared_slot", "cpc_id": 3007871, "min_stock": 3, "target_stock": 8, "max_push": 10}]
+    )
+    app, _, _, _, mailer, agiso = build_agiso_env(
+        tmp_path,
+        agiso_restock_enabled=True,
+        agiso_restock_rules_json=restock_rules,
+    )
+    agiso.fail_methods["card_pwd_category_get_storage"] = AgisoError(
+        "Agiso /alds/CardPwdCategory/GetStorage timed out after 15s",
+        error_code=None,
+        status_code=504,
+        transient=True,
+    )
+
+    with TestClient(app) as client:
+        resp = client.post("/api/v1/admin/agiso/restock", headers=ADMIN_HEADERS)
+        assert resp.status_code == 503
+        assert mailer.sent == []
+        events, _ = app.state.ledger.list_agiso_events(limit=5)
+        assert events[0]["status"] == "restock_storage_error"

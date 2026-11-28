@@ -40,8 +40,18 @@ from .telegram_forwarder import build_telegram_forwarder, sanitize_tg_error
 logger = logging.getLogger(__name__)
 
 CHANNEL16688_OPENAPI_PAUSED_KEY = "channel16688:restock-openapi-paused"
-CHANNEL16688_OPENAPI_PAUSED_RE = re.compile(r"暂停\s*openapi", re.IGNORECASE)
-CHANNEL16688_EXPLICIT_PAUSE_RE = re.compile(r"系统长时间超负载[，,]\s*已影响平台稳定性[，,]\s*暂停\s*openapi[。.!！]?", re.IGNORECASE)
+CHANNEL16688_OPENAPI_NEGATED_PAUSE_RE = re.compile(
+    r"(?:未|没|没有|不|非)\s*(?:暂停|关闭|停用|停服|下线)\s*open\s*api|"
+    r"open\s*api\s*(?:接口|服务)?\s*(?:未|没|没有|不|非)\s*(?:暂停|关闭|停用|停服|下线)|"
+    r"open\s*api\s*(?:接口|服务)?\s*已恢复|已恢复\s*open\s*api",
+    re.IGNORECASE,
+)
+CHANNEL16688_OPENAPI_PAUSED_RE = re.compile(
+    r"(?:暂停|关闭|停用|停服|下线|停止|不再恢复|暂不开放)\s*open\s*api|"
+    r"open\s*api\s*(?:接口|服务)?\s*(?:已|暂时|临时|短时间|目前|当前)?\s*(?:暂停|关闭|停用|停服|下线|维护|不可用|暂不可用|不再恢复|停止|暂不开放|超负载)|"
+    r"超负载.*open\s*api|open\s*api.*超负载",
+    re.IGNORECASE,
+)
 CHANNEL16688_TRADE_NO_RE = re.compile(r"[A-Za-z0-9_-]{1,100}")
 CANBOSO_CANCELLED_STATUSES = {"cancelled", "canceled", "refunded"}
 
@@ -1149,12 +1159,19 @@ class Service:
             self._safe_send("Plan 2 异常报警", f"兑换码 {code} 需要人工处理。事件：{reason}。")
 
     @staticmethod
-    def _channel16688_paused(exc: Exception) -> bool:
+    def _is_16688_openapi_paused_message(message: str) -> bool:
+        text = message.strip()
+        if not text or CHANNEL16688_OPENAPI_NEGATED_PAUSE_RE.search(text):
+            return False
+        return bool(CHANNEL16688_OPENAPI_PAUSED_RE.search(text))
+
+    @classmethod
+    def _channel16688_paused(cls, exc: Exception) -> bool:
         return (
             isinstance(exc, UpstreamError)
             and exc.status_code == 502
             and exc.rejected
-            and bool(CHANNEL16688_EXPLICIT_PAUSE_RE.fullmatch(exc.message.strip()))
+            and cls._is_16688_openapi_paused_message(exc.message)
         )
 
     @classmethod
@@ -2769,6 +2786,12 @@ class Service:
             try:
                 storage_rows = self.agiso.card_pwd_category_get_storage(cpc_ids)
             except AgisoError as exc:
+                logger.warning(
+                    "agiso restock storage query failed trigger=%s cpc_ids=%s detail=%s",
+                    trigger,
+                    cpc_ids,
+                    exc.message,
+                )
                 self.ledger.record_agiso_event(
                     source=f"restock:{trigger}",
                     from_platform="TbAlds",
@@ -2777,11 +2800,6 @@ class Service:
                     oid="",
                     status="restock_storage_error",
                     detail=exc.message,
-                )
-                self._agiso_alert(
-                    f"restock-storage:{hour_bucket}",
-                    "阿奇索自动补卡查询库存失败（需人工排查）",
-                    f"触发来源 {trigger} 查询阿奇索卡种库存（idNos={','.join(str(i) for i in cpc_ids)}）失败：{exc.message}",
                 )
                 raise
 
@@ -3333,14 +3351,16 @@ class Service:
                     err_msg = f"{sku_key}({goods_no}) 查询库存失败: {detail}"
                     errors.append(err_msg)
                     if self._channel16688_unavailable(exc) or (
-                        isinstance(exc, UpstreamError) and CHANNEL16688_OPENAPI_PAUSED_RE.search(detail)
+                        isinstance(exc, UpstreamError) and self._is_16688_openapi_paused_message(detail)
                     ):
                         openapi_paused = True
                     elif not dry_check:
-                        self._channel16688_alert(
-                            f"restock-stock:{sku_key}:{goods_no}:{hour_bucket}",
-                            "16688 自动补卡查询库存失败（需人工排查）",
-                            f"触发来源 {trigger} 查询 {sku_key}（goods_no={goods_no}）16688 库存失败：{detail}",
+                        logger.warning(
+                            "16688 restock stock query failed trigger=%s sku=%s goods_no=%s detail=%s",
+                            trigger,
+                            sku_key,
+                            goods_no,
+                            detail,
                         )
                     items.append(
                         {
@@ -3361,10 +3381,11 @@ class Service:
                     err_msg = f"{sku_key}({goods_no}) 返回的库存数据格式异常"
                     errors.append(err_msg)
                     if not dry_check:
-                        self._channel16688_alert(
-                            f"restock-stock:{sku_key}:{goods_no}:{hour_bucket}",
-                            "16688 自动补卡查询库存失败（需人工排查）",
-                            f"触发来源 {trigger} 查询 {sku_key}（goods_no={goods_no}）16688 库存返回异常数据。",
+                        logger.warning(
+                            "16688 restock stock response invalid trigger=%s sku=%s goods_no=%s",
+                            trigger,
+                            sku_key,
+                            goods_no,
                         )
                     items.append(
                         {
@@ -3491,7 +3512,6 @@ class Service:
 
             if not dry_check and openapi_paused:
                 logger.warning("16688 OpenAPI is paused (restock trigger=%s)", trigger)
-                self._alert_16688_paused()
             elif not dry_check and checked_stock:
                 self.ledger.clear_notification(CHANNEL16688_OPENAPI_PAUSED_KEY)
 
